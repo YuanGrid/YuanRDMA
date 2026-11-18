@@ -110,17 +110,17 @@ YuanNIC 具备面向高速互联的硬件链路时序优化与协议卸载能力
 ## 支持的硬件
 
 <p align="center">
-  <img src="docs/image/YuanNIC-NH400-A.png" alt="YuanNIC-NH400-A" width="300">
+  <img src="docs/image/YuanNIC-NH400-A.png" alt="YuanNIC-NH400-A" width="320">
 </p>
-
-| 型号 | FPGA 器件 | 网口 | 主机接口 | 配置方式 | 镜像型号段 |
-|---|---|---|---|---|---|
-| YuanNIC-NH400-A | Agilex 7 I `AGIB027` | 1 × 400G QSFP-112（F-tile 4x112） | PCIe Gen5 x16（R-tile） | Active Serial x4 | `YN400GA7B027A` |
-
-**主要参数**
 
 | 项 | 参数 |
 |---|---|
+| 型号 | YuanNIC-NH400-A |
+| FPGA 器件 | Agilex 7 I `AGIB027` |
+| 网口 | 1 × 400G QSFP-112（F-tile 4x112） |
+| 主机接口 | PCIe Gen5 x16（R-tile） |
+| 配置方式 | Active Serial x4 |
+| 镜像型号段 | `YN400GA7B027A` |
 | 形态 | 单槽半高半长（配全高挡片） |
 | 尺寸 | 169.5 × 68.9 × 18.5 mm |
 | 功耗 | 最大 75 W |

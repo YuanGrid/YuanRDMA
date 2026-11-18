@@ -110,17 +110,17 @@ Latency (typical): `ib_write_lat` about **2.2 µs**; `ib_read_lat` / `ib_send_la
 ## Supported Hardware
 
 <p align="center">
-  <img src="docs/image/YuanNIC-NH400-A.png" alt="YuanNIC-NH400-A" width="300">
+  <img src="docs/image/YuanNIC-NH400-A.png" alt="YuanNIC-NH400-A" width="320">
 </p>
-
-| Model | FPGA device | Network | Host interface | Configuration | Image prefix |
-|---|---|---|---|---|---|
-| YuanNIC-NH400-A | Agilex 7 I `AGIB027` | 1 × 400G QSFP-112 (F-tile 4x112) | PCIe Gen5 x16 (R-tile) | Active Serial x4 | `YN400GA7B027A` |
-
-**Key Specifications**
 
 | Item | Specification |
 |---|---|
+| Model | YuanNIC-NH400-A |
+| FPGA device | Agilex 7 I `AGIB027` |
+| Network port | 1 × 400G QSFP-112 (F-tile 4x112) |
+| Host interface | PCIe Gen5 x16 (R-tile) |
+| Configuration | Active Serial x4 |
+| Image prefix | `YN400GA7B027A` |
 | Form factor | Single slot, half-height half-length (with full-height bracket) |
 | Dimensions | 169.5 × 68.9 × 18.5 mm |
 | Power | 75 W max |
