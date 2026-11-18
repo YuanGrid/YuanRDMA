@@ -58,8 +58,7 @@ YuanRDMA 是[垣易科技](http://www.yuangrid.com)（[YuanGrid](http://www.yuan
   - [9.1 准备环境](#91-准备环境)
   - [9.2 编译前门禁](#92-编译前门禁)
   - [9.3 编译 FPGA 固件](#93-编译-fpga-固件)
-  - [9.4 编译用户态软件包](#94-编译用户态软件包)
-  - [9.5 烧写、加载驱动与测试](#95-烧写加载驱动与测试)
+  - [9.4 烧写、加载驱动与测试](#94-烧写加载驱动与测试)
 - [10 路线图](#10-路线图)
   - [10.1 400G 性能优化与集合通信库](#101-400g-性能优化与集合通信库)
   - [10.2 扩大适配场景](#102-扩大适配场景)
@@ -214,6 +213,10 @@ YuanSec 以 FPGA 并行计算加 DPDK 转发为数据面，把检测与密码运
 
 ### 7.1 板卡规格
 
+<table width="100%">
+<tr>
+<td width="62%" valign="top">
+
 | 项 | 规格 |
 |---|---|
 | 型号 | YuanNIC-NH400-A |
@@ -228,9 +231,12 @@ YuanSec 以 FPGA 并行计算加 DPDK 转发为数据面，把检测与密码运
 | 散热 | 被动散热，依赖机箱风道 |
 | 工作温度 | 0 – 55 ℃ |
 
-<p align="center">
+</td>
+<td width="38%" valign="middle" align="center">
   <img src="docs/image/YuanNIC-NH400-A.png" alt="YuanNIC-NH400-A" width="300">
-</p>
+</td>
+</tr>
+</table>
 
 ### 7.2 接口与时钟
 
@@ -280,17 +286,7 @@ cd code/build/YuanNIC-NH400-A
 
 产物（`.sof` / `.rpd` / `.jic`）按版本号归档到 `code/build/firmware/`。
 
-### 9.4 编译用户态软件包
-
-```bash
-cd code/build/fpga_rdma
-./yuannic_user_build.sh                    # rdma-core v66 + yuanrdma provider + perftest + 内核模块 + 工具
-source YuanNIC_User_Package/env.sh         # 每次使用前执行，设置库与程序路径
-```
-
-产物 `YuanNIC_User_Package/`（及 `.tgz`）可直接交付最终用户，不向系统路径安装任何文件。
-
-### 9.5 烧写、加载驱动与测试
+### 9.4 烧写、加载驱动与测试
 
 ```bash
 ./flash_and_init.sh --flash <镜像版本>     # 烧写固件 → PCIe 重枚举 → 加载驱动 → 配网 → 自检
@@ -327,7 +323,7 @@ ibv_devinfo -d yuanrdma0                   # 应看到 PORT_ACTIVE
 
 YuanRDMA 旨在成为可开源、可学习、可扩展的 RDMA 网卡平台：RTL、驱动、provider、仿真台与测试工具全部在仓库内，改动可以离线验证再上板。我们希望降低高性能网络的研究与工程门槛，让协议机制、拥塞控制、传输可靠性这些问题能在真实的 400G 硬件上被验证，而不是停留在仿真或纸面。
 
-有意参与的单位或个人，欢迎参见上文的 [1 合作生态](#1-合作生态)。
+有意参与的单位或个人，欢迎通过邮件 [hfli@yuangrid.com](mailto:hfli@yuangrid.com) 或电话 / 微信 18362630238 与我们联系。
 
 ### 11.1 提交约定
 

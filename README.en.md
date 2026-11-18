@@ -58,8 +58,7 @@ At the hardware level, YuanNIC provides link timing optimization and protocol of
   - [9.1 Prepare the environment](#91-prepare-the-environment)
   - [9.2 Pre-build gate](#92-pre-build-gate)
   - [9.3 Build the FPGA firmware](#93-build-the-fpga-firmware)
-  - [9.4 Build the user-space package](#94-build-the-user-space-package)
-  - [9.5 Flash, load drivers and test](#95-flash-load-drivers-and-test)
+  - [9.4 Flash, load drivers and test](#94-flash-load-drivers-and-test)
 - [10 Roadmap](#10-roadmap)
   - [10.1 400G performance work and a collective communication library](#101-400g-performance-work-and-a-collective-communication-library)
   - [10.2 Broader workload coverage](#102-broader-workload-coverage)
@@ -214,6 +213,10 @@ Latency (typical): `ib_write_lat` about **2.2 µs**; `ib_read_lat` / `ib_send_la
 
 ### 7.1 Board specification
 
+<table width="100%">
+<tr>
+<td width="62%" valign="top">
+
 | Item | Specification |
 |---|---|
 | Model | YuanNIC-NH400-A |
@@ -228,9 +231,12 @@ Latency (typical): `ib_write_lat` about **2.2 µs**; `ib_read_lat` / `ib_send_la
 | Cooling | Passive heatsink, relies on chassis airflow |
 | Operating temperature | 0 – 55 ℃ |
 
-<p align="center">
+</td>
+<td width="38%" valign="middle" align="center">
   <img src="docs/image/YuanNIC-NH400-A.png" alt="YuanNIC-NH400-A" width="300">
-</p>
+</td>
+</tr>
+</table>
 
 ### 7.2 Interfaces and clocks
 
@@ -280,17 +286,7 @@ cd code/build/YuanNIC-NH400-A
 
 Outputs (`.sof` / `.rpd` / `.jic`) are archived by version under `code/build/firmware/`.
 
-### 9.4 Build the user-space package
-
-```bash
-cd code/build/fpga_rdma
-./yuannic_user_build.sh                    # rdma-core v66 + yuanrdma provider + perftest + kernel modules + tools
-source YuanNIC_User_Package/env.sh         # run before each use; sets library and binary paths
-```
-
-The resulting `YuanNIC_User_Package/` (and its `.tgz`) can be handed directly to end users; nothing is installed into system paths.
-
-### 9.5 Flash, load drivers and test
+### 9.4 Flash, load drivers and test
 
 ```bash
 ./flash_and_init.sh --flash <image>        # flash → PCIe re-enumerate → load drivers → configure network → self-check
@@ -327,7 +323,7 @@ Architecture research and implementation for the next interconnect generation, i
 
 YuanRDMA aims to be an open, learnable and extensible RDMA NIC platform: RTL, drivers, provider, testbenches and test tooling all live in this repository, and a change can be verified offline before it reaches hardware. We want to lower the bar for high-performance networking research and engineering, so that questions about protocol mechanics, congestion control and transport reliability can be answered on real 400G hardware rather than in simulation or on paper.
 
-Organisations and individuals interested in taking part are welcome to see [1 Ecosystem](#1-ecosystem) above.
+Organisations and individuals interested in taking part are welcome to reach us by email at [hfli@yuangrid.com](mailto:hfli@yuangrid.com), or by phone / WeChat on 18362630238.
 
 ### 11.1 Commit conventions
 
