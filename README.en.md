@@ -121,10 +121,9 @@ Latency (typical): `ib_write_lat` about **2.2 µs**; `ib_read_lat` / `ib_send_la
 
 | Item | Specification |
 |---|---|
-| Form factor | Low Profile (half-height, half-length), single slot |
+| Form factor | Single slot, half-height half-length (with full-height bracket) |
 | Dimensions | 169.5 × 68.9 × 18.5 mm |
-| Bracket | Full-height / low-profile, interchangeable |
-| Power | 75 W max (with AOC optics); under 67 W with DAC |
+| Power | 75 W max |
 | Cooling | Passive heatsink, relies on chassis airflow |
 | Operating temperature | 0 – 55 ℃ |
 
