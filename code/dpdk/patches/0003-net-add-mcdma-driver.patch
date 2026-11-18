@@ -1,0 +1,14 @@
+--- a/drivers/net/meson.build
++++ b/drivers/net/meson.build
+@@ -68,6 +68,11 @@
+         'xsc',
+         'zxdh',
+ ]
++
++# FPGA 网卡：Altera MCDMA PMD
++if arch_subdir == 'x86' or arch_subdir == 'arm'
++    drivers += ['mcdma']
++endif
+ std_deps = ['ethdev', 'kvargs'] # 'ethdev' also pulls in mbuf, net, eal etc
+ std_deps += ['bus_pci']         # very many PMDs depend on PCI, so make std
+ std_deps += ['bus_vdev']        # same with vdev bus

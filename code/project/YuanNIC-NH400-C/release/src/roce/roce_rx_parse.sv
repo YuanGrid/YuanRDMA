@@ -1,0 +1,190 @@
+// roce_rx_parse.sv
+// 解析 roce_rx_front 送来的 RoCEv2 帧（IPv4 无选项、无 VLAN）：
+//  - 头部字段 -> h_*（内部 16 深 FIFO，每帧一个）；
+//  - payload（去掉头、pad_count、ICRC）-> o_*，从第 0 字节对齐，pay_len == 0 的帧没有 payload。
+//
+// 零空转（B6381）：每帧的输入拍持续按 1 拍/周期消费，帧与帧之间不再有空转拍。
+//
+// 1024 bit（B6386）：一拍 128 B，最长头 74 B 也落在第 0 拍内，所以不再需要 beat0 缓存
+// 来凑跨拍的 RETH/ImmDt 字段（512 位时代这些字段在字节 64..73，跨了第 0/1 拍）。
+// 状态机因此塌缩成两个状态：IDLE（收第 0 拍、装元数据、送首拍、同拍写头）与 STREAM
+// （其余拍直通）。头部 FIFO 的写入条件也从「beat1 那拍」提前到第 0 拍，省掉一整拍。
+//
+// 与 B6378 的区别（那一版在这里失败过，别再走回头路）：B6378 只是把 S_PUSH_FIRST /
+// S_REPLAY1 的 in_ready 拉高、把 beat 囤进 skid，状态机拍数没变（仍是 N+2 拍），
+// 只能挡上游反压，省不了拍数。真正的零空转必须让首拍在收进来的同一拍就流出去。
+`default_nettype none
+`timescale 1ns/1ps
+module roce_rx_parse
+    import roce_pkg::*;
+(
+    input  wire              clk,
+    input  wire              rst,
+    input  wire              in_valid,
+    output wire              in_ready,
+    input  wire  [1023:0]    in_data,
+    input  wire  [127:0]     in_keep,
+    input  wire              in_last,
+    // 头部
+    output wire              rx_header_valid,
+    input  wire              rx_header_ready,
+    output rx_hdr_t          rx_header,
+    // payload
+    output wire              out_valid,
+    input  wire              out_ready,
+    output wire  [1023:0]    out_data,
+    output wire  [127:0]     out_keep,
+    output wire              out_last,
+    // 调试：[2:0] 当前 state，见 roce_debug.sv 0x0568
+    output wire  [2:0]       debug_state
+);
+    // 状态编码（0x0568[2:0]）：0=IDLE（帧间，收第 0 拍、装元数据、写头、送首拍）
+    //                       2=STREAM（第 1 拍起直通到帧尾）
+    localparam [1:0] S_IDLE = 2'd0, S_STREAM = 2'd2;
+    reg  [1:0]   state;
+
+    // 解析窗口就是当拍输入：1024 位下 74 B 头全在第 0 拍。
+    wire [1023:0] header_bytes = in_data;
+    function automatic [7:0] header_byte(input integer offset);
+        header_byte = header_bytes[offset*8 +: 8];
+    endfunction
+    function automatic [15:0] read_be16(input integer offset);
+        read_be16 = {header_bytes[offset*8 +: 8], header_bytes[(offset+1)*8 +: 8]};
+    endfunction
+    function automatic [23:0] read_be24(input integer offset);
+        read_be24 = {header_bytes[offset*8 +: 8], header_bytes[(offset+1)*8 +: 8], header_bytes[(offset+2)*8 +: 8]};
+    endfunction
+    function automatic [31:0] read_be32(input integer offset);
+        read_be32 = {read_be16(offset), read_be16(offset+2)};
+    endfunction
+    function automatic [63:0] read_be64(input integer offset);
+        read_be64 = {read_be32(offset), read_be32(offset+4)};
+    endfunction
+
+    // ---------------- 组合解析（在收拍的那一拍直接算）
+    wire [7:0]  opcode      = header_byte(42);
+    wire        opcode_has_reth = (opcode == OP_WRITE_FIRST) || (opcode == OP_WRITE_ONLY) ||
+                          (opcode == OP_WRITE_ONLY_IMM) || (opcode == OP_READ_REQ);
+    wire        opcode_has_aeth = (opcode == OP_READ_RESP_FIRST) || (opcode == OP_READ_RESP_LAST) ||
+                          (opcode == OP_READ_RESP_ONLY) || (opcode == OP_ACK);
+    wire        opcode_has_immediate  = (opcode == OP_SEND_LAST_IMM) || (opcode == OP_SEND_ONLY_IMM) ||
+                          (opcode == OP_WRITE_LAST_IMM) || (opcode == OP_WRITE_ONLY_IMM);
+    // CNP（0x81）不在 0x00..0x11 区间里，单独放行：它是 4 B BTH + **16 B 保留**（不是 RETH），
+    // 所以 extension_length 要按 16 算，payload 恒 0。阶段 3 的 RP 逻辑从这里消费它。
+    wire        opcode_is_cnp      = op_is_cnp(opcode);
+    wire        opcode_supported   = (opcode <= OP_ACK) || opcode_is_cnp;
+    wire [6:0]  extension_length     = (opcode_has_reth ? 7'd16 : 7'd0) + (opcode_has_aeth ? 7'd4 : 7'd0) +
+                                        (opcode_has_immediate ? 7'd4 : 7'd0) + (opcode_is_cnp ? 7'd16 : 7'd0);
+    // RETH 在 BTH 后（54）；AETH 在 BTH 后（54）；ImmDt 在 RETH 后（70）或 BTH 后（54）
+    wire [6:0]  immediate_offset = opcode_has_reth ? 7'd70 : 7'd54;
+    wire [15:0] ip_total_length  = read_be16(16);
+    wire [15:0] udp_length = read_be16(38);
+    wire [7:0]  byte_tos   = header_byte(15);
+    wire [7:0]  byte_bth_flags    = header_byte(43);     // SE M PadCnt TVer
+    wire [7:0]  byte_bth_fecn  = header_byte(46);
+    wire [7:0]  byte_bth_ack_request   = header_byte(50);
+    wire [1:0]  pad_count     = byte_bth_flags[5:4];
+    wire [16:0] overhead_length     = 17'd8 + 17'd12 + {10'd0, extension_length} + {15'd0, pad_count} + 17'd4;   // UDP+BTH+extension_length+pad_count+ICRC
+    wire [16:0] computed_payload_length    = {1'b0, udp_length} - overhead_length;
+    wire [23:0] dest_qpn    = read_be24(47);
+    wire        length_invalid = ({1'b0, udp_length} < overhead_length) || (computed_payload_length > 17'd4096) ||
+                          (ip_total_length != udp_length + 16'd20);
+
+    rx_hdr_t    next_header;
+    always @* begin
+        next_header           = '0;
+        next_header.opcode    = opcode;
+        next_header.solicited        = byte_bth_flags[7];
+        next_header.ack_request    = byte_bth_ack_request[7];
+        next_header.becn      = byte_bth_fecn[6];
+        next_header.ecn_congestion        = (byte_tos[1:0] == 2'b11);
+        next_header.dest_qpn      = dest_qpn;
+        next_header.qp_index    = dest_qpn[3:0];
+        next_header.qp_valid     = (dest_qpn >= 24'(QPN_BASE)) && (dest_qpn < 24'(QPN_BASE + QP_NUM));
+        next_header.psn       = read_be24(51);
+        next_header.has_reth  = opcode_has_reth;
+        next_header.reth_virtual_address   = read_be64(54);
+        next_header.reth_rkey = read_be32(62);
+        next_header.reth_length  = read_be32(66);
+        next_header.has_aeth  = opcode_has_aeth;
+        next_header.aeth_syndrome  = header_byte(54);
+        next_header.aeth_msn  = read_be24(55);
+        next_header.has_immediate   = opcode_has_immediate;
+        next_header.immediate       = header_bytes[immediate_offset*8 +: 32];
+        next_header.payload_length   = length_invalid ? 13'd0 : computed_payload_length[12:0];
+        next_header.bad       = length_invalid || !opcode_supported;
+    end
+
+    // ---------------- 头部 FIFO
+    wire header_fifo_ready;
+    wire align_meta_ready, align_in_ready;
+    // bad 帧（opcode 不支持 / 长度不自洽）一律按零 payload 处理：payload 全部丢弃，只把头部交上去。
+    // 剩下的拍由 STREAM 状态照常消费（skip_align 的 bytes_remaining==0 时不出数，然后 frame_close）。
+    wire has_payload    = !next_header.bad && (next_header.payload_length != 13'd0);
+    wire [12:0] meta_length  = has_payload ? next_header.payload_length : 13'd0;
+    wire [6:0]  header_length = 7'd54 + extension_length;
+
+    // 元数据与首拍同拍：IDLE 那拍既装 meta 又把第 0 拍喂进去（skip_align 的 meta_load_first）。
+    // header_ok 必须同时门控「能不能收」和「喂不喂给 skip_align」：只在 in_ready 上挡是不够的——
+    // skip_align 的 in_ready 与 header FIFO 无关，若此时 align_in_valid 仍为 1，这一拍会被它
+    // 静默吃掉，而状态机因为 in_ready=0 什么都没记。两头口径必须完全一致。
+    wire        header_ok = (state == S_STREAM) || header_fifo_ready;
+    wire        align_meta_valid = (state == S_IDLE) && in_valid && header_ok;
+    // 数据始终是活的前端流：IDLE 是第 0 拍，STREAM 是其余。
+    wire        align_in_valid = in_valid && header_ok;
+    wire [1023:0] align_in_data = in_data;
+    wire        align_in_last  = in_last;
+
+    // 头 FIFO 没位置就不收第 0 拍（STREAM 拍不写头，不受它限制）。
+    // 这条同时保证「收下第 0 拍时当拍一定有位置写头」：FIFO 只有本模块写。
+    assign in_ready = align_in_ready && header_ok;
+
+    // 1024 下头部全在第 0 拍，所以 IDLE 拍当场就能写头，不必等 beat1。
+    wire push_header = (state == S_IDLE) && in_valid && in_ready;
+
+    axis_async_fifo #(
+        .DEPTH(16), .DATA_WIDTH($bits(rx_hdr_t)), .KEEP_ENABLE(0), .LAST_ENABLE(0), .USER_ENABLE(0)
+    ) u_header_fifo (
+        .s_clk(clk), .s_rst(rst),
+        .s_axis_tdata(next_header), .s_axis_tkeep('0), .s_axis_tvalid(push_header),
+        .s_axis_tready(header_fifo_ready), .s_axis_tlast(1'b1), .s_axis_tid(8'd0), .s_axis_tdest(8'd0),
+        .s_axis_tuser(1'b0),
+        .m_clk(clk), .m_rst(rst),
+        .m_axis_tdata(rx_header), .m_axis_tkeep(), .m_axis_tvalid(rx_header_valid), .m_axis_tready(rx_header_ready),
+        .m_axis_tlast(), .m_axis_tid(), .m_axis_tdest(), .m_axis_tuser(),
+        .s_pause_req(1'b0), .s_pause_ack(), .m_pause_req(1'b0), .m_pause_ack(),
+        .s_status_depth(), .s_status_depth_commit(), .s_status_overflow(),
+        .s_status_bad_frame(), .s_status_good_frame(),
+        .m_status_depth(), .m_status_depth_commit(), .m_status_overflow(),
+        .m_status_bad_frame(), .m_status_good_frame()
+    );
+
+    // ---------------- skip_align
+    roce_skip_align #(.DW(1024)) u_skip_align (
+        .clk(clk), .rst(rst),
+        .meta_valid(align_meta_valid), .meta_ready(align_meta_ready), .meta_skip(header_length), .meta_length(meta_length),
+        .in_valid(align_in_valid), .in_ready(align_in_ready), .in_data(align_in_data), .in_last(align_in_last),
+        .out_valid(out_valid), .out_ready(out_ready), .out_data(out_data), .out_keep(out_keep), .out_last(out_last),
+        .debug_state()      // RX 侧的 skip_align 不观测
+    );
+
+    // ---------------- 状态机
+    always @(posedge clk) begin
+        if (rst) begin
+            state <= S_IDLE;
+        end else begin
+            case (state)
+                // 收第 0 拍：同一拍已装 meta、写头、并把它当首拍送出去；帧到此为止就直接回 IDLE。
+                S_IDLE:  if (in_valid && in_ready)
+                            state <= in_last ? S_IDLE : S_STREAM;
+                // 第 1 拍起直通，直到帧尾那一拍——帧尾消费完，skip_align 会进入 flush/close，
+                // 下一拍 IDLE 收的第 0 拍正好可以与它同拍装载，不空转。
+                S_STREAM: if (in_valid && in_ready && in_last)
+                            state <= S_IDLE;
+                default: state <= S_IDLE;
+            endcase
+        end
+    end
+    assign debug_state = {1'b0, state};
+endmodule
+`default_nettype wire

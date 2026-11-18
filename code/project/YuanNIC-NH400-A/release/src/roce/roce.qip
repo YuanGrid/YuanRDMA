@@ -1,0 +1,50 @@
+# RoCEv2 引擎源文件清单。YuanRDMA.qsf 只引用本文件；新增 src/roce 文件时在这里登记。
+# roce_pkg.sv 必须在最前（其他文件 import roce_pkg）。
+set_global_assignment -name SEARCH_PATH [file join $::quartus(qip_path) .]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_pkg.sv]
+# 复用工程里已有但未编译的 Forencich axis_async_fifo（同时钟时也用它，避免与 utility/axis_fifo.sv 重名）
+set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) ../tx_path/axis_async_fifo.v]
+set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) axis_adapter.v]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_crc_byteen.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_icrc.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_avm_split.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_avm_cdc.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_csr.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_dma_rd_align.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_dma_wr_align.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_dma.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_dma_test.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_bas_mon.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_debug.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_tx_mux.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_gray_cnt.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_rx_front.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_skip_align.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_rx_parse.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_tbl.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_qpc_ram.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_cq.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_dma_arb.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_rx_disp.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_resp.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_req.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_tx.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_tx_out.sv]
+# Phase 1（B6394）：2 lane 引擎 + PCIe hub + RX QPN 分流
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_pcie_hub.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_rx_qpn_split.sv]
+# B6417：u_arb ↔ u_dma 之间的全寄存器 skid（roce_engine 里例化）
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_skid.sv]
+# 2026-11-09：PFC 控制器（收发两个方向）与每 lane TX 出口门控
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_pfc_egress.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_pfc.sv]
+# ECN / CNP（阶段 2）：端口级限频与仲裁；CNP 报文由各 lane 的 roce_engine 组
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_cnp.sv]
+# DCQCN（阶段 3）：每 QP 的速率上下文（RP 侧），CTRL.EN 默认 0 = 不改变既有行为
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_dcqcn.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_engine.sv]
+# B6407 方案 A：CDC 之前的按 dest_qpn 分流（取代单份 parse + qpn_split 的 HOL 阻塞结构）
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_rx_demux.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_top.sv]
+# roce.sdc 不在这里登记：qip 中的 SDC 先于 IP 的 SDC 读取，那时 PLL/PCIe/ETH 派生时钟还不存在，
+# set_clock_groups 会全部被忽略。roce.sdc 在 YuanRDMA.qsf 中紧跟 YuanRDMA.sdc 之后登记。

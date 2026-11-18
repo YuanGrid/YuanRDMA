@@ -1,0 +1,249 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ip name="AXI Multichannel DMA Intel FPGA IP for PCI Express">
+ <timestamp>2025-08-06T16:47:06.683593800</timestamp>
+ <file></file>
+ <old_version>2.0.0</old_version>
+ <new_version>3.0.0</new_version>
+ <changes>
+  <change>3.0.0</change>
+  <change> No parameter changes</change>
+  <change> No parameter changes</change>
+  <change> Added AXI-MM user interface support feature</change>
+  <change> No port changes</change>
+  <change> No port changes</change>
+  <change> Bug Fixes </change>
+  <change> Bug Fixes </change>
+  <change> Bug Fixes </change>
+ </changes>
+</ip>
+
+<ip name="F-Tile Ethernet Intel FPGA Hard IP">
+ <timestamp>2025-08-06T16:47:10.580081700</timestamp>
+ <file></file>
+ <old_version>15.0.0</old_version>
+ <new_version>18.0.0</new_version>
+ <changes>
+  <change>18.0.0</change>
+  <change> Hard IP bug fixes done. </change>
+ </changes>
+</ip>
+
+<ip name="F-Tile Reference and System PLL Clocks Intel FPGA IP">
+ <timestamp>2025-08-06T16:47:12.056682600</timestamp>
+ <file></file>
+ <old_version>3.1.0</old_version>
+ <new_version>4.0.0</new_version>
+ <changes>
+  <change>4.0.0</change>
+  <change> clock RX related changes </change>
+  <change> Internal bug fixes done </change>
+ </changes>
+</ip>
+
+<ip name="R-Tile Multichannel DMA Intel FPGA IP for PCI Express">
+ <timestamp>2025-09-10T10:46:28.771174800</timestamp>
+ <file></file>
+ <old_version>5.1.0</old_version>
+ <new_version>5.3.1</new_version>
+ <changes>
+  <change>5.3.1</change>
+  <change> No parameter change </change>
+  <change> Legacy Interrupt parameter change </change>
+  <change> No port change </change>
+  <change> No port change </change>
+  <change> Bug Fixes </change>
+  <change> Bug Fixes </change>
+  <change> Bug Fixes </change>
+ </changes>
+</ip>
+
+<ip name="AXI Streaming Intel FPGA IP for PCI Express">
+ <timestamp>2025-09-10T10:46:35.255143300</timestamp>
+ <file></file>
+ <old_version>3.0.0</old_version>
+ <new_version>3.1.0</new_version>
+ <changes>
+  <change>3.1.0</change>
+  <change> 1.x4 Configuration and Root Port bug fixes </change>
+  <change> 1.Enable support for F-Tile and P-Tile  </change>
+ </changes>
+</ip>
+
+<ip name="Reset Release IP">
+ <timestamp>2025-09-10T10:46:35.700192</timestamp>
+ <file></file>
+ <old_version>19.4.7</old_version>
+ <new_version>19.4.8</new_version>
+</ip>
+
+<ip name="IOPLL IP">
+ <timestamp>2026-10-19T19:57:49.709844300</timestamp>
+ <file></file>
+ <old_version>19.3.1</old_version>
+ <new_version>21.1.0</new_version>
+ <changes>
+  <change>21.1.0</change>
+  <change>Disallow in using core clock as refclk with the reference clock switchover option in Agilex 7 F-/I-Series parts</change>
+  <change>Updated maximum frequency of reference clock and cascading output clocks</change>
+  <change>Add "Use clock names as ports in instantiation" option which when selected will use the "Clock Name" specified for each outclk as top-level ports of the PLL IP instead of outclk_# </change>
+  <change>Add option to use PLL reference clock with SLVS-400 I/O standard in Agilex 7 M-Series, Agilex 5, Agilex 3 parts</change>
+  <change>Add option to set locked interface as reset interface to connect to reset inputs in Platform Designer/Visual Designer Studio</change>
+  <change>Updated Agilex 7 F-/I-Series SDC to add false path to dynamic phase shift asynchronous reset port</change>
+  <change>Fixed issue with IOPLL dynamic reconfiguration simulation in Xcelium simulator</change>
+  <change>Update SDCs to improve timing and reduce warnings</change>
+ </changes>
+</ip>
+
+<ip name="External Memory Interfaces (EMIF) IP">
+ <timestamp>2026-10-19T20:00:04.086778300</timestamp>
+ <file></file>
+ <old_version>2.7.5</old_version>
+ <new_version>2.8.0</new_version>
+ <changes>
+  <change>2.8.0</change>
+  <change>Example design simulation flow improvments</change>
+  <change>Hiding option in GUI that doesn't apply to HPS-EMIF</change>
+  <change>Fix warning relating to termination value on reset_n</change>
+  <change>Intel to Altera rebranding</change>
+  <change>Example design simulation run time improvements</change>
+  <change>Fix warning coming from example design</change>
+  <change>Intel to Altera rebranding</change>
+ </changes>
+</ip>
+
+<ip name="External Memory Interfaces Calibration IP">
+ <timestamp>2026-10-19T20:02:04.744922400</timestamp>
+ <file></file>
+ <old_version>2.7.5</old_version>
+ <new_version>2.8.0</new_version>
+</ip>
+
+<ip name="F-Tile Ethernet Hard IP">
+ <timestamp>2026-10-19T20:04:26.367460500</timestamp>
+ <file></file>
+ <old_version>18.0.0</old_version>
+ <new_version>21.0.0</new_version>
+ <changes>
+  <change>21.0.0</change>
+  <change> Interface names for single port interfaces made same as the port name for the Next Generation Platform Designer. </change>
+ </changes>
+</ip>
+
+<ip name="FIFO IP">
+ <timestamp>2026-10-19T20:07:00.415400</timestamp>
+ <file></file>
+ <old_version>19.3.0</old_version>
+ <new_version>19.4.2</new_version>
+ <changes>
+  <change>19.4.2</change>
+  <change> Added Agilex 3 Family support </change>
+  <change> Added Agilex 5 UG and datasheet links </change>
+  <change> IP Rebranding </change>
+  <change> Cosmetic string update </change>
+ </changes>
+</ip>
+
+<ip name="FIFO IP">
+ <timestamp>2026-10-19T20:20:29.093855</timestamp>
+ <file></file>
+ <old_version>19.3.0</old_version>
+ <new_version>19.4.2</new_version>
+ <changes>
+  <change>19.4.2</change>
+  <change> Added Agilex 3 Family support </change>
+  <change> Added Agilex 5 UG and datasheet links </change>
+  <change> IP Rebranding </change>
+  <change> Cosmetic string update </change>
+ </changes>
+</ip>
+
+<ip name="Mailbox Client IP">
+ <timestamp>2026-10-19T20:22:36.179363100</timestamp>
+ <file></file>
+ <old_version>22.0.0</old_version>
+ <new_version>23.0.0</new_version>
+ <changes>
+  <change>23.0.0</change>
+  <change> Config Stream Endpoint Module. 2 new parameters called TYPE_NAME and INSTANCE_NAME </change>
+ </changes>
+</ip>
+
+<ip name="AXI Streaming IP for PCI Express">
+ <timestamp>2026-10-19T20:23:40.085476900</timestamp>
+ <file></file>
+ <old_version>3.1.0</old_version>
+ <new_version>5.0.0</new_version>
+ <changes>
+  <change>5.0.0</change>
+  <change> 1.Simulation time enhancement  </change>
+  <change> 2.Internal parameters updates for RNR CVP and CII </change>
+  <change> 1.Warning clean up. </change>
+  <change> 1.IOPLL version update. </change>
+  <change> 2.Streamlined P-Tile simulation mode. </change>
+  <change> 1.Warning clean up. </change>
+  <change> 1.P-Tile: Fixed IP stuck in reset issue when performing back-to-back reset involving PERST. If your design performs back-to-back reset and requires this fix, enable the "Support Back-to-back Reset" checkbox in the IP GUI and regenerate the IP. </change>
+ </changes>
+</ip>
+
+<ip name="Reset Release IP">
+ <timestamp>2026-10-19T20:26:23.580913800</timestamp>
+ <file></file>
+ <old_version>19.4.8</old_version>
+ <new_version>19.4.9</new_version>
+</ip>
+
+<ip name="In-System Sources &amp; Probes IP">
+ <timestamp>2026-10-19T20:28:25.957751100</timestamp>
+ <file></file>
+ <old_version>19.2.1</old_version>
+ <new_version>19.3.0</new_version>
+</ip>
+
+<ip name="Reset Release IP">
+ <timestamp>2026-10-19T20:30:41.254516600</timestamp>
+ <file></file>
+ <old_version>19.4.7</old_version>
+ <new_version>19.4.9</new_version>
+</ip>
+
+<ip name="FIFO IP">
+ <timestamp>2026-10-19T20:32:35.240694300</timestamp>
+ <file></file>
+ <old_version>19.4.0</old_version>
+ <new_version>19.4.2</new_version>
+ <changes>
+  <change>19.4.2</change>
+  <change> IP Rebranding </change>
+  <change> Cosmetic string update </change>
+ </changes>
+</ip>
+
+<ip name="F-Tile Reference and System PLL Clocks IP">
+ <timestamp>2026-10-19T20:34:36.443037</timestamp>
+ <file></file>
+ <old_version>4.0.0</old_version>
+ <new_version>4.0.5</new_version>
+ <changes>
+  <change>4.0.5</change>
+  <change> No change </change>
+  <change> No change  </change>
+  <change> clock RX related changes </change>
+  <change> Internal bug fixes done </change>
+  <change> Altera rebranding </change>
+ </changes>
+</ip>
+
+<ip name="R-Tile Multichannel DMA IP for PCI Express">
+ <timestamp>2026-10-20T13:57:04.777453800</timestamp>
+ <file></file>
+ <old_version>5.3.1</old_version>
+ <new_version>5.3.7</new_version>
+ <changes>
+  <change>5.3.7</change>
+  <change> Hwtcl and software changes </change>
+  <change> Hwtcl changes </change>
+  <change> Hwtcl changes </change>
+  <change> Hwtcl changes </change>
+  <change> Sub-IP version uprev </change>
+ </changes>
+</ip>
