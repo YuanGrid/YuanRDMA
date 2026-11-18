@@ -43,7 +43,8 @@ At the hardware level, YuanNIC provides link timing optimization and protocol of
   - [4.2 DPDK line-rate forwarding](#42-dpdk-line-rate-forwarding)
   - [4.3 Intelligent acceleration](#43-intelligent-acceleration)
   - [4.4 Network security](#44-network-security)
-  - [4.5 Host interface and software stack](#45-host-interface-and-software-stack)
+  - [4.5 Continuous evolution](#45-continuous-evolution)
+  - [4.6 Interfaces and software](#46-interfaces-and-software)
 - [5 Resource Scale](#5-resource-scale)
   - [5.1 Queues and tables](#51-queues-and-tables)
   - [5.2 Memory translation](#52-memory-translation)
@@ -152,7 +153,16 @@ YuanSec puts FPGA parallelism and DPDK forwarding behind one loop — receive, p
 
 Shipping forms include security gateways / firewalls, traffic-audit platforms, DDoS protection and scrubbing, and crypto-acceleration systems, covering government and enterprise, industrial control, data centres and high-speed communications.
 
-### 4.5 Host interface and software stack
+### 4.5 Continuous evolution
+
+- **Online firmware upgrade**: images are written to the configuration device over on-board Active Serial x4 (outputs `.sof` / `.rpd` / `.jic`, archived by version under `code/build/firmware/`). After the write the link re-enumerates and the drivers reload while the host OS keeps running — one script chains flash → re-enumerate → load drivers → configure network → self-check.
+- **Version rollback**: images are identified by version (prefix `YN400GA7B027A`) and multiple versions coexist, so rolling back is flashing the previous image. Upgrades touch only the configuration device and install nothing into the host system.
+- **Three independently upgradeable layers**: firmware, kernel drivers (built against `uname -r`) and the user-space package (`YuanNIC_User_Package/`, switched by `env.sh`) evolve separately, so changing one does not disturb the other two; with parameters also readable and writable at run time, tuning needs no firmware rebuild and upgrading needs no OS reinstall.
+- **Diagnosable**: `rdmacli` and `nictrl` read registers and counters and export hang snapshots; together with perftest, `roce_perf_test.sh` regression runs and hardware-side packet capture, a fault can be traced from symptom to register state instead of guessed at.
+- **Interoperable with upper-layer software**: `rdma_cm`, NCCL and perftest keep their existing paths, while `rdmacli` / `nictrl` and the control plane expose read and drive access to upper-layer software, so monitoring and policy fit into existing operations tooling.
+- **Verifiable changes**: RTL, drivers, provider and testbenches share one repository; a change to protocol fields, a congestion algorithm, retransmission policy or queue shaping runs the full chain from edit through offline validation (cocotb benches and the pre-build gate) to firmware and on-board regression.
+
+### 4.6 Interfaces and software
 
 - **Host interface**: PCIe Gen5 x16 (R-tile) + AXI MCDMA; doorbell, WQE fetch and CQE write-back are all hardware.
 - **Kernel drivers**: `yuannic.ko` for netdev, `yuanrdma.ko` into `ib_core` for the RDMA device.
