@@ -29,7 +29,7 @@ YuanRDMA 是[垣易科技](http://www.yuangrid.com)（[YuanGrid](http://www.yuan
 
 在硬件层，YuanNIC 具备面向高速互联的链路时序优化与协议卸载能力，支持线速报文处理、超低传输时延、400G 高速光口、可编程协议卸载、PFC 无损网络与 DCQCN 拥塞控制。项目覆盖从 RTL、固件构建、内核驱动、用户态 provider 与 DPDK PMD，到仿真验证与上板测试工具链的完整软硬件栈。
 
-> 本仓库是 YuanNIC 的开源工程，以 Apache-2.0 协议开放 RTL、驱动与工具源码；编译产出 FPGA 固件与用户态库供最终用户使用。
+> 本仓库是 YuanNIC 的开源工程，以 Apache-2.0 协议开放 RTL、驱动与工具源码。
 
 ## 目录
 
@@ -156,7 +156,7 @@ YuanSec 以 FPGA 并行计算加 DPDK 转发为数据面，把检测与密码运
 
 - **固件在线升级**：镜像经板载 Active Serial x4 写入配置器件（产物 `.sof` / `.rpd` / `.jic`，按版本归档于 `code/build/firmware/`）；升级后 PCIe 重枚举、驱动重新加载，主机操作系统不重启，一条脚本串起烧写 → 重枚举 → 加载驱动 → 配网 → 自检。
 - **版本可回退**：镜像以版本号标识（型号段 `YN400GA7B027A`），多版本并存，回退即烧回旧镜像；升级只动配置器件，不向主机系统安装任何文件。
-- **三层独立升级**：固件、内核驱动（随 `uname -r` 编译）、用户态软件包（`YuanNIC_User_Package/`，由 `env.sh` 切换）各自独立演进，改一层不必动另两层；加上参数在线读写，调参不重编固件、升级不重装系统。
+- **分层独立升级**：固件、内核驱动（随 `uname -r` 编译）、用户态 provider 与 PMD 各自独立演进，改一层不必动另两层；加上参数在线读写，调参不重编固件、升级不重装系统。
 - **问题可定位**：`rdmacli` 与 `nictrl` 读取寄存器与计数器、导出卡死现场快照，配合 perftest、`roce_perf_test.sh` 回归与硬件侧镜像抓包，故障可从现象追到寄存器状态，不必靠猜。
 - **与上层软件联动**：对内保持 `rdma_cm`、NCCL 与 perftest 的既有路径，对外经 `rdmacli` / `nictrl` 与配置面向上层软件开放读写与操控，监控与策略可纳入既有运维体系。
 - **改动可验证**：RTL、驱动、provider、仿真台同仓，协议字段、拥塞算法、重传策略与队列整形的改动，从改代码、离线验证（cocotb 仿真台与编译前门禁）、出固件到上板回归是一条完整链路。
@@ -249,7 +249,7 @@ YuanSec 以 FPGA 并行计算加 DPDK 转发为数据面，把检测与密码运
 |---|---|---|
 | 操作系统 | Ubuntu 22.04 x86_64，内核 `5.15.0` | 上板验证所用环境；驱动模块 vermagic 须与 `uname -r` 一致 |
 | RDMA 用户态 | rdma-core v66（随本仓库编译，PABI 65） | provider 与 rdma-core 同源编译，无稳定外部 ABI |
-| 系统 RDMA 栈 | DOCA 3.5.0 | 与本栈隔离共存，无需卸载；靠 `env.sh` 切换 `LD_LIBRARY_PATH` |
+| 系统 RDMA 栈 | DOCA 3.5.0 | 与本栈隔离共存，无需卸载 |
 | DPDK | 25.11.2 | 用户态收包路径，PMD 为 `net_mcdma`；需 meson + ninja 构建 |
 | CUDA | 12.4 | 仅 NCCL / GPUDirect RDMA 场景需要（T4 = sm_75，`NVCC_GENCODE=compute_75,sm_75`） |
 | NCCL | 2.22.3 | 源码编译，与对标产品验证过的 2.19.3–2.22.3 区间对齐 |
@@ -260,8 +260,6 @@ YuanSec 以 FPGA 并行计算加 DPDK 转发为数据面，把检测与密码运
 | 编译器 | gcc 11 / g++ 11 | Ubuntu 22.04 默认版本，`5.15` 内核用它编译，`code/kernel` 直接 `make` 即可 |
 | 构建工具 | cmake、meson、ninja、make、autoconf/flex/bison | provider 用 cmake，DPDK 用 meson+ninja |
 | FPGA 工具链 | Quartus Prime Pro 26.1.1 | 仅用于出固件 |
-
-依赖安装见 [9 快速开始](#9-快速开始)。
 
 ## 9 快速开始
 

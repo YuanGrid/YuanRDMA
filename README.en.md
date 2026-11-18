@@ -29,7 +29,7 @@ The software stack covers two packet paths. On the **kernel path**, `yuannic.ko`
 
 At the hardware level, YuanNIC provides link timing optimization and protocol offload for high-speed interconnect, with wire-rate packet processing, ultra-low transport latency, 400G optical ports, programmable offload, PFC lossless networking and DCQCN congestion control. The project spans the full hardware and software stack: RTL, firmware build, kernel drivers, user-space provider and DPDK PMD, simulation, and on-board test tooling.
 
-> This is the YuanNIC open-source project, releasing RTL, driver and tool sources under Apache-2.0. Builds produce the FPGA firmware and user-space libraries for end users.
+> This is the YuanNIC open-source project, releasing RTL, driver and tool sources under Apache-2.0.
 
 ## Contents
 
@@ -156,7 +156,7 @@ Shipping forms include security gateways / firewalls, traffic-audit platforms, D
 
 - **Online firmware upgrade**: images are written to the configuration device over on-board Active Serial x4 (outputs `.sof` / `.rpd` / `.jic`, archived by version under `code/build/firmware/`). After the write the link re-enumerates and the drivers reload while the host OS keeps running — one script chains flash → re-enumerate → load drivers → configure network → self-check.
 - **Version rollback**: images are identified by version (prefix `YN400GA7B027A`) and multiple versions coexist, so rolling back is flashing the previous image. Upgrades touch only the configuration device and install nothing into the host system.
-- **Three independently upgradeable layers**: firmware, kernel drivers (built against `uname -r`) and the user-space package (`YuanNIC_User_Package/`, switched by `env.sh`) evolve separately, so changing one does not disturb the other two; with parameters also readable and writable at run time, tuning needs no firmware rebuild and upgrading needs no OS reinstall.
+- **Layered upgrades**: firmware, kernel drivers (built against `uname -r`), and the user-space provider and PMD evolve separately, so changing one does not disturb the others; with parameters also readable and writable at run time, tuning needs no firmware rebuild and upgrading needs no OS reinstall.
 - **Diagnosable**: `rdmacli` and `nictrl` read registers and counters and export hang snapshots; together with perftest, `roce_perf_test.sh` regression runs and hardware-side packet capture, a fault can be traced from symptom to register state instead of guessed at.
 - **Interoperable with upper-layer software**: `rdma_cm`, NCCL and perftest keep their existing paths, while `rdmacli` / `nictrl` and the control plane expose read and drive access to upper-layer software, so monitoring and policy fit into existing operations tooling.
 - **Verifiable changes**: RTL, drivers, provider and testbenches share one repository; a change to protocol fields, a congestion algorithm, retransmission policy or queue shaping runs the full chain from edit through offline validation (cocotb benches and the pre-build gate) to firmware and on-board regression.
@@ -249,7 +249,7 @@ Latency (typical): `ib_write_lat` about **2.2 µs**; `ib_read_lat` / `ib_send_la
 |---|---|---|
 | OS | Ubuntu 22.04 x86_64, kernel `5.15.0` | The environment used for on-board validation; driver module vermagic must match `uname -r` |
 | RDMA user space | rdma-core v66 (built from this repository, PABI 65) | Provider is built against the same rdma-core tree; there is no stable external ABI |
-| System RDMA stack | DOCA 3.5.0 | Coexists in isolation, no uninstall needed; `env.sh` switches `LD_LIBRARY_PATH` |
+| System RDMA stack | DOCA 3.5.0 | Coexists in isolation, no uninstall needed |
 | DPDK | 25.11.2 | User-space packet path, PMD `net_mcdma`; built with meson + ninja |
 | CUDA | 12.4 | Only needed for NCCL / GPUDirect RDMA (T4 = sm_75, `NVCC_GENCODE=compute_75,sm_75`) |
 | NCCL | 2.22.3 | Built from source; matches the 2.19.3–2.22.3 range validated against the reference product |
@@ -260,8 +260,6 @@ Latency (typical): `ib_write_lat` about **2.2 µs**; `ib_read_lat` / `ib_send_la
 | Compilers | gcc 11 / g++ 11 | Ubuntu 22.04 default; the `5.15` kernel is built with it, so `code/kernel` builds with a plain `make` |
 | Build tools | cmake, meson, ninja, make, autoconf/flex/bison | cmake for the provider, meson+ninja for DPDK |
 | FPGA toolchain | Quartus Prime Pro 26.1.1 | Used only to produce firmware |
-
-Dependency installation is covered in [9 Quick Start](#9-quick-start).
 
 ## 9 Quick Start
 
