@@ -75,32 +75,63 @@ YuanRDMA 以开源方式推进，也希望以合作共建的方式生长。我�
 
 ## 主要特性
 
-**RDMA 传输**
+**RDMA 线速传输**
 
-- QP 建立：支持两种建链方式——RoCE CM（借助内核驱动经 QP1 / GSI 交换 CM MAD，即标准 `rdma_cm` 路径）与 TCP 交换建链信息（NCCL、perftest 一类走 verbs 自己交换 QP 信息的路径，不依赖 CM）。
-- QP 规模：`QP_NUM` 参数化（默认 128，可扩展至 4096），QPN 落在基址对齐的连续窗口内，软件侧 `FROCE_MAX_QP` / `FROCE_QPN_BASE` 与 RTL 同步；硬指标见下文「资源规模」。
-- RoCEv2 RC 传输：RDMA Write / Write with Immediate / Read / Send / Send with Immediate，硬件实现 PSN、ACK/NAK、Go-back-N 重传与超时定时器。
-- RoCEv2 UD 传输（Send / Send with Immediate，带 DETH），CQE 回报源 QPN。
-- ICRC 硬件生成与校验。
+- 协议栈原生：RoCEv2 RC 与 UD 在 RTL 中实现，报文在网卡内完成组包与解析，数据面不经过主机软件栈。
+- RC 语义完整：RDMA Write / Write with Immediate / Read / Send / Send with Immediate，硬件实现 PSN 跟踪、ACK / NAK、Go-back-N 重传与超时定时器，ICRC 生成与校验全部由硬件完成。
+- UD 传输：Send / Send with Immediate（带 DETH），CQE 回报源 QPN。
+- 多 QP 并行：单 QP 受每包组包开销限制约到线速的 36%，多 QP 并发把发送方向推到 88%（4 QP，352.1 Gb/s）；QP 数量 `QP_NUM` 参数化，默认 128、可扩展至 4096，下发并行度可按负载调整。
+- 建链方式两种：RoCE CM（内核驱动经 QP1 / GSI 交换 CM MAD，即标准 `rdma_cm` 路径）与 TCP 交换建链信息（NCCL、perftest 一类由 verbs 自行交换 QP 信息，不依赖 CM）。
+- QPN 落在基址对齐的连续窗口内，软件侧 `FROCE_MAX_QP` / `FROCE_QPN_BASE` 与 RTL 同步。
 
 **资源规模**
 
-- 默认 128 个 QP（可扩展到 4096）、64 个 CQ，SQ / RQ 深度 4096，CQ 深度最高 32768。
-- MTT 131072 项，单个 MR 最大 512 MiB；硬件实现 lkey / rkey 校验与地址翻译缓存。
-- GPUDirect RDMA：支持 dma-buf MR 注册（`ibv_reg_dmabuf_mr`，内核 ≥ 6.2，待上板验证）。
+- 默认 128 个 QP（可扩展至 4096）、64 个 CQ；SQ / RQ 深度 4096，CQ 深度最高 32768。
+- MTT 131072 项，单个 MR 最大 512 MiB；lkey / rkey 校验与地址翻译缓存由硬件完成。
+- GPUDirect RDMA：支持 dma-buf MR 注册（`ibv_reg_dmabuf_mr`，内核 ≥ 6.2，上板验证进行中）。
 
 **无损网络与拥塞控制**
 
-- PFC（IEEE 802.1Qbb）：按优先级的发送准入门控，配合 F-tile 硬核 MAC 完成 PFC 帧收发。
+- PFC（IEEE 802.1Qbb）：按优先级的发送准入门控，PFC 帧由 F-tile 硬核 MAC 收发。
 - DCQCN：RP / NP / CNP 完整实现，覆盖全部 QP（当前 128 个，随 `QP_NUM` 扩展），参数全部寄存器可配。
+- 无损以太参数（PFC 优先级、DSCP、ECN 门限、DCQCN 速率与计时器）均可在线读写，无需重编固件。
+
+**DPDK 线速转发**
+
+- `net_mcdma` 是一个 DPDK Poll Mode Driver：报文在用户态直接收送，不进内核协议栈，省掉中断、上下文切换与内存拷贝，转发路径只剩轮询与 DMA。
+- 收送队列直接映射到网卡的硬件队列（AXI MCDMA），大页内存作为报文缓冲，单口 400GbE 的线速报文可由软件按需取用与改写。
+- 与 RDMA 路径共用同一块卡：同一台机器上可以一边跑 verbs 业务、一边用 DPDK 做转发、镜像、协议测试或损伤仿真，两条路径互不占用对方的软件栈。
+- 基于 DPDK 25.11.2，随仓库源码构建。
+
+**智能加速**
+
+- 加速点可以在网络处理的任意环节，而不是只在收发两端：MAC 侧的报文分类与时间戳、流量管理侧的优先级与整形、RoCE 引擎侧的组包与重传、DMA 侧的搬运与写回，都可以按业务需要把工作从主机搬到硬件。
+- 协议卸载：TCP / UDP / RoCEv2 组包与解析、ICRC 校验、checksum 计算卸载到硬件，主机 CPU 只处理业务本身。
+- 安全卸载：加解密在硬件流水线上完成，报文进出不落主机内存，密钥与算法由配置面下发，加解密时延不再叠加到软件路径上。
+- 按策略分流：依据五元组、DSCP、VLAN 或自定义字段把报文分类，分别送往 RDMA 引擎、netdev、DPDK 队列或直接丢弃，同一块卡上可按业务切分出互不干扰的通道。
+- 线速抓包与重放：报文在硬件侧按策略镜像到抓包通道，落盘不丢包；回放时按原始时间戳与速率重新注入，可用于故障复现、回归测试与交换机一致性验证。
+- 拥塞与可靠性卸载：PFC 门控、ECN 标记、DCQCN 限速、丢包检测与硬件重传，都不再依赖主机内核的定时器精度。
+- 可编程性：协议字段、拥塞控制算法、重传策略、队列与整形参数都在 RTL 与寄存器层面开放，改策略只需重编固件；cocotb 仿真台与编译前门禁让改动能先离线验证再上板。
+- 运维可观测：`rdmacli` 提供 PFC / DSCP / ECN 与 DCQCN 参数配置、寄存器与计数器诊断以及卡死现场快照，`nictrl` 负责网卡管理。
+
+**网络安全**
+
+YuanSec 是构建在 YuanNIC 之上的 FPGA 网络安全加速方案：以 FPGA 并行计算加 DPDK 快速转发为数据面，把安全检测与密码运算从主机搬到硬件，形成「收发 → 解析 → 检测 → 处置」的闭环。
+
+- 线速报文解析：多维字段分类、时间戳与流表匹配在硬件侧完成，接口覆盖 1 / 10 / 25 / 100 / 400 GE，匹配与转发不占用主机 CPU。
+- DPDK 快速转发：多队列、零拷贝与负载分发，检测面与转发面共用同一块卡，策略命中后可直接在用户态完成丢弃、镜像或改写。
+- 检测与流量审计：异常识别、规则过滤与旁路分析，实现硬件级流量审计与威胁实时拦截。
+- 密码与协议卸载：国密、PQC 与 AES / RSA 算法在硬件流水线上完成，密钥与算法由配置面下发；专用协议的解析与封装同样可卸载，报文不必回到主机内存。
+- 策略灵活可配：匹配字段、动作与规则表可按业务裁剪，安全策略与网络策略在同一套配置面上管理。
+
+交付形态包括线速过滤与协议卸载的安全网关 / 防火墙、镜像旁路与实时分析的流量审计平台、异常流量识别与分发的 DDoS 防护清洗，以及国密 / PQC 硬件卸载的密码加速系统，覆盖政企、工业控制、数据中心与高速通信场景。
 
 **主机接口与软件栈**
 
-- PCIe Gen5 x16（Altera R-tile）+ AXI MCDMA，doorbell / WQE 取指 / CQE 写回全部硬件完成。
+- PCIe Gen5 x16（Altera R-tile）+ AXI MCDMA，doorbell、WQE 取指与 CQE 写回全部由硬件完成。
 - Linux 内核驱动两条线：`yuannic.ko` 提供标准以太网网口（netdev），`yuanrdma.ko` 接入 `ib_core` 提供 RDMA 设备。
 - RDMA 用户态 provider `libyuanrdma`，与 rdma-core v66 同源编译，与系统 DOCA 栈隔离共存。
-- DPDK PMD `net_mcdma`：用户态收包路径，绕过内核，基于 DPDK 25.11.2。
-- 运维诊断工具：`rdmacli`（PFC / DSCP / ECN、DCQCN 参数配置，寄存器与计数器诊断，卡死现场快照）、`nictrl`（网卡管理）。
+- DPDK PMD `net_mcdma` 与内核路径共用硬件队列，可按业务在同一块卡上并存。
 
 ## 性能
 

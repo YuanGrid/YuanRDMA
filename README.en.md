@@ -75,32 +75,63 @@ The full path of one RDMA operation, from application submission to usable data 
 
 ## Key Features
 
-**RDMA transport**
+**RDMA line-rate transport**
 
-- QP setup: two ways to establish a connection — RoCE CM (the kernel driver exchanges CM MADs over the QP1 / GSI path, i.e. the standard `rdma_cm` route) and TCP-based out-of-band exchange (the path taken by NCCL and perftest, which trade QP information over verbs without CM).
-- QP scale: parameterised via `QP_NUM` (128 by default, scalable to 4096); QPNs live in a base-aligned contiguous window, and `FROCE_MAX_QP` / `FROCE_QPN_BASE` on the software side are kept in sync with the RTL. See Resource scale below for the hard numbers.
-- RoCEv2 RC: RDMA Write / Write with Immediate / Read / Send / Send with Immediate, with hardware PSN tracking, ACK/NAK, Go-back-N retransmission and timeout timers.
-- RoCEv2 UD (Send / Send with Immediate with DETH); the CQE reports the source QPN.
-- Hardware ICRC generation and checking.
+- Native stack: RoCEv2 RC and UD are implemented in RTL, so packets are assembled and parsed on the card and the data plane never enters the host software stack.
+- Full RC semantics: RDMA Write / Write with Immediate / Read / Send / Send with Immediate, with hardware PSN tracking, ACK / NAK, Go-back-N retransmission and timeout timers; ICRC generation and checking are done entirely in hardware.
+- UD transport: Send / Send with Immediate (with DETH); the CQE reports the source QPN.
+- Multi-QP parallelism: a single QP tops out at about 36% of line rate because of per-packet assembly overhead, while multiple QPs push the transmit direction to 88% (4 QPs, 352.1 Gb/s). QP count is parameterised via `QP_NUM` — 128 by default, scalable to 4096 — so the degree of parallelism can follow the workload.
+- Two ways to establish a connection: RoCE CM (the kernel driver exchanges CM MADs over the QP1 / GSI path, i.e. the standard `rdma_cm` route) and TCP-based out-of-band exchange (NCCL and perftest trade QP information over verbs without CM).
+- QPNs live in a base-aligned contiguous window, with `FROCE_MAX_QP` / `FROCE_QPN_BASE` kept in sync between software and RTL.
 
-**Resources**
+**Resource scale**
 
-- 128 QPs by default (expandable to 4096) and 64 CQs; SQ / RQ depth 4096; CQ depth up to 32768.
-- 131072 MTT entries, up to 512 MiB per MR; hardware lkey / rkey checking with an address translation cache.
-- GPUDirect RDMA: dma-buf MR registration (`ibv_reg_dmabuf_mr`, kernel ≥ 6.2, pending on-board validation).
+- 128 QPs by default (scalable to 4096) and 64 CQs; SQ / RQ depth 4096, CQ depth up to 32768.
+- 131072 MTT entries, up to 512 MiB per MR; lkey / rkey checking and the address translation cache are done in hardware.
+- GPUDirect RDMA: dma-buf MR registration (`ibv_reg_dmabuf_mr`, kernel ≥ 6.2, on-board validation in progress).
 
 **Lossless networking and congestion control**
 
-- PFC (IEEE 802.1Qbb): per-priority transmit admission gating, with PFC frames handled by the F-tile hard MAC.
-- DCQCN: full RP / NP / CNP implementation covering all QPs (128 today, scaling with `QP_NUM`), with every parameter register-configurable.
+- PFC (IEEE 802.1Qbb): per-priority transmit admission gating, with PFC frames sent and received by the F-tile hard MAC.
+- DCQCN: full RP / NP / CNP implementation covering every QP (128 today, scaling with `QP_NUM`), with all parameters register-configurable.
+- Lossless-Ethernet parameters — PFC priorities, DSCP, ECN thresholds, DCQCN rates and timers — are readable and writable at run time without rebuilding firmware.
+
+**DPDK line-rate forwarding**
+
+- `net_mcdma` is a DPDK poll-mode driver: packets are sent and received directly from user space, never entering the kernel stack, which removes interrupts, context switches and memory copies so the forwarding path is just polling and DMA.
+- Its queues map straight onto the card's hardware queues (AXI MCDMA) with huge-page memory as the packet buffer, so line-rate traffic on the 400GbE port can be taken up and rewritten in software.
+- It shares the card with the RDMA path: one machine can run verbs workloads on one side and use DPDK for forwarding, mirroring, protocol testing or impairment emulation on the other, without either side disturbing the other's software stack.
+- Built from repository source against DPDK 25.11.2.
+
+**Intelligent acceleration**
+
+- Acceleration can sit at any point in the packet path, not just at the two endpoints: classification and timestamping at the MAC, priority and shaping in traffic management, assembly and retransmission in the RoCE engine, and movement and write-back in the DMA layer can all be moved from host to hardware as the workload requires.
+- Protocol offload: TCP / UDP / RoCEv2 assembly and parsing, ICRC checking and checksum computation run in hardware, leaving the host CPU to do only the work that matters.
+- Security offload: encryption and decryption run in the hardware pipeline, so packets never land in host memory; keys and algorithms are provisioned from the control plane, and the cost of crypto no longer stacks onto the software path.
+- Policy-based steering: packets are classified on five-tuple, DSCP, VLAN or custom fields and sent to the RDMA engine, the netdev, a DPDK queue or dropped, so one card can be carved into independent channels per workload.
+- Line-rate capture and replay: packets are mirrored to a capture channel in hardware and written out without loss; replay re-injects them at the original timestamps and rate, for fault reproduction, regression testing and switch-conformance checks.
+- Congestion and reliability offload: PFC gating, ECN marking, DCQCN rate limiting, loss detection and hardware retransmission no longer depend on the precision of host kernel timers.
+- Programmability: protocol fields, congestion-control algorithms, retransmission policy, queue and shaping parameters are all open at the RTL and register level; changing a policy means rebuilding firmware, and cocotb testbenches plus the pre-build gate let a change be verified offline first.
+- Operational visibility: `rdmacli` covers PFC / DSCP / ECN and DCQCN configuration, register and counter diagnostics, and hang snapshots; `nictrl` handles NIC management.
+
+**Network security**
+
+YuanSec is an FPGA security-acceleration solution built on YuanNIC: FPGA parallelism plus a DPDK fast-forwarding data plane move inspection and cryptography off the host, forming one loop from receive through parse and detect to act.
+
+- Line-rate packet parsing: multi-field classification, timestamping and flow-table matching run in hardware across 1 / 10 / 25 / 100 / 400 GE ports, so matching and forwarding cost no host CPU.
+- DPDK fast forwarding: multi-queue, zero-copy and load distribution, with the inspection and forwarding planes sharing one card; a rule hit can drop, mirror or rewrite in user space.
+- Detection and traffic audit: anomaly detection, rule filtering and bypass analysis deliver hardware-level traffic auditing and real-time threat blocking.
+- Crypto and protocol offload: national cryptographic algorithms, PQC and AES / RSA run in the hardware pipeline with keys and algorithms provisioned from the control plane; parsing and encapsulation for dedicated protocols can be offloaded the same way, without packets returning to host memory.
+- Flexible policy: match fields, actions and rule tables are trimmed per workload, and security policy is managed on the same configuration surface as network policy.
+
+Shipping forms include security gateways and firewalls with line-rate filtering and protocol offload, traffic-audit platforms with mirroring, bypass and real-time analysis, DDoS protection and scrubbing that identifies and distributes anomalous traffic, and crypto-acceleration systems offloading national-cryptography and PQC work — covering government and enterprise, industrial control, data centres and high-speed communications.
 
 **Host interface and software stack**
 
 - PCIe Gen5 x16 (Altera R-tile) + AXI MCDMA; doorbell, WQE fetch and CQE write-back are all done in hardware.
 - Two Linux kernel drivers: `yuannic.ko` exposes the ports as standard Ethernet netdevs, and `yuanrdma.ko` plugs into `ib_core` to expose the RDMA device.
 - User-space RDMA provider `libyuanrdma`, built from the same rdma-core v66 tree and isolated from the system DOCA stack.
-- DPDK PMD `net_mcdma`: the user-space packet path, bypassing the kernel, based on DPDK 25.11.2.
-- Operations tools: `rdmacli` (PFC / DSCP / ECN and DCQCN configuration, register and counter diagnostics, hang snapshots) and `nictrl` (NIC management).
+- The DPDK PMD `net_mcdma` shares the hardware queues with the kernel path, so the two can coexist on one card.
 
 ## Performance
 
