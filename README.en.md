@@ -225,6 +225,19 @@ Architecture research and implementation for the next interconnect generation, i
 
 ## Contributing
 
+YuanRDMA aims to be an open, learnable and extensible RDMA NIC platform: RTL, drivers, provider, testbenches and test tooling all live in this repository, and a change can be verified offline before it reaches hardware. We want to lower the bar for high-performance networking research and engineering, so that questions about protocol mechanics, congestion control and transport reliability can be answered on real 400G hardware rather than in simulation or on paper.
+
+We welcome research institutes, universities and companies to join us in development and testing. Where hardware is needed we can provide cards and a test environment; where realism is needed, participants can bring their own workloads and tune against them together. The work spans protocol extensions and validation of new mechanisms, congestion control and lossless-Ethernet tuning, driver and user-space stack improvements, interoperability testing and fault reproduction, and documentation and teaching material. Issues found, requirements raised and data produced all flow back into this open line of development.
+
+**Participants** (growing)
+
+- School of Intelligent Software and Engineering
+- Motorcomm Electronic Technology Co., Ltd. (裕太微电子股份有限公司, 688515)
+
+Organisations and individuals interested in taking part are welcome to reach us through an Issue or by email.
+
+### Commit conventions
+
 - Run `test/sim/rtl_prebuild_gate.sh` before committing; after any RTL change, at least run synthesis and timing analysis.
 - Do not commit Quartus outputs (`qdb/`, `dni/`, `output_files/`).
 - Documentation is primarily in Chinese with English technical terms.
