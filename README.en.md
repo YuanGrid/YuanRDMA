@@ -23,9 +23,11 @@
   <img src="https://img.shields.io/badge/RDMA--CORE-v66-612B9B?style=flat-square&labelColor=B48B2E" alt="RDMA-CORE v66">
 </p>
 
-YuanRDMA is an FPGA-based 400G RoCEv2 RDMA SmartNIC developed by [YuanGrid](http://www.yuangrid.com), shipped as the **YuanNIC** product line. The RDMA transport engine is built natively into the FPGA, and the card appears to the host as a standard RDMA device: it plugs in through the standard `libibverbs` / `rdma-core` provider model, runs unmodified upstream perftest, and interoperates bidirectionally with NVIDIA ConnectX-7 NICs on the same network. It targets AI clusters, high-speed interconnect, low-latency storage and intelligent offload workloads.
+YuanRDMA is an FPGA-based 400G RoCEv2 RDMA SmartNIC developed by [YuanGrid](http://www.yuangrid.com), shipped as the **YuanNIC** product line. The RDMA transport engine is built natively into the FPGA SmartNIC, and the card presents itself to the host as both a standard Ethernet NIC and a standard RDMA device: on the wire it speaks the ordinary Ethernet stack, while on the RDMA side it plugs in through the standard `libibverbs` / `rdma-core` provider model, runs unmodified upstream perftest, and interoperates bidirectionally with NVIDIA ConnectX-7 NICs on the same network. It targets AI clusters, high-speed interconnect, low-latency storage and intelligent offload workloads.
 
-YuanNIC features hardware link timing optimization for high-speed interconnect and protocol offload, with wire-rate packet processing, ultra-low transport latency, 400G optical ports, programmable protocol offload, PFC lossless networking and DCQCN congestion control. The project covers the full hardware/software stack: RTL, firmware build, Linux kernel driver, user-space provider, simulation, and on-board test tooling.
+The software stack covers two packet paths. On the **kernel path**, `yuannic.ko` registers the ports as standard Ethernet devices and `yuanrdma.ko` plugs into `ib_core`, so applications reach verbs through rdma-core. On the **user-space path**, `net_mcdma` is a DPDK poll-mode driver that sends and receives packets directly from user space, bypassing the kernel — a better fit for high-throughput forwarding and protocol testing. Both paths share the same hardware queues and DMA channels and can coexist on one card.
+
+At the hardware level, YuanNIC provides link timing optimization and protocol offload for high-speed interconnect, with wire-rate packet processing, ultra-low transport latency, 400G optical ports, programmable offload, PFC lossless networking and DCQCN congestion control. The project spans the full hardware and software stack: RTL, firmware build, kernel drivers, user-space provider and DPDK PMD, simulation, and on-board test tooling.
 
 > This is the YuanNIC open-source project, releasing RTL, driver and tool sources under Apache-2.0. Builds produce the FPGA firmware and user-space libraries for end users.
 
@@ -71,13 +73,12 @@ The full path of one RDMA operation, from application submission to usable data 
 6. For RDMA Write the peer's memory is written by the NIC itself with no peer CPU involvement; for Send the CQE is produced only after the NIC has written the payload into the RQ buffer.
 7. With GPUs: after a `dma-buf` MR registration the data goes straight to device memory, and IBGDA lets the GPU ring the doorbell, taking the CPU off the submission path.
 
-
 ## Key Features
 
 **RDMA transport**
 
 - QP setup: two ways to establish a connection — RoCE CM (the kernel driver exchanges CM MADs over the QP1 / GSI path, i.e. the standard `rdma_cm` route) and TCP-based out-of-band exchange (the path taken by NCCL and perftest, which trade QP information over verbs without CM).
-- QP scale: 128 QPs by default, with `QP_NUM` parameterized up to 4096; QPNs live in a base-aligned contiguous window, and `FROCE_MAX_QP` / `FROCE_QPN_BASE` on the software side are kept in sync with the RTL.
+- QP scale: parameterised via `QP_NUM` (128 by default, scalable to 4096); QPNs live in a base-aligned contiguous window, and `FROCE_MAX_QP` / `FROCE_QPN_BASE` on the software side are kept in sync with the RTL. See Resource scale below for the hard numbers.
 - RoCEv2 RC: RDMA Write / Write with Immediate / Read / Send / Send with Immediate, with hardware PSN tracking, ACK/NAK, Go-back-N retransmission and timeout timers.
 - RoCEv2 UD (Send / Send with Immediate with DETH); the CQE reports the source QPN.
 - Hardware ICRC generation and checking.
@@ -96,9 +97,9 @@ The full path of one RDMA operation, from application submission to usable data 
 **Host interface and software stack**
 
 - PCIe Gen5 x16 (Altera R-tile) + AXI MCDMA; doorbell, WQE fetch and CQE write-back are all done in hardware.
-- Linux kernel driver `yuanrdma.ko` (on top of `ib_core`), Ethernet driver `yuannic.ko`.
-- rdma-core v66 provider `libyuanrdma`, isolated from and coexisting with the system DOCA stack.
-- DPDK PMD `net_mcdma` (based on DPDK 25.11.2).
+- Two Linux kernel drivers: `yuannic.ko` exposes the ports as standard Ethernet netdevs, and `yuanrdma.ko` plugs into `ib_core` to expose the RDMA device.
+- User-space RDMA provider `libyuanrdma`, built from the same rdma-core v66 tree and isolated from the system DOCA stack.
+- DPDK PMD `net_mcdma`: the user-space packet path, bypassing the kernel, based on DPDK 25.11.2.
 - Operations tools: `rdmacli` (PFC / DSCP / ECN and DCQCN configuration, register and counter diagnostics, hang snapshots) and `nictrl` (NIC management).
 
 ## Performance
@@ -151,6 +152,7 @@ The RoCE engine core clock runs at 250 MHz. Interoperability is validated agains
 | OS | Ubuntu 22.04 x86_64, kernel `5.15.0` | The environment used for on-board validation; driver module vermagic must match `uname -r` |
 | RDMA user space | rdma-core v66 (built from this repository, PABI 65) | Provider is built against the same rdma-core tree; there is no stable external ABI |
 | System RDMA stack | DOCA 3.5.0 | Coexists in isolation, no uninstall needed; `env.sh` switches `LD_LIBRARY_PATH` |
+| DPDK | 25.11.2 | User-space packet path, PMD `net_mcdma`; built with meson + ninja |
 | CUDA | 12.4 | Only needed for NCCL / GPUDirect RDMA (T4 = sm_75, `NVCC_GENCODE=compute_75,sm_75`) |
 | NCCL | 2.22.3 | Built from source; matches the 2.19.3–2.22.3 range validated against the reference product |
 | nccl-tests | v2.21.1 | Test suite matching the NCCL 2.21/2.22 API; two-node `all_reduce_perf` |

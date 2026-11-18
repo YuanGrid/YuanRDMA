@@ -23,9 +23,11 @@
   <img src="https://img.shields.io/badge/RDMA--CORE-v66-612B9B?style=flat-square&labelColor=B48B2E" alt="RDMA-CORE v66">
 </p>
 
-YuanRDMA 是[垣易科技](http://www.yuangrid.com)（[YuanGrid](http://www.yuangrid.com)）研发的基于 FPGA 的 400G RoCEv2 RDMA 智能网卡，产品型号为 **YuanNIC**。它在 FPGA 中原生集成 RDMA 传输引擎，对主机呈现为一块标准 RDMA 设备：通过标准 `libibverbs` / `rdma-core` provider 接入，原版 perftest 不改代码即可运行，并与 NVIDIA ConnectX-7 网卡在同一网络中双向互通，面向 AI 集群、高速互联、低时延存储与智能卸载等场景。
+YuanRDMA 是[垣易科技](http://www.yuangrid.com)（[YuanGrid](http://www.yuangrid.com)）研发的基于 FPGA 的 400G RoCEv2 RDMA 智能网卡，产品型号为 **YuanNIC**。它在 FPGA 智能网卡中原生集成 RDMA 传输引擎，对主机呈现为一块标准以太网网卡和 RDMA 设备：网口侧走标准以太网协议栈，RDMA 侧通过标准 `libibverbs` / `rdma-core` provider 接入，原版 perftest 不改代码即可运行，并与 NVIDIA ConnectX-7 网卡在同一网络中双向互通，面向 AI 集群、高速互联、低时延存储与智能卸载等场景。
 
-YuanNIC 具备面向高速互联的硬件链路时序优化与协议卸载能力，支持线速报文处理、超低传输时延、400G 高速光口、可编程协议卸载、PFC 无损网络与 DCQCN 拥塞控制。项目覆盖从 RTL、固件构建、Linux 内核驱动、用户态 provider 到仿真验证与上板测试工具链的完整软硬件栈。
+软件栈同时覆盖两种收包路径。**内核路径**下，`yuannic.ko` 把网口注册为标准以太网设备，`yuanrdma.ko` 接入 `ib_core`，应用经 rdma-core 直接使用 verbs；**用户态路径**下，`net_mcdma` 是 DPDK Poll Mode Driver，报文绕过内核直接在用户态收送，适合高吞吐转发与协议测试。两条路径共用同一套硬件队列与 DMA 通道，可按业务在同一块卡上并存。
+
+在硬件层，YuanNIC 具备面向高速互联的链路时序优化与协议卸载能力，支持线速报文处理、超低传输时延、400G 高速光口、可编程协议卸载、PFC 无损网络与 DCQCN 拥塞控制。项目覆盖从 RTL、固件构建、内核驱动、用户态 provider 与 DPDK PMD，到仿真验证与上板测试工具链的完整软硬件栈。
 
 > 本仓库是 YuanNIC 的开源工程，以 Apache-2.0 协议开放 RTL、驱动与工具源码；编译产出 FPGA 固件与用户态库供最终用户使用。
 
@@ -71,13 +73,12 @@ YuanRDMA 以开源方式推进，也希望以合作共建的方式生长。我�
 6. RDMA Write 的对端内存由网卡直接写，对端 CPU 不参与；Send 由网卡写入 RQ 缓冲后才产生 CQE。
 7. GPU 场景：显存做 `dma-buf` MR 注册后，数据直达显存；IBGDA 则由 GPU 侧写门铃，把 CPU 从提交路径上摘掉。
 
-
 ## 主要特性
 
 **RDMA 传输**
 
 - QP 建立：支持两种建链方式——RoCE CM（借助内核驱动经 QP1 / GSI 交换 CM MAD，即标准 `rdma_cm` 路径）与 TCP 交换建链信息（NCCL、perftest 一类走 verbs 自己交换 QP 信息的路径，不依赖 CM）。
-- QP 规模：默认 128 个 QP，`QP_NUM` 参数化，可扩展到 4096；QPN 落在基址对齐的连续窗口内，软件侧 `FROCE_MAX_QP` / `FROCE_QPN_BASE` 与 RTL 同步。
+- QP 规模：`QP_NUM` 参数化（默认 128，可扩展至 4096），QPN 落在基址对齐的连续窗口内，软件侧 `FROCE_MAX_QP` / `FROCE_QPN_BASE` 与 RTL 同步；硬指标见下文「资源规模」。
 - RoCEv2 RC 传输：RDMA Write / Write with Immediate / Read / Send / Send with Immediate，硬件实现 PSN、ACK/NAK、Go-back-N 重传与超时定时器。
 - RoCEv2 UD 传输（Send / Send with Immediate，带 DETH），CQE 回报源 QPN。
 - ICRC 硬件生成与校验。
@@ -96,9 +97,9 @@ YuanRDMA 以开源方式推进，也希望以合作共建的方式生长。我�
 **主机接口与软件栈**
 
 - PCIe Gen5 x16（Altera R-tile）+ AXI MCDMA，doorbell / WQE 取指 / CQE 写回全部硬件完成。
-- Linux 内核驱动 `yuanrdma.ko`（接入 `ib_core`），以太网驱动 `yuannic.ko`。
-- rdma-core v66 provider `libyuanrdma`，与系统 DOCA 栈隔离共存。
-- DPDK PMD `net_mcdma`（基于 DPDK 25.11.2）。
+- Linux 内核驱动两条线：`yuannic.ko` 提供标准以太网网口（netdev），`yuanrdma.ko` 接入 `ib_core` 提供 RDMA 设备。
+- RDMA 用户态 provider `libyuanrdma`，与 rdma-core v66 同源编译，与系统 DOCA 栈隔离共存。
+- DPDK PMD `net_mcdma`：用户态收包路径，绕过内核，基于 DPDK 25.11.2。
 - 运维诊断工具：`rdmacli`（PFC / DSCP / ECN、DCQCN 参数配置，寄存器与计数器诊断，卡死现场快照）、`nictrl`（网卡管理）。
 
 ## 性能
@@ -151,6 +152,7 @@ RoCE 引擎核心时钟 250 MHz。对端互通验证使用 NVIDIA ConnectX-7。
 | 操作系统 | Ubuntu 22.04 x86_64，内核 `5.15.0` | 上板验证所用环境；驱动模块 vermagic 须与 `uname -r` 一致 |
 | RDMA 用户态 | rdma-core v66（随本仓库编译，PABI 65） | provider 与 rdma-core 同源编译，无稳定外部 ABI |
 | 系统 RDMA 栈 | DOCA 3.5.0 | 与本栈隔离共存，无需卸载；靠 `env.sh` 切换 `LD_LIBRARY_PATH` |
+| DPDK | 25.11.2 | 用户态收包路径，PMD 为 `net_mcdma`；需 meson + ninja 构建 |
 | CUDA | 12.4 | 仅 NCCL / GPUDirect RDMA 场景需要（T4 = sm_75，`NVCC_GENCODE=compute_75,sm_75`） |
 | NCCL | 2.22.3 | 源码编译，与对标产品验证过的 2.19.3–2.22.3 区间对齐 |
 | nccl-tests | v2.21.1 | NCCL 2.21/2.22 API 的对应测试集，`all_reduce_perf` 双机 |
