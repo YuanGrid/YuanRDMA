@@ -155,7 +155,7 @@ Shipping forms include security gateways / firewalls, traffic-audit platforms, D
 ### 4.5 Continuous evolution
 
 - **Online firmware upgrade**: images are written to the configuration device over on-board Active Serial x4 (outputs `.sof` / `.rpd` / `.jic`). After the write the link re-enumerates and the drivers reload while the host OS keeps running — one script chains flash → re-enumerate → load drivers → configure network → self-check.
-- **Version rollback**: images are identified by version (prefix `YN400GA7B027A`) and multiple versions coexist, so rolling back is flashing the previous image. Upgrades touch only the configuration device and install nothing into the host system.
+- **Version rollback**: images are identified by version (card model `YN400GA7B027A` / C) and multiple versions coexist, so rolling back is flashing the previous image. Upgrades touch only the configuration device and install nothing into the host system.
 - **Layered upgrades**: firmware, kernel drivers (built against `uname -r`), and the user-space provider and PMD evolve separately, so changing one does not disturb the others; with parameters also readable and writable at run time, tuning needs no firmware rebuild and upgrading needs no OS reinstall.
 - **Diagnosable**: `rdmacli` and `nictrl` read registers and counters and export hang snapshots; together with perftest, `roce_perf_test.sh` regression runs and hardware-side packet capture, a fault can be traced from symptom to register state instead of guessed at.
 - **Interoperable with upper-layer software**: `rdma_cm`, NCCL and perftest keep their existing paths, while `rdmacli` / `nictrl` and the control plane expose read and drive access to upper-layer software, so monitoring and policy fit into existing operations tooling.
@@ -224,7 +224,7 @@ Latency (typical): `ib_write_lat` about **2.2 µs**; `ib_read_lat` / `ib_send_la
 | Network port | 1 × 400G QSFP-112 (F-tile 4x112) |
 | Host interface | PCIe Gen5 x16 (R-tile) |
 | Configuration | Active Serial x4 |
-| Image prefix | `YN400GA7B027A` |
+| Card model | `YN400GA7B027A` / C |
 | Form factor | Single slot, half-height half-length (with full-height bracket) |
 | Dimensions | 169.5 × 68.9 × 18.5 mm |
 | Power | 75 W max |
