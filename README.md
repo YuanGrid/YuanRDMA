@@ -1,4 +1,4 @@
-# 垣易 YuanGrid / YuanRDMA
+# 垣易科技 YuanGrid / YuanRDMA
 
 简体中文 | [English](README.en.md)
 
