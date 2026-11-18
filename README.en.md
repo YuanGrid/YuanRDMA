@@ -56,15 +56,11 @@ The full path of one RDMA operation, from application submission to usable data 
 
 ## Application Scenarios
 
-**The fabric under AI training and inference clusters.** Multi-node communication in large-model training (AllReduce / AllGather / ReduceScatter) is ultimately bulk GPU-memory movement. YuanNIC speaks standard verbs, so NCCL's built-in IB verbs plugin works without writing a net plugin; running multiple QPs in parallel pushes the transmit direction to 352 Gb/s, and PFC lossless plus DCQCN keep collective bandwidth stable on a shared Ethernet fabric. In clusters of 192 GPUs and beyond, communication dominates iteration time — a programmable NIC lets you retune congestion-control parameters and retransmission behaviour to the cluster size instead of waiting on vendor firmware.
-
-**Ultra-low-latency storage and distributed file systems.** RDMA Read / Write bypass the kernel stack, with a single write at roughly 2.2 µs. With 128 QPs and up to 512 MiB per MR, the card is sized for NVMe-oF front ends and the data plane of distributed KV / object stores. Workloads that repeatedly write one large buffer to a remote node — KVCache offload, parameter servers — map naturally onto Write with Immediate plus asynchronous completion.
-
-**GPU direct-to-memory and KV-cache exchange between inference services.** GPUDirect RDMA (dma-buf MR registration) carries data straight to GPU memory without staging through host memory, removing two copies when KV cache moves between nodes in prefill/decode-disaggregated serving. IBGDA lets the GPU ring the doorbell itself, taking the CPU off the submission path. Both are implemented; on-board validation is on the roadmap.
-
-**Lossless Ethernet and AI-fabric testing.** A single 400GbE port, per-priority PFC gating and fully register-configurable ECN + DCQCN make the card suitable both for validating switch behaviour under PFC / ECN and for acting as the peer NIC of a test instrument.
-
-**A programmable protocol-offload and research platform.** RTL, drivers, provider and testbenches all live in this repository: changing a protocol field, a congestion-control algorithm or a retransmission policy means rebuilding firmware. cocotb testbenches and the pre-build gate let a change be verified offline before it ever reaches hardware, which makes this a practical platform for RDMA protocol, congestion-control and FPGA networking research.
+1. **The fabric under AI training and inference clusters**: Multi-node communication in large-model training (AllReduce / AllGather / ReduceScatter) is ultimately bulk GPU-memory movement — and the variable that decides a cluster's effective compute. YuanNIC speaks standard verbs, so NCCL's built-in IB verbs plugin runs unmodified; running multiple QPs in parallel pushes the transmit direction to 352 Gb/s, and PFC lossless plus DCQCN hold collective bandwidth deterministic across a shared Ethernet fabric. Past 192 GPUs, communication dominates iteration time. A programmable NIC lets congestion-control parameters and retransmission behaviour follow the cluster's scale, turning the network from an unpredictable bottleneck into a plannable extension of compute.
+2. **Ultra-low-latency storage and distributed file systems**: RDMA Read / Write bypass the kernel stack, with a single write at roughly 2.2 µs. With 128 QPs and up to 512 MiB per MR, the card carries NVMe-oF front ends and the data plane of distributed KV / object stores. Workloads that repeatedly write one large buffer to a remote node — KVCache offload, parameter servers — are exactly the shape Write with Immediate plus asynchronous completion was built for. The boundary between storage and compute is redrawn: remote memory costs almost as little to reach as local memory.
+3. **GPU direct-to-memory and KV-cache exchange between inference services**: GPUDirect RDMA (dma-buf MR registration) carries data straight to GPU memory without staging through host memory, removing two copies when KV cache moves between nodes in prefill/decode-disaggregated serving. IBGDA lets the GPU ring the doorbell itself, lifting the CPU off the submission path entirely. Both are implemented, with on-board validation on the roadmap — together they point one way: communication moving from "the CPU does it on our behalf" to "the device does it itself," the groundwork for inference clusters at ten-thousand-GPU scale.
+4. **Lossless Ethernet and AI-fabric testing**: A single 400GbE port, per-priority PFC gating and fully register-configurable ECN + DCQCN let the card validate how a switch really behaves under PFC / ECN, and stand in as the peer NIC of a test instrument. In fabrics at hyperscale, stability comes down to the determinism of every parameter on the lossless path — which is precisely what programmable hardware does best.
+5. **A programmable protocol-offload and research platform**: RTL, drivers, provider and testbenches all live in this repository; changing a protocol field, a congestion-control algorithm or a retransmission policy means rebuilding firmware. cocotb testbenches and the pre-build gate verify a change offline before it ever reaches hardware. The hardware stops being a black box fixed at tape-out and becomes a protocol carrier that keeps evolving — the substrate for the next generation of data-centre networking work in RDMA, congestion control and FPGA network acceleration.
 
 ## Key Features
 
@@ -112,6 +108,10 @@ Percentages are of the 400 Gb/s line rate. With 4 QPs the transmit direction rea
 Latency (typical): `ib_write_lat` about **2.2 µs**; `ib_read_lat` / `ib_send_lat` about 2.7 µs.
 
 ## Supported Hardware
+
+<p align="center">
+  <img src="docs/image/YuanNIC-NH400-A.png" alt="YuanNIC-NH400-A" width="520">
+</p>
 
 | Model | FPGA device | Network | Host interface | Configuration | Image prefix |
 |---|---|---|---|---|---|
