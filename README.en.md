@@ -138,7 +138,7 @@ The full path of one RDMA operation, from application submission to usable data 
 - **Policy steering**: classify on five-tuple, DSCP, VLAN or custom fields and route to the RDMA engine, netdev, a DPDK queue or drop.
 - **Congestion and reliability offload**: PFC gating, ECN marking, DCQCN rate limiting, loss detection and retransmission, independent of kernel timers.
 - **Programmability**: protocol fields, congestion algorithms, retransmission policy and shaping parameters open at RTL and register level; a policy change is a firmware rebuild.
-- **Visibility**: `rdmacli` for PFC / DSCP / ECN / DCQCN configuration, register and counter diagnostics and hang snapshots; `nictrl` for NIC management.
+- **Visibility**: `rdmacli` for PFC / DSCP / ECN / DCQCN configuration, register and counter diagnostics and hang snapshots; `ynictrl` for NIC management.
 
 ### 4.4 Network security
 
@@ -157,8 +157,8 @@ Shipping forms include security gateways / firewalls, traffic-audit platforms, D
 - **Online firmware upgrade**: images are written to the configuration device over on-board Active Serial x4 (outputs `.sof` / `.rpd` / `.jic`). After the write the link re-enumerates and the drivers reload while the host OS keeps running — one script chains flash → re-enumerate → load drivers → configure network → self-check.
 - **Version rollback**: images are identified by version (card model `YN400GA7B027A` / C) and multiple versions coexist, so rolling back is flashing the previous image. Upgrades touch only the configuration device and install nothing into the host system.
 - **Layered upgrades**: firmware, kernel drivers (built against `uname -r`), and the user-space provider and PMD evolve separately, so changing one does not disturb the others; with parameters also readable and writable at run time, tuning needs no firmware rebuild and upgrading needs no OS reinstall.
-- **Diagnosable**: `rdmacli` and `nictrl` read registers and counters and export hang snapshots; together with perftest, `roce_perf_test.sh` regression runs and hardware-side packet capture, a fault can be traced from symptom to register state instead of guessed at.
-- **Interoperable with upper-layer software**: `rdma_cm`, NCCL and perftest keep their existing paths, while `rdmacli` / `nictrl` and the control plane expose read and drive access to upper-layer software, so monitoring and policy fit into existing operations tooling.
+- **Diagnosable**: `rdmacli` and `ynictrl` read registers and counters and export hang snapshots; together with perftest, `roce_perf_test.sh` regression runs and hardware-side packet capture, a fault can be traced from symptom to register state instead of guessed at.
+- **Interoperable with upper-layer software**: `rdma_cm`, NCCL and perftest keep their existing paths, while `rdmacli` / `ynictrl` and the control plane expose read and drive access to upper-layer software, so monitoring and policy fit into existing operations tooling.
 - **Verifiable changes**: RTL, drivers, provider and testbenches share one repository; a change to protocol fields, a congestion algorithm, retransmission policy or queue shaping runs the full chain from edit through offline validation (cocotb benches and the pre-build gate) to firmware and on-board regression.
 
 ### 4.6 Interfaces and software
