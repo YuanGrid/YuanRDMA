@@ -90,7 +90,7 @@ YuanNIC 具备面向高速互联的硬件链路时序优化与协议卸载能力
 **主机接口与软件栈**
 
 - PCIe Gen5 x16（Altera R-tile）+ AXI MCDMA，doorbell / WQE 取指 / CQE 写回全部硬件完成。
-- Linux 内核驱动 `yuanrdma.ko`（接入 `ib_core`），以太网驱动 `mdanic.ko` / `yuannic.ko`。
+- Linux 内核驱动 `yuanrdma.ko`（接入 `ib_core`），以太网驱动 `yuannic.ko`。
 - rdma-core v66 provider `libyuanrdma`，与系统 DOCA 栈隔离共存。
 - DPDK PMD `net_mcdma`（基于 DPDK 25.11.2）。
 - 运维诊断工具：`rdmacli`（PFC / DSCP / ECN、DCQCN 参数配置，寄存器与计数器诊断，卡死现场快照）、`nictrl`（网卡管理）。
@@ -123,7 +123,7 @@ RoCE 引擎核心时钟 250 MHz。对端互通验证使用 NVIDIA ConnectX-7。
 
 | 项 | 版本 | 说明 |
 |---|---|---|
-| 操作系统 | Ubuntu 22.04 x86_64，内核 `5.15.0-203-generic`（`#213-Ubuntu SMP`） | 上板验证所用环境（`Linux 5.15.0-203-generic #213-Ubuntu SMP x86_64`）；驱动模块 vermagic 须与 `uname -r` 一致 |
+| 操作系统 | Ubuntu 22.04 x86_64，内核 `5.15.0` | 上板验证所用环境；驱动模块 vermagic 须与 `uname -r` 一致 |
 | RDMA 用户态 | rdma-core v66（随本仓库编译，PABI 65） | provider 与 rdma-core 同源编译，无稳定外部 ABI |
 | 系统 RDMA 栈 | DOCA 3.5.0 | 与本栈隔离共存，无需卸载；靠 `env.sh` 切换 `LD_LIBRARY_PATH` |
 | CUDA | 12.4 | 仅 NCCL / GPUDirect RDMA 场景需要（T4 = sm_75，`NVCC_GENCODE=compute_75,sm_75`） |

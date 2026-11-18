@@ -90,7 +90,7 @@ The full path of one RDMA operation, from application submission to usable data 
 **Host interface and software stack**
 
 - PCIe Gen5 x16 (Altera R-tile) + AXI MCDMA; doorbell, WQE fetch and CQE write-back are all done in hardware.
-- Linux kernel driver `yuanrdma.ko` (on top of `ib_core`), Ethernet drivers `mdanic.ko` / `yuannic.ko`.
+- Linux kernel driver `yuanrdma.ko` (on top of `ib_core`), Ethernet driver `yuannic.ko`.
 - rdma-core v66 provider `libyuanrdma`, isolated from and coexisting with the system DOCA stack.
 - DPDK PMD `net_mcdma` (based on DPDK 25.11.2).
 - Operations tools: `rdmacli` (PFC / DSCP / ECN and DCQCN configuration, register and counter diagnostics, hang snapshots) and `nictrl` (NIC management).
@@ -123,7 +123,7 @@ The RoCE engine core clock runs at 250 MHz. Interoperability is validated agains
 
 | Item | Version | Notes |
 |---|---|---|
-| OS | Ubuntu 22.04 x86_64, kernel `5.15.0-203-generic` (`#213-Ubuntu SMP`) | The environment used for on-board validation (`Linux 5.15.0-203-generic #213-Ubuntu SMP x86_64`); driver module vermagic must match `uname -r` |
+| OS | Ubuntu 22.04 x86_64, kernel `5.15.0` | The environment used for on-board validation; driver module vermagic must match `uname -r` |
 | RDMA user space | rdma-core v66 (built from this repository, PABI 65) | Provider is built against the same rdma-core tree; there is no stable external ABI |
 | System RDMA stack | DOCA 3.5.0 | Coexists in isolation, no uninstall needed; `env.sh` switches `LD_LIBRARY_PATH` |
 | CUDA | 12.4 | Only needed for NCCL / GPUDirect RDMA (T4 = sm_75, `NVCC_GENCODE=compute_75,sm_75`) |
