@@ -107,27 +107,32 @@ Percentages are of the 400 Gb/s line rate. With 4 QPs the transmit direction rea
 
 Latency (typical): `ib_write_lat` about **2.2 µs**; `ib_read_lat` / `ib_send_lat` about 2.7 µs.
 
-## Supported Hardware
+<table>
+<tr>
+<td valign="top">
 
-<p align="center">
-  <img src="docs/image/YuanNIC-NH400-A.png" alt="YuanNIC-NH400-A" width="320">
-</p>
+<h2>Supported Hardware</h2>
 
-| Item | Specification |
-|---|---|
-| Model | YuanNIC-NH400-A |
-| FPGA device | Agilex 7 I `AGIB027` |
-| Network port | 1 × 400G QSFP-112 (F-tile 4x112) |
-| Host interface | PCIe Gen5 x16 (R-tile) |
-| Configuration | Active Serial x4 |
-| Image prefix | `YN400GA7B027A` |
-| Form factor | Single slot, half-height half-length (with full-height bracket) |
-| Dimensions | 169.5 × 68.9 × 18.5 mm |
-| Power | 75 W max |
-| Cooling | Passive heatsink, relies on chassis airflow |
-| Operating temperature | 0 – 55 ℃ |
+<table width="100%">
+<tr><td width="125"><b>Model</b></td><td>YuanNIC-NH400-A</td></tr>
+<tr><td><b>FPGA device</b></td><td>Agilex 7 I <code>AGIB027</code></td></tr>
+<tr><td><b>Network port</b></td><td>1 × 400G QSFP-112 (F-tile 4x112)</td></tr>
+<tr><td><b>Host interface</b></td><td>PCIe Gen5 x16 (R-tile)</td></tr>
+<tr><td><b>Configuration</b></td><td>Active Serial x4</td></tr>
+<tr><td><b>Image prefix</b></td><td><code>YN400GA7B027A</code></td></tr>
+<tr><td><b>Form factor</b></td><td>Single slot, half-height half-length (with full-height bracket)</td></tr>
+<tr><td><b>Dimensions</b></td><td>169.5 × 68.9 × 18.5 mm</td></tr>
+<tr><td><b>Power</b></td><td>75 W max</td></tr>
+<tr><td><b>Cooling</b></td><td>Passive heatsink, relies on chassis airflow</td></tr>
+<tr><td><b>Operating temperature</b></td><td>0 – 55 ℃</td></tr>
+</table>
 
 The RoCE engine core clock runs at 250 MHz. Interoperability is validated against NVIDIA ConnectX-7.
+
+</td>
+<td width="330" valign="middle" align="right"><img src="docs/image/YuanNIC-NH400-A.png" alt="YuanNIC-NH400-A" width="300"></td>
+</tr>
+</table>
 
 ### Software Environment
 

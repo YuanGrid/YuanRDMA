@@ -107,27 +107,32 @@ YuanNIC 具备面向高速互联的硬件链路时序优化与协议卸载能力
 
 时延（typical）：`ib_write_lat` 约 **2.2 µs**，`ib_read_lat` / `ib_send_lat` 约 2.7 µs。
 
-## 支持的硬件
+<table>
+<tr>
+<td valign="top">
 
-<p align="center">
-  <img src="docs/image/YuanNIC-NH400-A.png" alt="YuanNIC-NH400-A" width="320">
-</p>
+<h2>支持的硬件</h2>
 
-| 项 | 参数 |
-|---|---|
-| 型号 | YuanNIC-NH400-A |
-| FPGA 器件 | Agilex 7 I `AGIB027` |
-| 网口 | 1 × 400G QSFP-112（F-tile 4x112） |
-| 主机接口 | PCIe Gen5 x16（R-tile） |
-| 配置方式 | Active Serial x4 |
-| 镜像型号段 | `YN400GA7B027A` |
-| 形态 | 单槽半高半长（配全高挡片） |
-| 尺寸 | 169.5 × 68.9 × 18.5 mm |
-| 功耗 | 最大 75 W |
-| 散热 | 被动散热，依赖机箱风道 |
-| 工作温度 | 0 – 55 ℃ |
+<table width="100%">
+<tr><td width="125"><b>型号</b></td><td>YuanNIC-NH400-A</td></tr>
+<tr><td><b>FPGA 器件</b></td><td>Agilex 7 I <code>AGIB027</code></td></tr>
+<tr><td><b>网口</b></td><td>1 × 400G QSFP-112（F-tile 4x112）</td></tr>
+<tr><td><b>主机接口</b></td><td>PCIe Gen5 x16（R-tile）</td></tr>
+<tr><td><b>配置方式</b></td><td>Active Serial x4</td></tr>
+<tr><td><b>镜像型号段</b></td><td><code>YN400GA7B027A</code></td></tr>
+<tr><td><b>形态</b></td><td>单槽半高半长（配全高挡片）</td></tr>
+<tr><td><b>尺寸</b></td><td>169.5 × 68.9 × 18.5 mm</td></tr>
+<tr><td><b>功耗</b></td><td>最大 75 W</td></tr>
+<tr><td><b>散热</b></td><td>被动散热，依赖机箱风道</td></tr>
+<tr><td><b>工作温度</b></td><td>0 – 55 ℃</td></tr>
+</table>
 
 RoCE 引擎核心时钟 250 MHz。对端互通验证使用 NVIDIA ConnectX-7。
+
+</td>
+<td width="330" valign="middle" align="right"><img src="docs/image/YuanNIC-NH400-A.png" alt="YuanNIC-NH400-A" width="300"></td>
+</tr>
+</table>
 
 ### 软件环境
 
