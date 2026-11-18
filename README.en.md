@@ -154,7 +154,7 @@ Shipping forms include security gateways / firewalls, traffic-audit platforms, D
 
 ### 4.5 Continuous evolution
 
-- **Online firmware upgrade**: images are written to the configuration device over on-board Active Serial x4 (outputs `.sof` / `.rpd` / `.jic`, archived by version under `code/build/firmware/`). After the write the link re-enumerates and the drivers reload while the host OS keeps running — one script chains flash → re-enumerate → load drivers → configure network → self-check.
+- **Online firmware upgrade**: images are written to the configuration device over on-board Active Serial x4 (outputs `.sof` / `.rpd` / `.jic`). After the write the link re-enumerates and the drivers reload while the host OS keeps running — one script chains flash → re-enumerate → load drivers → configure network → self-check.
 - **Version rollback**: images are identified by version (prefix `YN400GA7B027A`) and multiple versions coexist, so rolling back is flashing the previous image. Upgrades touch only the configuration device and install nothing into the host system.
 - **Layered upgrades**: firmware, kernel drivers (built against `uname -r`), and the user-space provider and PMD evolve separately, so changing one does not disturb the others; with parameters also readable and writable at run time, tuning needs no firmware rebuild and upgrading needs no OS reinstall.
 - **Diagnosable**: `rdmacli` and `nictrl` read registers and counters and export hang snapshots; together with perftest, `roce_perf_test.sh` regression runs and hardware-side packet capture, a fault can be traced from symptom to register state instead of guessed at.
