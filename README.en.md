@@ -110,12 +110,23 @@ Latency (typical): `ib_write_lat` about **2.2 µs**; `ib_read_lat` / `ib_send_la
 ## Supported Hardware
 
 <p align="center">
-  <img src="docs/image/YuanNIC-NH400-A.png" alt="YuanNIC-NH400-A" width="520">
+  <img src="docs/image/YuanNIC-NH400-A.png" alt="YuanNIC-NH400-A" width="300">
 </p>
 
 | Model | FPGA device | Network | Host interface | Configuration | Image prefix |
 |---|---|---|---|---|---|
 | YuanNIC-NH400-A | Agilex 7 I `AGIB027` | 1 × 400G QSFP-112 (F-tile 4x112) | PCIe Gen5 x16 (R-tile) | Active Serial x4 | `YN400GA7B027A` |
+
+**Key Specifications**
+
+| Item | Specification |
+|---|---|
+| Form factor | Low Profile (half-height, half-length), single slot |
+| Dimensions | 169.5 × 68.9 × 18.5 mm |
+| Bracket | Full-height / low-profile, interchangeable |
+| Power | 75 W max (with AOC optics); under 67 W with DAC |
+| Cooling | Passive heatsink, relies on chassis airflow |
+| Operating temperature | 0 – 55 ℃ |
 
 The RoCE engine core clock runs at 250 MHz. Interoperability is validated against NVIDIA ConnectX-7.
 

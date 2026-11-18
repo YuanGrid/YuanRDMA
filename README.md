@@ -110,12 +110,23 @@ YuanNIC 具备面向高速互联的硬件链路时序优化与协议卸载能力
 ## 支持的硬件
 
 <p align="center">
-  <img src="docs/image/YuanNIC-NH400-A.png" alt="YuanNIC-NH400-A" width="520">
+  <img src="docs/image/YuanNIC-NH400-A.png" alt="YuanNIC-NH400-A" width="300">
 </p>
 
 | 型号 | FPGA 器件 | 网口 | 主机接口 | 配置方式 | 镜像型号段 |
 |---|---|---|---|---|---|
 | YuanNIC-NH400-A | Agilex 7 I `AGIB027` | 1 × 400G QSFP-112（F-tile 4x112） | PCIe Gen5 x16（R-tile） | Active Serial x4 | `YN400GA7B027A` |
+
+**主要参数**
+
+| 项 | 参数 |
+|---|---|
+| 形态 | 半高半长（Low Profile），单槽 |
+| 尺寸 | 169.5 × 68.9 × 18.5 mm |
+| 挡板 | 全高 / 半高可换 |
+| 功耗 | 最大 75 W（AOC 光模块）；DAC 直连 < 67 W |
+| 散热 | 被动散热，依赖机箱风道 |
+| 工作温度 | 0 – 55 ℃ |
 
 RoCE 引擎核心时钟 250 MHz。对端互通验证使用 NVIDIA ConnectX-7。
 
