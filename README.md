@@ -23,7 +23,7 @@
   <img src="https://img.shields.io/badge/RDMA--CORE-v66-612B9B?style=flat-square&labelColor=B48B2E" alt="RDMA-CORE v66">
 </p>
 
-YuanRDMA 是垣易科技（YuanGrid）研发的基于 FPGA 的 400G RoCEv2 RDMA 智能网卡，产品型号为 **YuanNIC**。它在 FPGA 中原生集成 RDMA 传输引擎，对主机呈现为一块标准 RDMA 设备：通过标准 `libibverbs` / `rdma-core` provider 接入，原版 perftest 不改代码即可运行，并与 NVIDIA ConnectX-7 网卡在同一网络中双向互通，面向 AI 集群、高速互联、低时延存储与智能卸载等场景。
+YuanRDMA 是[垣易科技](http://www.yuangrid.com)（[YuanGrid](http://www.yuangrid.com)）研发的基于 FPGA 的 400G RoCEv2 RDMA 智能网卡，产品型号为 **YuanNIC**。它在 FPGA 中原生集成 RDMA 传输引擎，对主机呈现为一块标准 RDMA 设备：通过标准 `libibverbs` / `rdma-core` provider 接入，原版 perftest 不改代码即可运行，并与 NVIDIA ConnectX-7 网卡在同一网络中双向互通，面向 AI 集群、高速互联、低时延存储与智能卸载等场景。
 
 YuanNIC 具备面向高速互联的硬件链路时序优化与协议卸载能力，支持线速报文处理、超低传输时延、400G 高速光口、可编程协议卸载、PFC 无损网络与 DCQCN 拥塞控制。项目覆盖从 RTL、固件构建、Linux 内核驱动、用户态 provider 到仿真验证与上板测试工具链的完整软硬件栈。
 
@@ -33,7 +33,7 @@ YuanNIC 具备面向高速互联的硬件链路时序优化与协议卸载能力
 
 YuanRDMA 以开源方式推进，也希望以合作共建的方式生长。我们欢迎科研院所、高等院校、设备厂商、智算中心、测评机构等一起参与研发与测试：需要硬件时提供板卡与测试环境，需要场景时由参与方带来真实负载一起调优；协议扩展与新机制验证、拥塞控制与无损以太调优、驱动与用户态软件栈完善、互通性测试与故障复现、文档与教学材料的建设，都是可以共同投入的方向。发现的问题、提出的需求、跑出的数据，都会回到这条开源主线。
 
-有意参与的单位或个人，欢迎通过 Issue 或邮件与我们联系。
+有意参与的单位或个人，欢迎通过邮件 hfli@yuangrid.com 或电话 / 微信 18362630238 与我们联系。
 
 ## 应用场景和主要客户
 

@@ -23,7 +23,7 @@
   <img src="https://img.shields.io/badge/RDMA--CORE-v66-612B9B?style=flat-square&labelColor=B48B2E" alt="RDMA-CORE v66">
 </p>
 
-YuanRDMA is an FPGA-based 400G RoCEv2 RDMA SmartNIC developed by YuanGrid, shipped as the **YuanNIC** product line. The RDMA transport engine is built natively into the FPGA, and the card appears to the host as a standard RDMA device: it plugs in through the standard `libibverbs` / `rdma-core` provider model, runs unmodified upstream perftest, and interoperates bidirectionally with NVIDIA ConnectX-7 NICs on the same network. It targets AI clusters, high-speed interconnect, low-latency storage and intelligent offload workloads.
+YuanRDMA is an FPGA-based 400G RoCEv2 RDMA SmartNIC developed by [YuanGrid](http://www.yuangrid.com), shipped as the **YuanNIC** product line. The RDMA transport engine is built natively into the FPGA, and the card appears to the host as a standard RDMA device: it plugs in through the standard `libibverbs` / `rdma-core` provider model, runs unmodified upstream perftest, and interoperates bidirectionally with NVIDIA ConnectX-7 NICs on the same network. It targets AI clusters, high-speed interconnect, low-latency storage and intelligent offload workloads.
 
 YuanNIC features hardware link timing optimization for high-speed interconnect and protocol offload, with wire-rate packet processing, ultra-low transport latency, 400G optical ports, programmable protocol offload, PFC lossless networking and DCQCN congestion control. The project covers the full hardware/software stack: RTL, firmware build, Linux kernel driver, user-space provider, simulation, and on-board test tooling.
 
@@ -33,7 +33,7 @@ YuanNIC features hardware link timing optimization for high-speed interconnect a
 
 YuanRDMA is developed in the open, and we want it to grow through collaboration. Research institutes, universities and colleges, equipment vendors, AI computing centres and test/certification bodies are welcome to join development and testing: where hardware is needed we provide cards and a test environment, and where realism is needed participants bring their own workloads and tune against them with us. Protocol extensions and validation of new mechanisms, congestion control and lossless-Ethernet tuning, driver and user-space stack improvements, interoperability testing and fault reproduction, and documentation and teaching material are all directions worth investing in together. Issues found, requirements raised and data produced flow back into this open line of development.
 
-Organisations and individuals interested in taking part are welcome to reach us through an Issue or by email.
+Organisations and individuals interested in taking part are welcome to reach us by email at hfli@yuangrid.com, or by phone / WeChat on 18362630238.
 
 ## Application Scenarios and Customers
 
