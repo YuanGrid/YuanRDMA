@@ -31,7 +31,7 @@ YuanNIC features hardware link timing optimization for high-speed interconnect a
 
 ## Ecosystem
 
-YuanRDMA is developed in the open, and we want it to grow through collaboration. Research institutes, universities and companies are welcome to join development and testing: where hardware is needed we provide cards and a test environment, and where realism is needed participants bring their own workloads and tune against them with us. Protocol extensions and validation of new mechanisms, congestion control and lossless-Ethernet tuning, driver and user-space stack improvements, interoperability testing and fault reproduction, and documentation and teaching material are all directions worth investing in together. Issues found, requirements raised and data produced flow back into this open line of development.
+YuanRDMA is developed in the open, and we want it to grow through collaboration. Research institutes, universities and colleges, equipment vendors, AI computing centres and test/certification bodies are welcome to join development and testing: where hardware is needed we provide cards and a test environment, and where realism is needed participants bring their own workloads and tune against them with us. Protocol extensions and validation of new mechanisms, congestion control and lossless-Ethernet tuning, driver and user-space stack improvements, interoperability testing and fault reproduction, and documentation and teaching material are all directions worth investing in together. Issues found, requirements raised and data produced flow back into this open line of development.
 
 Organisations and individuals interested in taking part are welcome to reach us through an Issue or by email.
 
