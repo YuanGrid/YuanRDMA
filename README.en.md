@@ -31,13 +31,49 @@ At the hardware level, YuanNIC provides link timing optimization and protocol of
 
 > This is the YuanNIC open-source project, releasing RTL, driver and tool sources under Apache-2.0. Builds produce the FPGA firmware and user-space libraries for end users.
 
-## Ecosystem
+## Contents
+
+- [1 Ecosystem](#1-ecosystem)
+- [2 Application Scenarios and Customers](#2-application-scenarios-and-customers)
+- [3 Architecture](#3-architecture)
+  - [3.1 On-card data path](#31-on-card-data-path)
+  - [3.2 Communication control path](#32-communication-control-path)
+- [4 Key Features](#4-key-features)
+  - [4.1 RDMA line-rate transport](#41-rdma-line-rate-transport)
+  - [4.2 DPDK line-rate forwarding](#42-dpdk-line-rate-forwarding)
+  - [4.3 Intelligent acceleration](#43-intelligent-acceleration)
+  - [4.4 Network security](#44-network-security)
+  - [4.5 Host interface and software stack](#45-host-interface-and-software-stack)
+- [5 Resource Scale](#5-resource-scale)
+  - [5.1 Queues and tables](#51-queues-and-tables)
+  - [5.2 Memory translation](#52-memory-translation)
+  - [5.3 GPUDirect RDMA](#53-gpudirect-rdma)
+- [6 Performance](#6-performance)
+- [7 Supported Hardware](#7-supported-hardware)
+  - [7.1 Board specification](#71-board-specification)
+  - [7.2 Interfaces and clocks](#72-interfaces-and-clocks)
+- [8 Software Environment](#8-software-environment)
+- [9 Quick Start](#9-quick-start)
+  - [9.1 Prepare the environment](#91-prepare-the-environment)
+  - [9.2 Pre-build gate](#92-pre-build-gate)
+  - [9.3 Build the FPGA firmware](#93-build-the-fpga-firmware)
+  - [9.4 Build the user-space package](#94-build-the-user-space-package)
+  - [9.5 Flash, load drivers and test](#95-flash-load-drivers-and-test)
+- [10 Roadmap](#10-roadmap)
+  - [10.1 400G performance work and a collective communication library](#101-400g-performance-work-and-a-collective-communication-library)
+  - [10.2 Broader workload coverage](#102-broader-workload-coverage)
+  - [10.3 800G (2027 target)](#103-800g-2027-target)
+- [11 Contributing](#11-contributing)
+  - [11.1 Commit conventions](#111-commit-conventions)
+- [12 License](#12-license)
+
+## 1 Ecosystem
 
 YuanRDMA is developed in the open, and we want it to grow through collaboration. Research institutes, universities and colleges, equipment vendors, AI computing centres and test/certification bodies are welcome to join development and testing: where hardware is needed we provide cards and a test environment, and where realism is needed participants bring their own workloads and tune against them with us. Protocol extensions and validation of new mechanisms, congestion control and lossless-Ethernet tuning, driver and user-space stack improvements, interoperability testing and fault reproduction, and documentation and teaching material are all directions worth investing in together. Issues found, requirements raised and data produced flow back into this open line of development.
 
 Organisations and individuals interested in taking part are welcome to reach us by email at hfli@yuangrid.com, or by phone / WeChat on 18362630238.
 
-## Application Scenarios and Customers
+## 2 Application Scenarios and Customers
 
 1. **Operators building their own AI clusters → the interconnect layer of training and inference clusters → standard verbs plus programmable congestion control.** Multi-node communication in large-model training (AllReduce / AllGather / ReduceScatter) is ultimately bulk GPU-memory movement — and the variable that decides a cluster's effective compute. YuanNIC speaks standard verbs, so NCCL's built-in IB verbs plugin runs unmodified; running multiple QPs in parallel pushes the transmit direction to 88% of line rate, and PFC lossless plus DCQCN hold collective bandwidth deterministic across a shared Ethernet fabric. Once a cluster passes a hundred GPUs and communication takes an ever-larger share of iteration time, congestion-control parameters and retransmission behaviour have to follow its scale — and programmability is what turns the network from an unpredictable bottleneck into a plannable extension of compute.
 
@@ -49,9 +85,9 @@ Organisations and individuals interested in taking part are welcome to reach us 
 
 5. **Research institutes and universities → a platform for protocol research and teaching → a fully open hardware and software stack, with changes verified offline first.** RTL, drivers, provider and testbenches all live in this repository; changing a protocol field, a congestion-control algorithm or a retransmission policy means rebuilding firmware, with no NIC project to build from scratch. cocotb testbenches and the pre-build gate verify a change offline before it ever reaches hardware. The hardware stops being a black box fixed at tape-out and becomes a protocol carrier that keeps evolving — exactly what RDMA, congestion-control and FPGA networking research needs.
 
-## Architecture
+## 3 Architecture
 
-### On-card data path
+### 3.1 On-card data path
 
 Only WQE submission and CQE collection cross PCIe — data-plane packets enter and leave through the F-tile MAC and are assembled and parsed inside the engine, never touching the host software stack.
 
@@ -59,7 +95,7 @@ Only WQE submission and CQE collection cross PCIe — data-plane packets enter a
 
 From the wire up: 400G QSFP-112 through the F-tile Ethernet Hard IP (MAC + PCS + RS-FEC); traffic management handles priority queues, the PFC gate and RX classification (RoCE UDP 4791 to the engine, everything else to netdev); the RoCEv2 transport engine does TX assembly and RX parsing, PSN and retransmission, ICRC generation/checking, and DCQCN's RP rate limiting and CNP generation; the host interface maintains the doorbell, QPC / CQC tables, MR / MTT translation cache and CQ / EQ; the DMA layer ties both sides together with AXI MCDMA's BAM (CSR / doorbell), BAS (engine-initiated WQE fetch and CQE write-back) and MCDMA (netdev).
 
-### Communication control path
+### 3.2 Communication control path
 
 The full path of one RDMA operation, from application submission to usable data on the peer. Three control paths coexist: regular verbs (the CPU builds and submits the WQE), IBGDA (the GPU rings the doorbell itself) and GPUDirect RDMA (data moves directly between GPU memory and the NIC, with no CPU staging). Applications do not need to distinguish them — all three share the same verbs semantics and completion queue.
 
@@ -73,67 +109,82 @@ The full path of one RDMA operation, from application submission to usable data 
 6. For RDMA Write the peer's memory is written by the NIC itself with no peer CPU involvement; for Send the CQE is produced only after the NIC has written the payload into the RQ buffer.
 7. With GPUs: after a `dma-buf` MR registration the data goes straight to device memory, and IBGDA lets the GPU ring the doorbell, taking the CPU off the submission path.
 
-## Key Features
+## 4 Key Features
 
-**RDMA line-rate transport**
+### 4.1 RDMA line-rate transport
 
-- Native stack: RoCEv2 RC and UD are implemented in RTL, so packets are assembled and parsed on the card and the data plane never enters the host software stack.
-- Full RC semantics: RDMA Write / Write with Immediate / Read / Send / Send with Immediate, with hardware PSN tracking, ACK / NAK, Go-back-N retransmission and timeout timers; ICRC generation and checking are done entirely in hardware.
-- UD transport: Send / Send with Immediate (with DETH); the CQE reports the source QPN.
-- Multi-QP parallelism: a single QP tops out at about 36% of line rate because of per-packet assembly overhead, while multiple QPs push the transmit direction to 88% (4 QPs, 352.1 Gb/s). QP count is parameterised via `QP_NUM` — 128 by default, scalable to 4096 — so the degree of parallelism can follow the workload.
-- Two ways to establish a connection: RoCE CM (the kernel driver exchanges CM MADs over the QP1 / GSI path, i.e. the standard `rdma_cm` route) and TCP-based out-of-band exchange (NCCL and perftest trade QP information over verbs without CM).
-- QPNs live in a base-aligned contiguous window, with `FROCE_MAX_QP` / `FROCE_QPN_BASE` kept in sync between software and RTL.
+- **Native stack**: RoCEv2 RC / UD in RTL; assembly and parsing happen on the card, off the host software stack.
+- **RC semantics**: Write / Write with Immediate / Read / Send / Send with Immediate; PSN, ACK / NAK, Go-back-N retransmission and timeouts, and ICRC all in hardware.
+- **UD semantics**: Send / Send with Immediate (with DETH); the CQE reports the source QPN.
+- **Multi-QP**: one QP is capped near 36% of line rate by per-packet assembly; 4 QPs reach 88% (352.1 Gb/s). `QP_NUM` defaults to 128, scalable to 4096.
+- **Two connection setups**: RoCE CM (CM MADs over QP1 / GSI, the standard `rdma_cm` route), or TCP-based exchange (NCCL and perftest trade QP information over verbs, no CM needed).
+- **QPN window**: QPNs sit in a base-aligned contiguous window; `FROCE_MAX_QP` / `FROCE_QPN_BASE` stay in sync between software and RTL.
+- **PFC lossless**: per-priority transmit admission per IEEE 802.1Qbb, PFC frames handled by the F-tile hard MAC.
+- **DCQCN**: full RP / NP / CNP across every QP, all parameters register-configurable.
+- **Run-time tuning**: PFC priorities, DSCP, ECN thresholds, DCQCN rates and timers readable and writable online, no firmware rebuild.
 
-**Resource scale**
+### 4.2 DPDK line-rate forwarding
 
-- 128 QPs by default (scalable to 4096) and 64 CQs; SQ / RQ depth 4096, CQ depth up to 32768.
-- 131072 MTT entries, up to 512 MiB per MR; lkey / rkey checking and the address translation cache are done in hardware.
-- GPUDirect RDMA: dma-buf MR registration (`ibv_reg_dmabuf_mr`, kernel ≥ 6.2, on-board validation in progress).
-
-**Lossless networking and congestion control**
-
-- PFC (IEEE 802.1Qbb): per-priority transmit admission gating, with PFC frames sent and received by the F-tile hard MAC.
-- DCQCN: full RP / NP / CNP implementation covering every QP (128 today, scaling with `QP_NUM`), with all parameters register-configurable.
-- Lossless-Ethernet parameters — PFC priorities, DSCP, ECN thresholds, DCQCN rates and timers — are readable and writable at run time without rebuilding firmware.
-
-**DPDK line-rate forwarding**
-
-- `net_mcdma` is a DPDK poll-mode driver: packets are sent and received directly from user space, never entering the kernel stack, which removes interrupts, context switches and memory copies so the forwarding path is just polling and DMA.
-- Its queues map straight onto the card's hardware queues (AXI MCDMA) with huge-page memory as the packet buffer, so line-rate traffic on the 400GbE port can be taken up and rewritten in software.
-- It shares the card with the RDMA path: one machine can run verbs workloads on one side and use DPDK for forwarding, mirroring, protocol testing or impairment emulation on the other, without either side disturbing the other's software stack.
+- `net_mcdma` sends and receives straight from user space, cutting interrupts, context switches and memory copies.
+- Queues map onto AXI MCDMA hardware queues with huge-page buffers, so 400GbE line-rate traffic can be taken up and rewritten.
+- Shares the card with the RDMA path; forwarding, mirroring, protocol testing and impairment emulation keep to their own stack.
 - Built from repository source against DPDK 25.11.2.
 
-**Intelligent acceleration**
+### 4.3 Intelligent acceleration
 
-- Acceleration can sit at any point in the packet path, not just at the two endpoints: classification and timestamping at the MAC, priority and shaping in traffic management, assembly and retransmission in the RoCE engine, and movement and write-back in the DMA layer can all be moved from host to hardware as the workload requires.
-- Protocol offload: TCP / UDP / RoCEv2 assembly and parsing, ICRC checking and checksum computation run in hardware, leaving the host CPU to do only the work that matters.
-- Security offload: encryption and decryption run in the hardware pipeline, so packets never land in host memory; keys and algorithms are provisioned from the control plane, and the cost of crypto no longer stacks onto the software path.
-- Policy-based steering: packets are classified on five-tuple, DSCP, VLAN or custom fields and sent to the RDMA engine, the netdev, a DPDK queue or dropped, so one card can be carved into independent channels per workload.
-- Line-rate capture and replay: packets are mirrored to a capture channel in hardware and written out without loss; replay re-injects them at the original timestamps and rate, for fault reproduction, regression testing and switch-conformance checks.
-- Congestion and reliability offload: PFC gating, ECN marking, DCQCN rate limiting, loss detection and hardware retransmission no longer depend on the precision of host kernel timers.
-- Programmability: protocol fields, congestion-control algorithms, retransmission policy, queue and shaping parameters are all open at the RTL and register level; changing a policy means rebuilding firmware, and cocotb testbenches plus the pre-build gate let a change be verified offline first.
-- Operational visibility: `rdmacli` covers PFC / DSCP / ECN and DCQCN configuration, register and counter diagnostics, and hang snapshots; `nictrl` handles NIC management.
+- **Offload points**: MAC classification and timestamping, traffic-management shaping, RoCE assembly and retransmission, DMA movement and write-back all move to hardware as needed.
+- **Protocol offload**: TCP / UDP / RoCEv2 assembly and parsing, ICRC checking and checksum in hardware.
+- **Security offload**: crypto runs in the hardware pipeline, packets never land in host memory, keys and algorithms provisioned from the control plane.
+- **Policy steering**: classify on five-tuple, DSCP, VLAN or custom fields and route to the RDMA engine, netdev, a DPDK queue or drop.
+- **Congestion and reliability offload**: PFC gating, ECN marking, DCQCN rate limiting, loss detection and retransmission, independent of kernel timers.
+- **Programmability**: protocol fields, congestion algorithms, retransmission policy and shaping parameters open at RTL and register level; a policy change is a firmware rebuild.
+- **Visibility**: `rdmacli` for PFC / DSCP / ECN / DCQCN configuration, register and counter diagnostics and hang snapshots; `nictrl` for NIC management.
 
-**Network security**
+### 4.4 Network security
 
-YuanSec is an FPGA security-acceleration solution built on YuanNIC: FPGA parallelism plus a DPDK fast-forwarding data plane move inspection and cryptography off the host, forming one loop from receive through parse and detect to act.
+YuanSec puts FPGA parallelism and DPDK forwarding behind one loop — receive, parse, detect, act — with inspection and cryptography moved off the host.
 
-- Line-rate packet parsing: multi-field classification, timestamping and flow-table matching run in hardware across 1 / 10 / 25 / 100 / 400 GE ports, so matching and forwarding cost no host CPU.
-- DPDK fast forwarding: multi-queue, zero-copy and load distribution, with the inspection and forwarding planes sharing one card; a rule hit can drop, mirror or rewrite in user space.
-- Detection and traffic audit: anomaly detection, rule filtering and bypass analysis deliver hardware-level traffic auditing and real-time threat blocking.
-- Crypto and protocol offload: national cryptographic algorithms, PQC and AES / RSA run in the hardware pipeline with keys and algorithms provisioned from the control plane; parsing and encapsulation for dedicated protocols can be offloaded the same way, without packets returning to host memory.
-- Flexible policy: match fields, actions and rule tables are trimmed per workload, and security policy is managed on the same configuration surface as network policy.
+- **Line-rate parsing**: multi-field classification, timestamping and flow-table matching in hardware across 1 / 10 / 25 / 100 / 400 GE.
+- **Fast forwarding**: multi-queue, zero-copy and load distribution; inspection and forwarding share one card, and a rule hit can drop, mirror or rewrite in user space.
+- **Detection and audit**: anomaly detection, rule filtering and bypass analysis, with real-time blocking and a record of every hit.
+- **Crypto and protocol offload**: national cryptographic algorithms, PQC, AES / RSA and dedicated protocol parsing/encapsulation in hardware, without packets returning to host memory.
+- **Configurable policy**: match fields, actions and rule tables trimmed per workload, managed on the same surface as network policy.
 
-Shipping forms include security gateways and firewalls with line-rate filtering and protocol offload, traffic-audit platforms with mirroring, bypass and real-time analysis, DDoS protection and scrubbing that identifies and distributes anomalous traffic, and crypto-acceleration systems offloading national-cryptography and PQC work — covering government and enterprise, industrial control, data centres and high-speed communications.
+Shipping forms include security gateways / firewalls, traffic-audit platforms, DDoS protection and scrubbing, and crypto-acceleration systems, covering government and enterprise, industrial control, data centres and high-speed communications.
 
-**Host interface and software stack**
+### 4.5 Host interface and software stack
 
-- PCIe Gen5 x16 (Altera R-tile) + AXI MCDMA; doorbell, WQE fetch and CQE write-back are all done in hardware.
-- Two Linux kernel drivers: `yuannic.ko` exposes the ports as standard Ethernet netdevs, and `yuanrdma.ko` plugs into `ib_core` to expose the RDMA device.
-- User-space RDMA provider `libyuanrdma`, built from the same rdma-core v66 tree and isolated from the system DOCA stack.
-- The DPDK PMD `net_mcdma` shares the hardware queues with the kernel path, so the two can coexist on one card.
+- **Host interface**: PCIe Gen5 x16 (R-tile) + AXI MCDMA; doorbell, WQE fetch and CQE write-back are all hardware.
+- **Kernel drivers**: `yuannic.ko` for netdev, `yuanrdma.ko` into `ib_core` for the RDMA device.
+- **Provider**: `libyuanrdma` built from the same rdma-core v66 tree, isolated from the system DOCA stack.
+- **PMD**: `net_mcdma` shares hardware queues with the kernel path, coexisting on one card.
 
-## Performance
+## 5 Resource Scale
+
+### 5.1 Queues and tables
+
+| Item | Specification |
+|---|---|
+| QPs | 128 by default, scalable to 4096 (`QP_NUM`) |
+| CQs | 64 |
+| SQ / RQ depth | 4096 |
+| CQ depth | up to 32768 |
+| Connection setup | CM MADs over QP1 / GSI |
+
+### 5.2 Memory translation
+
+| Item | Specification |
+|---|---|
+| MTT entries | 131072 |
+| Max per MR | 512 MiB |
+| Checking and translation | lkey / rkey checks and the translation cache in hardware |
+
+### 5.3 GPUDirect RDMA
+
+- dma-buf MR registration (`ibv_reg_dmabuf_mr`, kernel ≥ 6.2): data lands in device memory with no host staging.
+- Status: software stack complete, on-board validation in progress.
+
+## 6 Performance
 
 Setup: YuanNIC-NH400-A, peer NVIDIA ConnectX-7, 400GbE direct link, upstream perftest, 1 MiB messages, 30 s per case.
 
@@ -149,34 +200,34 @@ Percentages are of the 400 Gb/s line rate. With 4 QPs the transmit direction rea
 
 Latency (typical): `ib_write_lat` about **2.2 µs**; `ib_read_lat` / `ib_send_lat` about 2.7 µs.
 
-<table>
-<tr>
-<td valign="top">
+## 7 Supported Hardware
 
-<h2>Supported Hardware</h2>
+### 7.1 Board specification
 
-<table width="100%">
-<tr><td width="125"><b>Model</b></td><td>YuanNIC-NH400-A</td></tr>
-<tr><td><b>FPGA device</b></td><td>Agilex 7 I <code>AGIB027</code></td></tr>
-<tr><td><b>Network port</b></td><td>1 × 400G QSFP-112 (F-tile 4x112)</td></tr>
-<tr><td><b>Host interface</b></td><td>PCIe Gen5 x16 (R-tile)</td></tr>
-<tr><td><b>Configuration</b></td><td>Active Serial x4</td></tr>
-<tr><td><b>Image prefix</b></td><td><code>YN400GA7B027A</code></td></tr>
-<tr><td><b>Form factor</b></td><td>Single slot, half-height half-length (with full-height bracket)</td></tr>
-<tr><td><b>Dimensions</b></td><td>169.5 × 68.9 × 18.5 mm</td></tr>
-<tr><td><b>Power</b></td><td>75 W max</td></tr>
-<tr><td><b>Cooling</b></td><td>Passive heatsink, relies on chassis airflow</td></tr>
-<tr><td><b>Operating temperature</b></td><td>0 – 55 ℃</td></tr>
-</table>
+| Item | Specification |
+|---|---|
+| Model | YuanNIC-NH400-A |
+| FPGA device | Agilex 7 I `AGIB027` |
+| Network port | 1 × 400G QSFP-112 (F-tile 4x112) |
+| Host interface | PCIe Gen5 x16 (R-tile) |
+| Configuration | Active Serial x4 |
+| Image prefix | `YN400GA7B027A` |
+| Form factor | Single slot, half-height half-length (with full-height bracket) |
+| Dimensions | 169.5 × 68.9 × 18.5 mm |
+| Power | 75 W max |
+| Cooling | Passive heatsink, relies on chassis airflow |
+| Operating temperature | 0 – 55 ℃ |
 
-The RoCE engine core clock runs at 250 MHz. Interoperability is validated against NVIDIA ConnectX-7.
+<p align="center">
+  <img src="docs/image/YuanNIC-NH400-A.png" alt="YuanNIC-NH400-A" width="300">
+</p>
 
-</td>
-<td width="330" valign="middle" align="right"><img src="docs/image/YuanNIC-NH400-A.png" alt="YuanNIC-NH400-A" width="300"></td>
-</tr>
-</table>
+### 7.2 Interfaces and clocks
 
-### Software Environment
+- RoCE engine core clock runs at 250 MHz.
+- Interoperability is validated against NVIDIA ConnectX-7.
+
+## 8 Software Environment
 
 | Item | Version | Notes |
 |---|---|---|
@@ -194,23 +245,23 @@ The RoCE engine core clock runs at 250 MHz. Interoperability is validated agains
 | Build tools | cmake, meson, ninja, make, autoconf/flex/bison | cmake for the provider, meson+ninja for DPDK |
 | FPGA toolchain | Quartus Prime Pro 26.1.1 | Used only to produce firmware |
 
-Dependency installation is covered under Quick Start below.
+Dependency installation is covered in [9 Quick Start](#9-quick-start).
 
-## Quick Start
+## 9 Quick Start
 
-### 1. Prepare the environment
+### 9.1 Prepare the environment
 
 - Ubuntu 22.04 x86_64; Quartus Prime Pro **26.1.1** (only needed to build firmware)
 - Simulation needs Verilator 5.032 (built from source) and cocotb 1.9.2
 
-### 2. Pre-build gate
+### 9.2 Pre-build gate
 
 ```bash
 test/sim/rtl_prebuild_gate.sh              # top-level wiring check + cocotb benches; non-zero on any failure
 test/sim/rtl_prebuild_gate.sh --lint-only  # wiring check only (seconds)
 ```
 
-### 3. Build the FPGA firmware
+### 9.3 Build the FPGA firmware
 
 ```bash
 cd code/build/YuanNIC-NH400-A
@@ -219,7 +270,7 @@ cd code/build/YuanNIC-NH400-A
 
 Outputs (`.sof` / `.rpd` / `.jic`) are archived by version under `code/build/firmware/`.
 
-### 4. Build the user-space package
+### 9.4 Build the user-space package
 
 ```bash
 cd code/build/fpga_rdma
@@ -229,7 +280,7 @@ source YuanNIC_User_Package/env.sh         # run before each use; sets library a
 
 The resulting `YuanNIC_User_Package/` (and its `.tgz`) can be handed directly to end users; nothing is installed into system paths.
 
-### 5. Flash, load drivers and test
+### 9.5 Flash, load drivers and test
 
 ```bash
 ./flash_and_init.sh --flash <image>        # flash → PCIe re-enumerate → load drivers → configure network → self-check
@@ -238,7 +289,7 @@ ibv_devinfo -d yuanrdma0                   # expect PORT_ACTIVE
 ./roce_perf_test.sh --label <image>        # full bidirectional perftest suite against ConnectX-7
 ```
 
-## Roadmap
+## 10 Roadmap
 
 Done:
 
@@ -250,30 +301,30 @@ Done:
 
 In progress and beyond, along three tracks:
 
-**1. 400G performance work and a collective communication library**
+### 10.1 400G performance work and a collective communication library
 
 A single QP reaches only 36% of line rate, limited by per-packet assembly overhead; multi-QP concurrency currently reaches 88%. The next step is to push the assembly and flow-control path toward line rate, and to consolidate multi-QP dispatch, congestion feedback, and retransmission into reusable communication primitives. A collective communication library (AllReduce / AllGather / ReduceScatter) is built on top, so upper layers no longer manage QP parallelism themselves.
 
-**2. Broader workload coverage**
+### 10.2 Broader workload coverage
 
 Building on the validated GPUDirect RDMA and NCCL path, cover more real workload shapes: cross-node KV Cache transfer in disaggregated prefill/decode serving, the communication patterns of hybrid parallelism in training, and an interop matrix spanning multiple NIC and switch vendors.
 
-**3. 800G (2027 target)**
+### 10.3 800G (2027 target)
 
 Architecture research and implementation for the next interconnect generation, including timing closure at twice the link bandwidth, cache and scheduling overhead at larger QP scales, and the corresponding software stack.
 
-## Contributing
+## 11 Contributing
 
 YuanRDMA aims to be an open, learnable and extensible RDMA NIC platform: RTL, drivers, provider, testbenches and test tooling all live in this repository, and a change can be verified offline before it reaches hardware. We want to lower the bar for high-performance networking research and engineering, so that questions about protocol mechanics, congestion control and transport reliability can be answered on real 400G hardware rather than in simulation or on paper.
 
-Organisations and individuals interested in taking part are welcome to see [Ecosystem](#ecosystem) above.
+Organisations and individuals interested in taking part are welcome to see [1 Ecosystem](#1-ecosystem) above.
 
-### Commit conventions
+### 11.1 Commit conventions
 
 - Run `test/sim/rtl_prebuild_gate.sh` before committing; after any RTL change, at least run synthesis and timing analysis.
 - Do not commit Quartus outputs (`qdb/`, `dni/`, `output_files/`).
 - Documentation is primarily in Chinese with English technical terms.
 
-## License
+## 12 License
 
 Third-party open-source projects under `code/github/` are governed by their own licenses. RTL and reference designs derived from partners in the board projects are subject to their license terms, keep their original license headers, and are not redistributed. Everything else is copyright YuanGrid.
