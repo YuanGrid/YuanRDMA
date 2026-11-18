@@ -58,7 +58,7 @@ The full path of one RDMA operation, from application submission to usable data 
 
 1. **The fabric under AI training and inference clusters**: Multi-node communication in large-model training (AllReduce / AllGather / ReduceScatter) is ultimately bulk GPU-memory movement — and the variable that decides a cluster's effective compute. YuanNIC speaks standard verbs, so NCCL's built-in IB verbs plugin runs unmodified; running multiple QPs in parallel pushes the transmit direction to 352 Gb/s, and PFC lossless plus DCQCN hold collective bandwidth deterministic across a shared Ethernet fabric. Past 192 GPUs, communication dominates iteration time. A programmable NIC lets congestion-control parameters and retransmission behaviour follow the cluster's scale, turning the network from an unpredictable bottleneck into a plannable extension of compute.
 2. **Ultra-low-latency storage and distributed file systems**: RDMA Read / Write bypass the kernel stack, with a single write at roughly 2.2 µs. With 128 QPs and up to 512 MiB per MR, the card carries NVMe-oF front ends and the data plane of distributed KV / object stores. Workloads that repeatedly write one large buffer to a remote node — KVCache offload, parameter servers — are exactly the shape Write with Immediate plus asynchronous completion was built for. The boundary between storage and compute is redrawn: remote memory costs almost as little to reach as local memory.
-3. **GPU direct-to-memory and KV-cache exchange between inference services**: GPUDirect RDMA (dma-buf MR registration) carries data straight to GPU memory without staging through host memory, removing two copies when KV cache moves between nodes in prefill/decode-disaggregated serving. IBGDA lets the GPU ring the doorbell itself, lifting the CPU off the submission path entirely. Both are implemented, with on-board validation on the roadmap — together they point one way: communication moving from "the CPU does it on our behalf" to "the device does it itself," the groundwork for inference clusters at ten-thousand-GPU scale.
+3. **GPU direct-to-memory and KV-cache exchange between inference services**: GPUDirect RDMA (dma-buf MR registration) carries data straight to GPU memory without staging through host memory, removing two copies when KV cache moves between nodes in prefill/decode-disaggregated serving. IBGDA lets the GPU ring the doorbell itself, lifting the CPU off the submission path entirely. Both are implemented, with on-board validation in progress — together they point one way: communication moving from "the CPU does it on our behalf" to "the device does it itself," the groundwork for inference clusters at ten-thousand-GPU scale.
 4. **Lossless Ethernet and AI-fabric testing**: A single 400GbE port, per-priority PFC gating and fully register-configurable ECN + DCQCN let the card validate how a switch really behaves under PFC / ECN, and stand in as the peer NIC of a test instrument. In fabrics at hyperscale, stability comes down to the determinism of every parameter on the lossless path — which is precisely what programmable hardware does best.
 5. **A programmable protocol-offload and research platform**: RTL, drivers, provider and testbenches all live in this repository; changing a protocol field, a congestion-control algorithm or a retransmission policy means rebuilding firmware. cocotb testbenches and the pre-build gate verify a change offline before it ever reaches hardware. The hardware stops being a black box fixed at tape-out and becomes a protocol carrier that keeps evolving — the substrate for the next generation of data-centre networking work in RDMA, congestion control and FPGA network acceleration.
 
@@ -197,15 +197,27 @@ ibv_devinfo -d yuanrdma0                   # expect PORT_ACTIVE
 
 ## Roadmap
 
+Done:
+
 - [x] RoCEv2 RC engine, bidirectional perftest interop with ConnectX-7
-- [x] ~350 Gb/s transmit throughput with 4 QPs; RoCE engine core at 250 MHz
 - [x] Per-priority PFC gating
 - [x] 128 QPs / 64 CQs / 131072 MTT entries; DCQCN across all 128 QPs
 - [x] UD transport and RoCE CM (RTL and driver complete; simulation and unit tests pass)
-- [ ] On-board validation of UD / RoCE CM
-- [ ] NCCL (two-node nccl-tests all_reduce)
-- [ ] On-board validation of GPUDirect RDMA
-- [ ] 400G line rate
+- [x] GPUDirect RDMA and NCCL integration (software stack complete, on-board validation in progress)
+
+In progress and beyond, along three tracks:
+
+**1. 400G performance work and a collective communication library**
+
+A single QP reaches only 36% of line rate, limited by per-packet assembly overhead; multi-QP concurrency currently reaches 88%. The next step is to push the assembly and flow-control path toward line rate, and to consolidate multi-QP dispatch, congestion feedback, and retransmission into reusable communication primitives. A collective communication library (AllReduce / AllGather / ReduceScatter) is built on top, so upper layers no longer manage QP parallelism themselves.
+
+**2. Broader workload coverage**
+
+Building on the validated GPUDirect RDMA and NCCL path, cover more real workload shapes: cross-node KV Cache transfer in disaggregated prefill/decode serving, the communication patterns of hybrid parallelism in training, and an interop matrix spanning multiple NIC and switch vendors.
+
+**3. 800G (2027 target)**
+
+Architecture research and implementation for the next interconnect generation, including timing closure at twice the link bandwidth, cache and scheduling overhead at larger QP scales, and the corresponding software stack.
 
 ## Contributing
 
