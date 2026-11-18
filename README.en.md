@@ -29,6 +29,18 @@ YuanNIC features hardware link timing optimization for high-speed interconnect a
 
 > This is the YuanNIC open-source project, releasing RTL, driver and tool sources under Apache-2.0. Builds produce the FPGA firmware and user-space libraries for end users.
 
+## Application Scenarios and Customers
+
+1. **Operators building their own AI clusters → the interconnect layer of training and inference clusters → standard verbs plus programmable congestion control.** Multi-node communication in large-model training (AllReduce / AllGather / ReduceScatter) is ultimately bulk GPU-memory movement — and the variable that decides a cluster's effective compute. YuanNIC speaks standard verbs, so NCCL's built-in IB verbs plugin runs unmodified; running multiple QPs in parallel pushes the transmit direction to 88% of line rate, and PFC lossless plus DCQCN hold collective bandwidth deterministic across a shared Ethernet fabric. Once a cluster passes a hundred GPUs and communication takes an ever-larger share of iteration time, congestion-control parameters and retransmission behaviour have to follow its scale — and programmability is what turns the network from an unpredictable bottleneck into a plannable extension of compute.
+
+2. **Distributed and object storage vendors → NVMe-oF front ends and the data plane of KV / object stores → low latency plus MR capacity.** RDMA Read / Write bypass the kernel stack, with a single write at roughly 2.2 µs. With 128 QPs and up to 512 MiB per MR, the card carries NVMe-oF front ends and the data plane of distributed KV / object stores. Workloads that repeatedly write one large buffer to a remote node — KVCache offload, parameter servers — are exactly the shape Write with Immediate plus asynchronous completion was built for. The boundary between storage and compute is redrawn: remote memory costs almost as little to reach as local memory.
+
+3. **Inference service providers → KV-cache transfer between nodes in prefill/decode-disaggregated serving → direct GPU-memory access with no staging copies.** GPUDirect RDMA (dma-buf MR registration) carries data straight to GPU memory without staging through host memory, removing two copies when KV cache moves between nodes; IBGDA lets the GPU ring the doorbell itself, lifting the CPU off the submission path entirely. Both are implemented, with on-board validation in progress — communication moving from "the CPU does it on our behalf" to "the device does it itself" is the precondition for inference clusters at ten-thousand-GPU scale.
+
+4. **Network equipment and test-instrument vendors → a 400G peer NIC and interop test cases → fully configurable lossless-Ethernet parameters.** A single 400GbE port, per-priority PFC gating and fully register-configurable ECN + DCQCN let the card serve as a switch's peer NIC under PFC / ECN and reproduce real behaviour, or stand in a test instrument's 400G port position. In fabrics at hyperscale, stability comes down to the determinism of every parameter on the lossless path — and determinism can only be verified when those parameters can be read and changed.
+
+5. **Research institutes and universities → a platform for protocol research and teaching → a fully open hardware and software stack, with changes verified offline first.** RTL, drivers, provider and testbenches all live in this repository; changing a protocol field, a congestion-control algorithm or a retransmission policy means rebuilding firmware, with no NIC project to build from scratch. cocotb testbenches and the pre-build gate verify a change offline before it ever reaches hardware. The hardware stops being a black box fixed at tape-out and becomes a protocol carrier that keeps evolving — exactly what RDMA, congestion-control and FPGA networking research needs.
+
 ## Architecture
 
 ### On-card data path
@@ -53,14 +65,6 @@ The full path of one RDMA operation, from application submission to usable data 
 6. For RDMA Write the peer's memory is written by the NIC itself with no peer CPU involvement; for Send the CQE is produced only after the NIC has written the payload into the RQ buffer.
 7. With GPUs: after a `dma-buf` MR registration the data goes straight to device memory, and IBGDA lets the GPU ring the doorbell, taking the CPU off the submission path.
 
-
-## Application Scenarios
-
-1. **The fabric under AI training and inference clusters**: Multi-node communication in large-model training (AllReduce / AllGather / ReduceScatter) is ultimately bulk GPU-memory movement — and the variable that decides a cluster's effective compute. YuanNIC speaks standard verbs, so NCCL's built-in IB verbs plugin runs unmodified; running multiple QPs in parallel pushes the transmit direction to 352 Gb/s, and PFC lossless plus DCQCN hold collective bandwidth deterministic across a shared Ethernet fabric. Past 192 GPUs, communication dominates iteration time. A programmable NIC lets congestion-control parameters and retransmission behaviour follow the cluster's scale, turning the network from an unpredictable bottleneck into a plannable extension of compute.
-2. **Ultra-low-latency storage and distributed file systems**: RDMA Read / Write bypass the kernel stack, with a single write at roughly 2.2 µs. With 128 QPs and up to 512 MiB per MR, the card carries NVMe-oF front ends and the data plane of distributed KV / object stores. Workloads that repeatedly write one large buffer to a remote node — KVCache offload, parameter servers — are exactly the shape Write with Immediate plus asynchronous completion was built for. The boundary between storage and compute is redrawn: remote memory costs almost as little to reach as local memory.
-3. **GPU direct-to-memory and KV-cache exchange between inference services**: GPUDirect RDMA (dma-buf MR registration) carries data straight to GPU memory without staging through host memory, removing two copies when KV cache moves between nodes in prefill/decode-disaggregated serving. IBGDA lets the GPU ring the doorbell itself, lifting the CPU off the submission path entirely. Both are implemented, with on-board validation on the roadmap — together they point one way: communication moving from "the CPU does it on our behalf" to "the device does it itself," the groundwork for inference clusters at ten-thousand-GPU scale.
-4. **Lossless Ethernet and AI-fabric testing**: A single 400GbE port, per-priority PFC gating and fully register-configurable ECN + DCQCN let the card validate how a switch really behaves under PFC / ECN, and stand in as the peer NIC of a test instrument. In fabrics at hyperscale, stability comes down to the determinism of every parameter on the lossless path — which is precisely what programmable hardware does best.
-5. **A programmable protocol-offload and research platform**: RTL, drivers, provider and testbenches all live in this repository; changing a protocol field, a congestion-control algorithm or a retransmission policy means rebuilding firmware. cocotb testbenches and the pre-build gate verify a change offline before it ever reaches hardware. The hardware stops being a black box fixed at tape-out and becomes a protocol carrier that keeps evolving — the substrate for the next generation of data-centre networking work in RDMA, congestion control and FPGA network acceleration.
 
 ## Key Features
 
@@ -197,17 +201,42 @@ ibv_devinfo -d yuanrdma0                   # expect PORT_ACTIVE
 
 ## Roadmap
 
+Done:
+
 - [x] RoCEv2 RC engine, bidirectional perftest interop with ConnectX-7
-- [x] ~350 Gb/s transmit throughput with 4 QPs; RoCE engine core at 250 MHz
 - [x] Per-priority PFC gating
 - [x] 128 QPs / 64 CQs / 131072 MTT entries; DCQCN across all 128 QPs
 - [x] UD transport and RoCE CM (RTL and driver complete; simulation and unit tests pass)
-- [ ] On-board validation of UD / RoCE CM
-- [ ] NCCL (two-node nccl-tests all_reduce)
-- [ ] On-board validation of GPUDirect RDMA
-- [ ] 400G line rate
+- [x] GPUDirect RDMA and NCCL integration (software stack complete, on-board validation in progress)
+
+In progress and beyond, along three tracks:
+
+**1. 400G performance work and a collective communication library**
+
+A single QP reaches only 36% of line rate, limited by per-packet assembly overhead; multi-QP concurrency currently reaches 88%. The next step is to push the assembly and flow-control path toward line rate, and to consolidate multi-QP dispatch, congestion feedback, and retransmission into reusable communication primitives. A collective communication library (AllReduce / AllGather / ReduceScatter) is built on top, so upper layers no longer manage QP parallelism themselves.
+
+**2. Broader workload coverage**
+
+Building on the validated GPUDirect RDMA and NCCL path, cover more real workload shapes: cross-node KV Cache transfer in disaggregated prefill/decode serving, the communication patterns of hybrid parallelism in training, and an interop matrix spanning multiple NIC and switch vendors.
+
+**3. 800G (2027 target)**
+
+Architecture research and implementation for the next interconnect generation, including timing closure at twice the link bandwidth, cache and scheduling overhead at larger QP scales, and the corresponding software stack.
 
 ## Contributing
+
+YuanRDMA aims to be an open, learnable and extensible RDMA NIC platform: RTL, drivers, provider, testbenches and test tooling all live in this repository, and a change can be verified offline before it reaches hardware. We want to lower the bar for high-performance networking research and engineering, so that questions about protocol mechanics, congestion control and transport reliability can be answered on real 400G hardware rather than in simulation or on paper.
+
+We welcome research institutes, universities and companies to join us in development and testing. Where hardware is needed we can provide cards and a test environment; where realism is needed, participants can bring their own workloads and tune against them together. The work spans protocol extensions and validation of new mechanisms, congestion control and lossless-Ethernet tuning, driver and user-space stack improvements, interoperability testing and fault reproduction, and documentation and teaching material. Issues found, requirements raised and data produced all flow back into this open line of development.
+
+**Participants** (growing)
+
+- School of Intelligent Software and Engineering
+- Motorcomm Electronic Technology Co., Ltd. (裕太微电子股份有限公司, 688515)
+
+Organisations and individuals interested in taking part are welcome to reach us through an Issue or by email.
+
+### Commit conventions
 
 - Run `test/sim/rtl_prebuild_gate.sh` before committing; after any RTL change, at least run synthesis and timing analysis.
 - Do not commit Quartus outputs (`qdb/`, `dni/`, `output_files/`).
