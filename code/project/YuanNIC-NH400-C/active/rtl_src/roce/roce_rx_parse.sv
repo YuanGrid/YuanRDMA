@@ -68,15 +68,21 @@ module roce_rx_parse
     wire        opcode_has_aeth = (opcode == OP_READ_RESP_FIRST) || (opcode == OP_READ_RESP_LAST) ||
                           (opcode == OP_READ_RESP_ONLY) || (opcode == OP_ACK);
     wire        opcode_has_immediate  = (opcode == OP_SEND_LAST_IMM) || (opcode == OP_SEND_ONLY_IMM) ||
-                          (opcode == OP_WRITE_LAST_IMM) || (opcode == OP_WRITE_ONLY_IMM);
+                          (opcode == OP_WRITE_LAST_IMM) || (opcode == OP_WRITE_ONLY_IMM) ||
+                          (opcode == OP_SEND_ONLY_UD_IMM);
     // CNP（0x81）不在 0x00..0x11 区间里，单独放行：它是 4 B BTH + **16 B 保留**（不是 RETH），
     // 所以 extension_length 要按 16 算，payload 恒 0。阶段 3 的 RP 逻辑从这里消费它。
     wire        opcode_is_cnp      = op_is_cnp(opcode);
-    wire        opcode_supported   = (opcode <= OP_ACK) || opcode_is_cnp;
+    // UD（0x64/0x65）：BTH 后跟 DETH 8 B。**RoCEv2 线上没有 40 B GRH**——GRH 是 RoCEv1/IB
+    // 的线格式，v2 里 GRH 由接收侧从 IP 头合成后写进接收缓冲（IBTA §9.8.5 / Annex A17），
+    // 所以这里的 extension_length 只加 DETH，不加 40。0x65 另外带 4 B ImmDt（由 op_has_imm 计入）。
+    wire        opcode_is_ud       = op_is_ud(opcode);
+    wire        opcode_supported   = (opcode <= OP_ACK) || opcode_is_cnp || opcode_is_ud;
     wire [6:0]  extension_length     = (opcode_has_reth ? 7'd16 : 7'd0) + (opcode_has_aeth ? 7'd4 : 7'd0) +
-                                        (opcode_has_immediate ? 7'd4 : 7'd0) + (opcode_is_cnp ? 7'd16 : 7'd0);
-    // RETH 在 BTH 后（54）；AETH 在 BTH 后（54）；ImmDt 在 RETH 后（70）或 BTH 后（54）
-    wire [6:0]  immediate_offset = opcode_has_reth ? 7'd70 : 7'd54;
+                                        (opcode_has_immediate ? 7'd4 : 7'd0) + (opcode_is_cnp ? 7'd16 : 7'd0) +
+                                        (opcode_is_ud ? 7'd8 : 7'd0);
+    // RETH 在 BTH 后（54）；AETH 在 BTH 后（54）；ImmDt 在 RETH 后（70）、UD 的 DETH 后（62）或 BTH 后（54）
+    wire [6:0]  immediate_offset = opcode_has_reth ? 7'd70 : (opcode_is_ud ? 7'd62 : 7'd54);
     wire [15:0] ip_total_length  = read_be16(16);
     wire [15:0] udp_length = read_be16(38);
     wire [7:0]  byte_tos   = header_byte(15);
@@ -99,7 +105,8 @@ module roce_rx_parse
         next_header.becn      = byte_bth_fecn[6];
         next_header.ecn_congestion        = (byte_tos[1:0] == 2'b11);
         next_header.dest_qpn      = dest_qpn;
-        next_header.qp_index    = dest_qpn[3:0];
+        // QPN_BASE 是 QP_NUM 的整数倍时，取低 QP_W 位就等于 dest_qpn-QPN_BASE（扩 QP 时保持这个前提）
+        next_header.qp_index    = dest_qpn[QP_W-1:0];
         next_header.qp_valid     = (dest_qpn >= 24'(QPN_BASE)) && (dest_qpn < 24'(QPN_BASE + QP_NUM));
         next_header.psn       = read_be24(51);
         next_header.has_reth  = opcode_has_reth;
@@ -111,7 +118,22 @@ module roce_rx_parse
         next_header.aeth_msn  = read_be24(55);
         next_header.has_immediate   = opcode_has_immediate;
         next_header.immediate       = header_bytes[immediate_offset*8 +: 32];
-        next_header.payload_length   = length_invalid ? 13'd0 : computed_payload_length[12:0];
+        // DETH（UD）：Q_Key 4 B（字节 54..57）+ 源 QPN 3 B（58..60）+ 1 B 保留（61）。
+        // RC 包恒为 0——58..61 在 WRITE 里是 RETH 的 rkey 尾部、在 SEND 里是 payload 开头，
+        // 所以必须用 opcode_is_ud 门控，不能无条件取。
+        next_header.has_deth        = opcode_is_ud;
+        next_header.deth_qkey       = opcode_is_ud ? read_be32(54) : 32'd0;
+        next_header.deth_src_qp     = opcode_is_ud ? read_be24(58) : 24'd0;
+        // GRH 合成需要源 IPv4（IBTA §9.8.5：Source GID = ::ffff:<src_ip>）。
+        // RoCEv2 线上没有 40 B GRH，这里只取 IPv4 头里的源 IP（字节 26..29，主机序）。
+        next_header.src_ip          = opcode_is_ud ? read_be32(26) : 32'd0;
+        // 头部报出去的 payload_length 必须与实际送出的拍数一致：bad 帧（opcode 不支持 /
+        // 长度不自洽）的 payload 全部丢弃（has_payload=0），所以这里必须报 0。
+        // 2026-11-12 修：原来只按 length_invalid 清零，opcode 不支持时仍报真实长度，
+        // 下游 roce_resp 的 MAIN_DRAIN 等一个永远不来的 payload → 卡死并把后续帧吞掉
+        // （QP1/GSI 的 UD SEND 0x64 就踩这条，见 test/sim/roce_rx/test_qp1_stall.py）。
+        next_header.payload_length   = (length_invalid || !opcode_supported) ? 13'd0
+                                                                             : computed_payload_length[12:0];
         next_header.bad       = length_invalid || !opcode_supported;
     end
 

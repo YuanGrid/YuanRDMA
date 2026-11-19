@@ -145,6 +145,19 @@ module roce_rx_front #(
         else if (post_reset_hold) post_reset_count <= post_reset_count - 5'd1;
     end
 
+    // B6442：统计计数器的复位改用**本模块内寄存的副本**。
+    //
+    // B6441 tx_clkout 实测：`mac_rstn`（X192）直连本模块的 roce_gray_cnt 计数器（X197），
+    // 单跳 IC 1.874 ns / lv=1 / cell 0.085，265 个端点 −0.078——在 390.6 MHz 的 tx_clkout 上，
+    // 1.87 ns 走线就吃掉 73% 的周期。计数器是纯观测量，复位晚 1 拍对任何判读都无影响，
+    // 所以让它们吃本地寄存副本，把「远端一处 → 265 个远端负载」换成「本地一处 → 本地多点」。
+    //
+    // **只给 roce_gray_cnt 用**：数据通路仍用未寄存的 mac_rst，帧序号复位 mac_seq_rst 的
+    // 相位关系（与 rx_path_avst 的 data_concat 交替）完全不动。
+    // dont_merge 让 fitter 把副本摆在本模块里边，必要时自行复制到各 lane 附近。
+    (* dont_merge *) reg mac_rst_stat;
+    always @(posedge mac_clk) mac_rst_stat <= mac_rst;
+
     genvar lane;
     generate
         for (lane = 0; lane < 2; lane = lane + 1) begin : gen_lane
@@ -308,7 +321,10 @@ module roce_rx_front #(
             for (genvar pp = 0; pp < 8; pp = pp + 1) begin : gen_prio_occ
                 reg [9:0] prio_occupancy;
                 always @(posedge mac_clk) begin
-                    if (mac_rst)
+                    // B6442：同下面的 roce_gray_cnt，改用本地寄存副本（见文件上文 mac_rst_stat）。
+                    // 这 8×2 组计数器在 B6441 里另有 29 条 mac_rstn 扇出违例。占用值是给
+                    // 发 XOFF 用的慢变量，复位多保持 1 拍只会让它多停在 0 一拍。
+                    if (mac_rst_stat)
                         prio_occupancy <= 10'd0;
                     else
                         prio_occupancy <= prio_occupancy
@@ -330,7 +346,7 @@ module roce_rx_front #(
 
             // 本 lane 成功交给合并级的完整帧数（末拍握手）。两路不平衡本身就是故障信息：
             // 正常时两路应大致相等，差得远说明一路在丢或者 MAC 侧只用了其中一路。
-            roce_gray_cnt u_frame_counter (.source_clk(mac_clk), .source_rst(mac_rst),
+            roce_gray_cnt u_frame_counter (.source_clk(mac_clk), .source_rst(mac_rst_stat),
                 .source_increment(frame_valid[lane] && frame_ready[lane] && frame_last[lane]),
                 .dest_clk(clk), .dest_count(lane_frame_count[lane]));
 
@@ -426,9 +442,9 @@ module roce_rx_front #(
                 .m_status_bad_frame(), .m_status_good_frame()
             );
 
-            roce_gray_cnt u_icrc_error_counter (.source_clk(mac_clk), .source_rst(mac_rst),
+            roce_gray_cnt u_icrc_error_counter (.source_clk(mac_clk), .source_rst(mac_rst_stat),
                 .source_increment(result_valid && result_ready && !result_ok), .dest_clk(clk), .dest_count(lane_icrc_error_count[lane]));
-            roce_gray_cnt u_drop_counter (.source_clk(mac_clk), .source_rst(mac_rst),
+            roce_gray_cnt u_drop_counter (.source_clk(mac_clk), .source_rst(mac_rst_stat),
                 .source_increment(drop_event), .dest_clk(clk), .dest_count(lane_drop_count[lane]));
         end
     endgenerate
@@ -592,9 +608,9 @@ module roce_rx_front #(
     assign merge_rebase  = (quiet_count == 9'd256) && !diff_legal;
     assign rebase_index1 = lane_diff[SEQ_W-1] ? lane_frame_index[0] : (lane_frame_index[0] - 1'b1);
 
-    roce_gray_cnt u_merge_force_counter (.source_clk(mac_clk), .source_rst(mac_rst),
+    roce_gray_cnt u_merge_force_counter (.source_clk(mac_clk), .source_rst(mac_rst_stat),
         .source_increment(force_event), .dest_clk(clk), .dest_count(counter_merge_force));
-    roce_gray_cnt u_merge_rebase_counter (.source_clk(mac_clk), .source_rst(mac_rst),
+    roce_gray_cnt u_merge_rebase_counter (.source_clk(mac_clk), .source_rst(mac_rst_stat),
         .source_increment(merge_rebase), .dest_clk(clk), .dest_count(counter_merge_rebase));
 
     // 1024 bit（B6386）：不再降到 512，直接以 MAC 侧位宽输出。

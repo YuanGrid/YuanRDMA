@@ -22,6 +22,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) r
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_skip_align.sv]
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_rx_parse.sv]
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_tbl.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_qpc_ram.sv]
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_cq.sv]
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_dma_arb.sv]
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_rx_disp.sv]

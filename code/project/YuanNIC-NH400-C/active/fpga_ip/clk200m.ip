@@ -39,7 +39,7 @@ Altera and sold by Altera or its authorized distributors.-->
         <ipxact:parameter parameterId="clockRate" type="longint">
           <ipxact:name>clockRate</ipxact:name>
           <ipxact:displayName>Clock rate</ipxact:displayName>
-          <ipxact:value>100000000</ipxact:value>
+          <ipxact:value>200000000</ipxact:value>
         </ipxact:parameter>
         <ipxact:parameter parameterId="externallyDriven" type="bit">
           <ipxact:name>externallyDriven</ipxact:name>
@@ -628,12 +628,12 @@ Altera and sold by Altera or its authorized distributors.-->
         <ipxact:parameter parameterId="gui_reference_clock_frequency" type="real">
           <ipxact:name>gui_reference_clock_frequency</ipxact:name>
           <ipxact:displayName>Reference Clock Frequency</ipxact:displayName>
-          <ipxact:value>100.0</ipxact:value>
+          <ipxact:value>200.0</ipxact:value>
         </ipxact:parameter>
         <ipxact:parameter parameterId="gui_reference_clock_frequency_ps" type="real">
           <ipxact:name>gui_reference_clock_frequency_ps</ipxact:name>
           <ipxact:displayName>Reference Clock Frequency</ipxact:displayName>
-          <ipxact:value>10000.0</ipxact:value>
+          <ipxact:value>5000.0</ipxact:value>
         </ipxact:parameter>
         <ipxact:parameter parameterId="gui_use_coreclk" type="bit">
           <ipxact:name>gui_use_coreclk</ipxact:name>
@@ -1203,7 +1203,7 @@ Altera and sold by Altera or its authorized distributors.-->
         <ipxact:parameter parameterId="gui_output_clock_frequency1" type="real">
           <ipxact:name>gui_output_clock_frequency1</ipxact:name>
           <ipxact:displayName>Desired Frequency</ipxact:displayName>
-          <ipxact:value>125.0</ipxact:value>
+          <ipxact:value>250.0</ipxact:value>
         </ipxact:parameter>
         <ipxact:parameter parameterId="gui_output_clock_frequency2" type="real">
           <ipxact:name>gui_output_clock_frequency2</ipxact:name>
@@ -1293,7 +1293,7 @@ Altera and sold by Altera or its authorized distributors.-->
         <ipxact:parameter parameterId="gui_output_clock_frequency_ps1" type="real">
           <ipxact:name>gui_output_clock_frequency_ps1</ipxact:name>
           <ipxact:displayName>Desired Frequency</ipxact:displayName>
-          <ipxact:value>8000.0</ipxact:value>
+          <ipxact:value>4000.0</ipxact:value>
         </ipxact:parameter>
         <ipxact:parameter parameterId="gui_output_clock_frequency_ps2" type="real">
           <ipxact:name>gui_output_clock_frequency_ps2</ipxact:name>

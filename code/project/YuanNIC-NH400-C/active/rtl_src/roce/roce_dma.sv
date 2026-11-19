@@ -88,6 +88,38 @@ module roce_dma #(
     // 页内：起点 128 B 对齐偏移 o0，终点 e = addr[11:0] + transfer_length；e > 4096 则跨页
     wire [13:0] read_end_in_page     = {2'd0, dma_read_request_address[11:0]} + {1'b0, dma_read_request_length};
     wire        read_crosses_page     = read_end_in_page > 14'd4096;
+    // ------------------------------------------------------------ 拍数直接算「beat-1」（B6503，簇 C）
+    // **动机**：B6502 STA 有 2 条 core 违例（−0.218 / −0.222）走
+    //     u_tx|issue_job.physical_address0[0] → u_dma|u_ar_fifo|mem_rtl_0（M20K 写口）。
+    // 原始链路是 7 级逻辑、5 个算术级：
+    //   addr[6:0] → read_end_in_page(+len) → +127 → >>7 → −addr[11:7] → 跨页 mux → −1 → RAM。
+    // 而 AXI 的 ARLEN 本来就等于「拍数−1」，FIFO 里再减一次纯属把常数折叠留到了最后。
+    //
+    // 三条恒等式（下面每一个都用穷举核对过：addr 0..4095 × len 1..299 ∪ {1024,2048,3000,4095,4096}，
+    // 非跨页 1 186 375 例、跨页 58 809 例，全部相等）：
+    //   非跨页：beats = ceil((o0 + len)/128)，于是
+    //           beats−1 = (o0 + len − 1) >> 7          （只吃 addr[6:0]，跟 addr[11:7] 无关）
+    //   跨页第一段：beats−1 = 31 − addr[11:7] = ~addr[11:7]（5 位取反，零级逻辑）
+    //   跨页第二段：beats−1 = (addr[11:0] + len − 4097) >> 7
+    // 这样 ARLEN 字段少掉 **3 个加法级 + 1 个减法级**，且 addr[6:0] 只进一个加法器（原来进 +len 和 −addr[11:7] 两处）。
+    //
+    // 与原来等价的前提：o0 + len ≤ 4096（非跨页的定义）时 beats ≥ 1，故 beats−1 ≥ 0 不会下溢；
+    // 跨页第二段 len ≥ 4097 − addr[11:0] 保证被减数非负。**零长度读在原实现里就是走不进来的**
+    // （roce_tx 的 issue_needs_read / roce_resp 的两处 (payload_length != 0) 守卫），故不额外加钳位，
+    // 保持与原实现逐位一致的语义（原实现在 len=0 时也会给出 beats=0，即 ARLEN=63，不是本次要改的行为）。
+    // 位宽：o0+len 最大 127+4096 = 4223 → 13 位；o12+len 最大 4095+4096 = 8191 → 13 位。
+    // 两个常量减法都在 13 位上做，否则被减数先被截断成 12 位会下溢（第一版就踩了这个，
+    // trace 里跨页第二段放出 arlen=32 即 33 拍的假 burst）。
+    wire [12:0] read_non_cross_m1     = (13'({1'b0, dma_read_request_address[6:0]} + {1'b0, dma_read_request_length}) - 13'd1) >> 7;
+    wire [12:0] read_cross_second_m1  = (13'(dma_read_request_address[11:0] + {1'b0, dma_read_request_length}) - 13'd4097) >> 7;
+    // 跨页第一段的 ~addr[11:7] 必须显式零扩展（{1'b0, ~addr[11:7]}）。
+    // 写成 6'(~addr[11:7]) 时 Verilator 5.032 会把操作数先扩到 6 位再取反，addr[11:7]=31 得到 6'h20=32；
+    // 写成 ~addr[11:7] 同样中招（同见本机隔离用例 /tmp/bt/t2.sv：v1/v4=32，v2/v5=0）。
+    wire [5:0]  read_first_burst_m1   = read_crosses_page ? {1'b0, ~dma_read_request_address[11:7]} : read_non_cross_m1[5:0];
+    wire [5:0]  read_second_burst_m1  = read_cross_second_m1[5:0];
+    wire [5:0]  read_ar_beats_m1      = read_second_phase ? read_second_burst_m1 : read_first_burst_m1;   // 直接进 AR FIFO
+    // 信用记账仍用「拍数」而不是「beat−1」，且**保持原来的算式不动**：这条链的终点是 read_credit 寄存器，
+    // 有一整拍余量（不在违例名单里），改它只会引入新的等价性风险。
     wire [5:0]  read_first_burst_beats    = read_crosses_page ? 6'(32 - dma_read_request_address[11:7]) : 6'(((read_end_in_page + 14'd127) >> 7) - dma_read_request_address[11:7]);
     wire [5:0]  read_second_burst_beats    = 6'((read_end_in_page - 14'd4096 + 14'd127) >> 7);
     wire [6:0]  read_total_beats = {1'b0, read_first_burst_beats} + (read_crosses_page ? {1'b0, read_second_burst_beats} : 7'd0);   // 1..33
@@ -117,7 +149,6 @@ module roce_dma #(
     wire        read_request_done  = read_ar_push && (!read_crosses_page || read_second_phase);   // 请求完成（推元数据）
     assign dma_read_request_ready  = read_request_done;
     wire [63:0] read_ar_address  = read_second_phase ? {dma_read_request_page1[63:12], 12'd0} : {dma_read_request_address[63:7], 7'd0};
-    wire [5:0]  read_ar_beats = read_second_phase ? read_second_burst_beats : read_first_burst_beats;
 
     always @(posedge clk) begin
         if (rst)             read_second_phase <= 1'b0;
@@ -152,7 +183,7 @@ module roce_dma #(
         .RAM_PIPELINE(PCIE_FIFO_RAM_PIPELINE), .OUTPUT_FIFO_ENABLE(PCIE_FIFO_OUTPUT_FIFO)
     ) u_ar_fifo (
         .s_clk(clk), .s_rst(rst),
-        .s_axis_tdata({2'd0, read_ar_beats - 6'd1, read_ar_address}),
+        .s_axis_tdata({2'd0, read_ar_beats_m1, read_ar_address}),
         .s_axis_tkeep('0), .s_axis_tvalid(read_ar_push), .s_axis_tready(ar_fifo_ready),
         .s_axis_tlast(1'b1), .s_axis_tid(8'd0), .s_axis_tdest(8'd0), .s_axis_tuser(1'b0),
         .m_clk(pcie_clk), .m_rst(pcie_rst),

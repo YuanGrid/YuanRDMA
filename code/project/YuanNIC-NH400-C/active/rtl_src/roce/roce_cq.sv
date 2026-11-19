@@ -13,12 +13,14 @@ module roce_cq
     input  cqc_t             cqc [CQ_NUM],
     input  wire  [CQ_NUM-1:0] cq_reset,
     input  wire              doorbell_cq_valid,
-    input  wire  [31:0]      doorbell_data,       // [31:16] consumer_index [7:0] cq_idx
+    input  wire  [31:0]      doorbell_data,       // [31:16] consumer_index [7:0] cq_idx（8 bit，够 CQ_NUM=64 的 6 位）
     // CQE 提交：cqe = {imm, byte_len, dw1, dw0}（dw0[31] owner 由本模块填）
     input  wire  [CLIENTS-1:0]    cqe_valid,
     output wire  [CLIENTS-1:0]    cqe_ready,
-    input  wire  [CLIENTS*4-1:0]  cqe_cq_index,
-    input  wire  [CLIENTS*128-1:0] cqe_data,
+    // S6：每个客户端的 CQ 编号是 CQ_W 位（16 时 4、64 时 6）。写死 4 会把 CQ40 截成 CQ8。
+    input  wire  [CLIENTS*CQ_W-1:0] cqe_cq_index,
+    // S（UD）：cqe_data 从 128→160 bit/client，新增 dw4[31:0]（src_qp + src_qp_valid）。
+    input  wire  [CLIENTS*160-1:0] cqe_data,
     // DMA 写
     output reg               dma_write_request_valid,
     input  wire              dma_write_request_ready,
@@ -62,8 +64,8 @@ module roce_cq
     wire       take_cqe = (state == S_IDLE) && any_request;
     assign cqe_ready = take_cqe ? (CLIENTS'(1) << picked_client) : '0;
 
-    wire [3:0]   cq    = cqe_cq_index[picked_client*4 +: 4];
-    wire [127:0] cqe_entry    = cqe_data[picked_client*128 +: 128];
+    wire [CQ_W-1:0] cq          = cqe_cq_index[picked_client*CQ_W +: CQ_W];
+    wire [159:0] cqe_entry    = cqe_data[picked_client*160 +: 160];
     wire [15:0]  producer    = producer_index[cq];
     wire [3:0]   log2_depth   = cqc[cq].log2_depth;
     wire [15:0]  index_mask = (16'd1 << log2_depth) - 16'd1;
@@ -75,7 +77,7 @@ module roce_cq
         event_cqe      <= 1'b0;
         event_overflow <= 1'b0;
         if (doorbell_cq_valid)
-            consumer_index[doorbell_data[3:0]] <= doorbell_data[31:16];
+            consumer_index[doorbell_data[CQ_W-1:0]] <= doorbell_data[31:16];
         for (entry = 0; entry < CQ_NUM; entry = entry + 1)
             if (cq_reset[entry]) begin
                 producer_index[entry] <= 16'd0;
@@ -107,7 +109,10 @@ module roce_cq
                             dma_write_request_valid <= 1'b1;
                             // 1024 位写拍：低 32 B 是 CQE，高 96 B 必须为 0——wr_align 会用
                             // request_length=32 算出的 wstrb 把其余字节屏蔽掉，零填充只是让波形可读。
-                            dma_write_data      <= {896'd0, cqe_entry[127:32], owner_bit, cqe_entry[30:0]};
+                            // CQE 32 B：dw0..dw3 来自 cqe_entry[127:0]，dw4 来自 cqe_entry[159:128]。
+                            // owner 位覆盖 dw0[31]；高 96 B（dw8..dw31）填 0。
+                            dma_write_data      <= {864'd0, cqe_entry[159:128],
+                                                    cqe_entry[127:32], owner_bit, cqe_entry[30:0]};
                             state           <= S_REQUEST;
                         end
                     end

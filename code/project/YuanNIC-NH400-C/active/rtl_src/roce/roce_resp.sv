@@ -10,11 +10,23 @@
 module roce_resp
     import roce_pkg::*;
 #(
-    parameter int ACK_EVERY = 16
+    parameter int ACK_EVERY = 16,
+    // S4：本实例拥有的 QP = 全局 qp_index[LANE_BITS-1:0] == LANE_ID（交错归属）。
+    // 只影响 lane 局部阵列的归属判断（qp_state_change 循环）；索引换算走 qp_local()。
+    parameter int LANE_ID = 0
 )(
     input  wire                    clk,
     input  wire                    rst,
-    input  wire  [QP_NUM*512-1:0]  qpc,
+    input  wire  [31:0]            local_ip,       // S3：回包任务的 IP 校验和静态部分要用
+    // S3：当前包已装载的 QPC 工作副本。约定：头部握手那一拍（rx_header_ready=1）它一定已是本包的
+    // QPC——MAIN_IDLE 装载与拉 ready 同拍，握手在下一拍。roce_engine 在那一拍锁存 CNP 的组头字段。
+    output wire  [511:0]           qp_context_o,
+    // S3：QPC 改读 roce_tbl 的 M20K 寄存读口 2（给地址，下一拍出数据 + 产生数据的地址 + 读那一沿无写入）
+    output wire  [15:0]            qpc_rd_addr,
+    input  wire  [508:0]           qpc_rd_data,
+    input  wire  [15:0]            qpc_rd_addr_q,
+    input  wire                    qpc_rd_fresh,
+    input  wire  [511:0]           qpc_last_write, // 与 qp_state_change 同拍：触发它的那次 QPC 写入值
     input  wire  [QP_NUM*3-1:0]    qp_state_i,     // QPC 的 [2:0] 单独引出，见 roce_tbl.sv
     input  wire  [QP_NUM-1:0]      qp_state_change,
     output wire  [QP_NUM-1:0]      qp_set_error,
@@ -66,8 +78,11 @@ module roce_resp
     // CQE
     output reg                     cqe_valid,
     input  wire                    cqe_ready,
-    output reg   [3:0]             cqe_cq_index,
-    output reg   [127:0]           cqe_data,
+    output reg   [CQ_W-1:0]        cqe_cq_index,
+    // S（UD）：cqe_data 从 128 → 160 bit，新增 dw4[24:0] = {src_qp_valid[24], src_qp[23:0]}。
+    // dw0[18] = has_grh：**恒 0**（GRH 尚未实现，见 MAIN_CQE 处的说明）。provider 目前据此
+    // 决定是否置 IBV_WC_GRH —— 置 1 会让 ULP 从 buf[40] 起读载荷，而接收缓冲里没有那 40 B。
+    output reg   [159:0]           cqe_data,
     // TX 任务
     output reg                     tx_job_valid,
     input  wire                    tx_job_ready,
@@ -90,6 +105,9 @@ module roce_resp
     // 调试：{out_state[2:0], main_state[3:0]}，布局见 roce_debug.sv 0x0564
     output wire  [6:0]             debug_state
 );
+    // S4：本 lane 编号（截到 LANE_BITS 位，供 qp_owned 用）。LANE_ID 是 int 参数，
+    // 直接当实参传进 qp_owned 会带 32 位宽度，这里先截好，比较只剩 2 位。
+    localparam logic [PKG_LANE_W-1:0] LANE_IDX = PKG_LANE_W'(LANE_ID & ((1 << LANE_BITS) - 1));
     // ------------------------------------------------------------ access error 快照（B6433）
     // B6432 上 server send_bw 约 50% 轮次报 remote access error（§56.7）：现有计数只有总数，看不到哪个 QP、
     // 哪一段游标、哪个 key/地址越界。这里在复位后**第一次** access error 时锁存上下文（sticky，不覆盖），
@@ -105,24 +123,52 @@ module roce_resp
     assign dbg_access_snapshot = {acc_err_cnt, dbg_access_shot};
 
     // ------------------------------------------------------------ 每 QP 状态
-    reg  [23:0] qp_expected_psn  [QP_NUM];
-    reg  [23:0] qp_msn   [QP_NUM];
-    reg  [4:0]  qp_ack_counter  [QP_NUM];
-    reg         qp_nak_sent   [QP_NUM];
-    reg  [15:0] qp_rq_producer  [QP_NUM];
-    reg  [15:0] qp_rq_consumer  [QP_NUM];
-    reg         qp_message_active  [QP_NUM];   // 有进行中的 SEND（已取 RQ WQE）或 WRITE 消息
-    reg  [31:0] qp_cursor_key  [QP_NUM];
-    reg  [63:0] qp_cursor_address   [QP_NUM];
-    reg  [31:0] qp_cursor_remaining  [QP_NUM];   // SEND：RQ 缓冲剩余；WRITE：DMA 长度剩余
-    reg  [31:0] qp_cursor_offset  [QP_NUM];   // SEND：已收字节；WRITE：DMA 总长
-    reg  [15:0] qp_cursor_wqe_index  [QP_NUM];
+    // S4（QP 128）：本 lane 只持有自己的 1/4 项（LANE_BITS=2，故 LANE_QPS = QP_NUM >> 2 = 32）。
+    // 索引一律用 lane 局部位 qp[QP_W-1:LANE_BITS]，与 roce_pkg 的 qp_local() 等价。
+    // **不能拿全局 qp_index 直接下标**：数组只有 32 项，全局索引 0..127 越界后回绕到
+    // 别的 QP，是静默数据错（Verilator 只报 SELRANGE，-Wno-fatal 下不拦）。
+    // 索引写成裸 part-select 而不是 qp_local(...)：Verilator 对「NBA 写 + 函数调用下标」
+    // 偶发 Internal Error（V3Delayed: Multiple Write refs on LHS of NBA），裸位选不会。
+    // 缩容后 MAIN_IDLE 的装载是 263 位 × 32:1，原来是 ×128:1 —— 本文件的主要时序收益。
+    // 全局总线（qp_set_error_main/out、qp_state_change）仍是 QP_NUM 位，见下。
+    reg  [23:0] qp_expected_psn  [LANE_QPS];
+    reg  [23:0] qp_msn   [LANE_QPS];
+    reg  [4:0]  qp_ack_counter  [LANE_QPS];
+    reg         qp_nak_sent   [LANE_QPS];
+    reg  [15:0] qp_rq_producer  [LANE_QPS];
+    reg  [15:0] qp_rq_consumer  [LANE_QPS];
+    reg         qp_message_active  [LANE_QPS];   // 有进行中的 SEND（已取 RQ WQE）或 WRITE 消息
+    reg  [31:0] qp_cursor_key  [LANE_QPS];
+    reg  [63:0] qp_cursor_address   [LANE_QPS];
+    reg  [31:0] qp_cursor_remaining  [LANE_QPS];   // SEND：RQ 缓冲剩余；WRITE：DMA 长度剩余
+    reg  [31:0] qp_cursor_offset  [LANE_QPS];   // SEND：已收字节；WRITE：DMA 总长
+    reg  [15:0] qp_cursor_wqe_index  [LANE_QPS];
+    // 置错总线保持 QP_NUM 位（roce_tbl 按全局索引收，roce_top 把 4 个 lane 或起来）
     reg  [QP_NUM-1:0] qp_set_error_main;
 
     // 工作副本
     rx_hdr_t    header;
-    reg  [3:0]  qp_index;
+    reg  [QP_W-1:0] qp_index;
     reg  [511:0] qp_context;
+    assign qp_context_o = qp_context;
+    // S3：读口地址恒为 rx_header.qp_index（预读）。头部在上游等待期间数据总线是稳定的，
+    // 所以到 MAIN_IDLE 看见 valid 时读口通常已经给出这个 QP 的 QPC（qpc_hit），仍是一拍装载；
+    // 只有头部「刚到达」或读那一沿撞上 QPC 写时才进 MAIN_LOAD 多等一拍（此时不拉 ready，
+    // 保证 roce_engine 依赖的「握手那拍 qp_context 已是本包 QPC」不变）。
+    assign qpc_rd_addr = 16'(rx_header.qp_index);
+    wire   qpc_hit     = qpc_rd_fresh && (qpc_rd_addr_q[QP_W-1:0] == rx_header.qp_index);
+    // B6441：path_mtu 与它自己那个 3 位编码一起寄存，和 qp_context 在 MAIN_IDLE 那一拍同时装上。
+    // 原来 path_mtu = pmtu_bytes(qpc_pmtu(qp_context)) 是组合展开的 128<<code 桶形移位，
+    // 它的下游 read_packet_count 又是一个按 qpc_pmtu 移位的桶形移位，两段串在一条链上：
+    // B6440 的 core 第三大户（99 个端点，最差 −0.125）就是
+    //   u_resp|qp_context[5](= pmtu[2]) → path_mtu → read_packet_count → fin_expected_psn
+    //   → qp_expected_psn[*][23]，6 级逻辑 / IC 2.0 / cell 1.79
+    // 两者都是 qp_context 的纯函数、而 qp_context 在这一拍之后的整包内不变，
+    // 所以寄存一份与现算逐位等价，**不加拍**（消费者本来就在 MAIN_CLASSIFY 及以后）。
+    reg  [12:0] path_mtu_q;
+    reg  [2:0]  pmtu_code_q;
+    wire [12:0] path_mtu    = path_mtu_q;
+    wire [2:0]  pmtu_code   = pmtu_code_q;
     reg  [23:0] expected_psn, msn;
     reg  [4:0]  ack_counter;
     reg         nak_sent, message_active;
@@ -211,7 +257,7 @@ module roce_resp
 
     // ------------------------------------------------------------ 回包队列
     typedef struct packed {
-        logic [3:0]  qp_index;
+        logic [QP_W-1:0] qp_index;
         logic        is_read;
         logic [23:0] psn;
         logic [7:0]  syndrome;
@@ -219,6 +265,15 @@ module roce_resp
         logic [63:0] virtual_address;
         logic [31:0] rkey;
         logic [31:0] payload_length;
+        // S3：回包所需的 QPC 字段在入队时从 qp_context 带上，输出状态机不再按 qp_index 查 QPC
+        logic [2:0]  pmtu;
+        logic [15:0] pd;
+        logic [7:0]  tos;
+        logic [7:0]  ttl;
+        logic [47:0] dmac;
+        logic [31:0] dip;
+        logic [15:0] sport;
+        logic [23:0] dqpn;
     } response_entry_t;
     response_entry_t       response_in, response_out;
     reg         response_in_valid;
@@ -249,7 +304,12 @@ module roce_resp
     reg  [3:0]  main_state;
 
     wire [7:0]  opcode       = header.opcode;
-    wire        is_send_first    = (opcode == OP_SEND_FIRST) || (opcode == OP_SEND_ONLY) || (opcode == OP_SEND_ONLY_IMM);
+    // UD（0x64/0x65）：无 PSN 语义、无 ACK、无 RNR，一个包就是一条完整消息。
+    // 单独一根线而不是并进 is_send_first：并进去会让下面 `is_send && !message_active` 的
+    // 「首包」判断和 RQ 取指逻辑对 UD 误触发（见 skill/ud-transport-plan.md §7.5）。
+    wire        is_ud_send       = (opcode == OP_SEND_ONLY_UD) || (opcode == OP_SEND_ONLY_UD_IMM);
+    wire        is_send_first    = (opcode == OP_SEND_FIRST) || (opcode == OP_SEND_ONLY) || (opcode == OP_SEND_ONLY_IMM) ||
+                                   is_ud_send;
     wire        is_send_continue    = (opcode == OP_SEND_MIDDLE) || (opcode == OP_SEND_LAST) || (opcode == OP_SEND_LAST_IMM);
     wire        is_write_first    = (opcode == OP_WRITE_FIRST) || (opcode == OP_WRITE_ONLY) || (opcode == OP_WRITE_ONLY_IMM);
     wire        is_write_continue    = (opcode == OP_WRITE_MIDDLE) || (opcode == OP_WRITE_LAST) || (opcode == OP_WRITE_LAST_IMM);
@@ -258,31 +318,37 @@ module roce_resp
     wire        is_write = is_write_first || is_write_continue;
     wire        is_message_end   = (opcode == OP_SEND_LAST) || (opcode == OP_SEND_LAST_IMM) || (opcode == OP_SEND_ONLY) ||
                            (opcode == OP_SEND_ONLY_IMM) || (opcode == OP_WRITE_LAST) ||
-                           (opcode == OP_WRITE_LAST_IMM) || (opcode == OP_WRITE_ONLY) || (opcode == OP_WRITE_ONLY_IMM);
+                           (opcode == OP_WRITE_LAST_IMM) || (opcode == OP_WRITE_ONLY) || (opcode == OP_WRITE_ONLY_IMM) ||
+                           is_ud_send;
     wire        is_message_middle   = (opcode == OP_SEND_FIRST) || (opcode == OP_SEND_MIDDLE) ||
                            (opcode == OP_WRITE_FIRST) || (opcode == OP_WRITE_MIDDLE);
     wire        is_write_with_immediate    = (opcode == OP_WRITE_LAST_IMM) || (opcode == OP_WRITE_ONLY_IMM);
     wire        is_request   = is_send || is_write || is_read_request;
-    wire [12:0] path_mtu     = pmtu_bytes(qpc_pmtu(qp_context));
-    wire [23:0] psn_delta     = header.psn - expected_psn;
+    // path_mtu / pmtu_code 已寄存（见 qpc_rd_addr 附近的说明），这里不再现算。
+    // UD 无 PSN 语义：强制 delta=0，重复包/超前包两个分支整体短路（三处都靠这一个量）。
+    wire [23:0] psn_delta     = is_ud_send ? 24'd0 : (header.psn - expected_psn);
     wire        qp_state_ok    = (qpc_state(qp_context) == QPS_RTR) || (qpc_state(qp_context) == QPS_RTS);
-    wire        rq_is_empty = (rq_consumer == qp_rq_producer[qp_index]);
-    // FIRST/MIDDLE 必须正好 PMTU；LAST/ONLY 1..PMTU（ONLY 可为 0）
-    wire        length_ok   = is_message_middle ? (header.payload_length == path_mtu) : (header.payload_length <= path_mtu);
+    wire        rq_is_empty = (rq_consumer == qp_rq_producer[qp_index[QP_W-1:LANE_BITS]]);
+    // FIRST/MIDDLE 必须正好 PMTU；LAST/ONLY 1..PMTU（ONLY 可为 0）。
+    // UD 不受 PMTU 约束（一个包就是一条消息，长度只由 RQ WQE 兜住）。
+    wire        length_ok   = is_ud_send ? 1'b1 :
+                              is_message_middle ? (header.payload_length == path_mtu) : (header.payload_length <= path_mtu);
     wire [23:0] read_packet_count  = (header.reth_length == 32'd0) ? 24'd1 :
-                           24'((header.reth_length + {19'd0, path_mtu} - 32'd1) >> ({1'b0, qpc_pmtu(qp_context)} + 4'd7));
+                           24'((header.reth_length + {19'd0, path_mtu} - 32'd1) >> ({1'b0, pmtu_code} + 4'd7));
 
     // ------------------------------------------------------------ 包尾的下一值（组合）
     // FINISH / ACK / WRITE_BACK 三态的输入全部来自工作副本和 header，彼此没有先后依赖，
     // 所以包尾那一拍就能把「写回 per-QP 数组 + 打 done + 回 ACK」一次算完（原来要 3 拍）。
     // 唯一例外是 SEND / 带 Imm 的消息末包：CQE 字段要寄存后才能发，那条路径仍走 FINISH → CQE → ACK
     // → WRITE_BACK（每消息一次，不值得合并）。
-    wire        fin_ack          = !is_read_request &&
+    wire        fin_ack          = !is_read_request && !is_ud_send &&
                                    (header.ack_request || is_message_end || ack_counter == 5'(ACK_EVERY - 1));
     wire        fin_send_response = fin_ack || is_read_request;
     wire        fin_need_cqe     = is_message_end && (is_send || is_write_with_immediate);
-    wire [23:0] fin_expected_psn = expected_psn + (is_read_request ? read_packet_count : 24'd1);
-    wire [23:0] fin_msn          = msn + ((is_read_request || is_message_end) ? 24'd1 : 24'd0);
+    // UD 无 PSN：包尾不推进 expected_psn（否则会与同 QP 上共用的 RC 序号串互相污染）。
+    wire [23:0] fin_expected_psn = expected_psn + (is_ud_send ? 24'd0 :
+                                   (is_read_request ? read_packet_count : 24'd1));
+    wire [23:0] fin_msn          = msn + ((is_read_request || (is_message_end && !is_ud_send)) ? 24'd1 : 24'd0);
     // 读请求不参与 ACK 合并计数（原 FINISH 对读请求完全不碰 ack_counter）。
     wire [4:0]  fin_ack_counter  = is_read_request ? ack_counter : (fin_ack ? 5'd0 : ack_counter + 5'd1);
     wire [31:0] fin_cursor_remaining = is_send          ? cursor_remaining - {19'd0, header.payload_length} :
@@ -320,14 +386,25 @@ module roce_resp
     assign      done = done_reg;
     // 写回 per-QP 数组 + 打 done + 回 ACK。WRITE_DATA 末拍与 MAIN_FINISH 共用同一段逻辑，
     // 避免两处副本日后各自漂移。全部是寄存器写，不影响同拍的组合判断。
+    // 回包条目的 QPC 字段（两个入队点共用，避免两处副本漂移）
+    task automatic fill_response_ctx;
+        response_in.pmtu  <= qpc_pmtu(qp_context);
+        response_in.pd    <= qpc_pd(qp_context);
+        response_in.tos   <= qpc_tos(qp_context);
+        response_in.ttl   <= qpc_ttl(qp_context);
+        response_in.dmac  <= qpc_dmac(qp_context);
+        response_in.dip   <= qpc_dip(qp_context);
+        response_in.sport <= qpc_sport(qp_context);
+        response_in.dqpn  <= qpc_dqpn(qp_context);
+    endtask
     task automatic fin_fast_path;
         done_reg <= 1'b1;
-        qp_expected_psn[qp_index] <= fin_expected_psn; qp_msn[qp_index]  <= fin_msn;
-        qp_ack_counter[qp_index] <= fin_ack_counter;   qp_nak_sent[qp_index]  <= nak_sent;
-        qp_rq_consumer[qp_index] <= rq_consumer;       qp_message_active[qp_index] <= fin_message_active;
-        qp_cursor_key[qp_index] <= fin_cursor_key;     qp_cursor_address[qp_index]  <= fin_cursor_address;
-        qp_cursor_remaining[qp_index] <= fin_cursor_remaining; qp_cursor_offset[qp_index] <= fin_cursor_offset;
-        qp_cursor_wqe_index[qp_index] <= cursor_wqe_index;
+        qp_expected_psn[qp_index[QP_W-1:LANE_BITS]] <= fin_expected_psn; qp_msn[qp_index[QP_W-1:LANE_BITS]]  <= fin_msn;
+        qp_ack_counter[qp_index[QP_W-1:LANE_BITS]] <= fin_ack_counter;   qp_nak_sent[qp_index[QP_W-1:LANE_BITS]]  <= nak_sent;
+        qp_rq_consumer[qp_index[QP_W-1:LANE_BITS]] <= rq_consumer;       qp_message_active[qp_index[QP_W-1:LANE_BITS]] <= fin_message_active;
+        qp_cursor_key[qp_index[QP_W-1:LANE_BITS]] <= fin_cursor_key;     qp_cursor_address[qp_index[QP_W-1:LANE_BITS]]  <= fin_cursor_address;
+        qp_cursor_remaining[qp_index[QP_W-1:LANE_BITS]] <= fin_cursor_remaining; qp_cursor_offset[qp_index[QP_W-1:LANE_BITS]] <= fin_cursor_offset;
+        qp_cursor_wqe_index[qp_index[QP_W-1:LANE_BITS]] <= cursor_wqe_index;
         if (fin_send_response) begin
             response_in_valid <= 1'b1;
             response_in.qp_index    <= qp_index;
@@ -338,6 +415,7 @@ module roce_resp
             response_in.virtual_address    <= header.reth_virtual_address;
             response_in.rkey  <= header.reth_rkey;
             response_in.payload_length   <= header.reth_length;
+            fill_response_ctx;
             if (syndrome == AETH_ACK) event_tx_ack <= !(is_read_request && !fin_ack);
             else                      event_tx_nak <= 1'b1;
         end
@@ -398,18 +476,22 @@ module roce_resp
             page_valid      <= 1'b0;
             page_next_valid <= 1'b0;
         end
-        if (doorbell_rq_valid) qp_rq_producer[doorbell_data[3:0]] <= doorbell_data[31:16];
+        if (doorbell_rq_valid) qp_rq_producer[doorbell_data[QP_W-1:LANE_BITS]] <= doorbell_data[31:16];   // 门铃 [QP_W-1:0] = qp_idx
+        // qp_state_change 是全局 QP_NUM 位的 one-hot 脉冲（roce_tbl 按全局索引打），
+        // 非属主位恒为 0。循环按 QP_NUM 静态展开，qp 每一轮都是常量：属主轮的下标
+        // qp[QP_W-1:LANE_BITS] 折成常量，非属主轮被 qp_owned 整段折掉。
+        // 不用 (1<<qp) 变址移位，也不做 32 项动态选路。
         for (int qp = 0; qp < QP_NUM; qp++)
-            if (qp_state_change[qp]) begin
+            if (qp_owned(QP_W'(qp), LANE_IDX) && qp_state_change[qp]) begin
                 if (qp_state_i[qp*3 +: 3] <= QPS_INIT) begin
-                    qp_rq_producer[qp] <= 16'd0;
-                    qp_rq_consumer[qp] <= 16'd0;
-                    qp_message_active[qp] <= 1'b0;
+                    qp_rq_producer[qp[QP_W-1:LANE_BITS]] <= 16'd0;
+                    qp_rq_consumer[qp[QP_W-1:LANE_BITS]] <= 16'd0;
+                    qp_message_active[qp[QP_W-1:LANE_BITS]] <= 1'b0;
                 end
-                qp_expected_psn[qp] <= qpc_rq_psn(qpc[qp*512 +: 512]);
-                qp_msn[qp]  <= 24'd0;
-                qp_nak_sent[qp]  <= 1'b0;
-                qp_ack_counter[qp] <= 5'd0;
+                qp_expected_psn[qp[QP_W-1:LANE_BITS]] <= qpc_rq_psn(qpc_last_write);   // S3：同拍的 QPC 写入值
+                qp_msn[qp[QP_W-1:LANE_BITS]]  <= 24'd0;
+                qp_nak_sent[qp[QP_W-1:LANE_BITS]]  <= 1'b0;
+                qp_ack_counter[qp[QP_W-1:LANE_BITS]] <= 5'd0;
                 // 页缓存作废：QP 状态变化意味着主机可能已注销/重注册 MR，
                 // 同一个 rkey 可能指向新的物理页，旧映射必须丢弃。
                 // 两个缓存项（第 0 页 / 下一页）共用 key 与 PD，必须一起作废。
@@ -430,42 +512,63 @@ module roce_resp
             // 只靠 qp_state_change 不够——它要求主机写的状态与 qp_state_store 不同，
             // 而复位后 qp_state_store 已是 RESET，新进程再写 RESET 不产生脉冲，
             // qp_message_active / qp_cursor_* 残留会让 RQ 从旧位置继续取 WQE。
-            for (int qp = 0; qp < QP_NUM; qp++) begin
-                qp_expected_psn[qp]      <= 24'd0;
-                qp_msn[qp]               <= 24'd0;
-                qp_ack_counter[qp]       <= 5'd0;
-                qp_nak_sent[qp]          <= 1'b0;
-                qp_rq_producer[qp]       <= 16'd0;
-                qp_rq_consumer[qp]       <= 16'd0;
-                qp_message_active[qp]    <= 1'b0;
-                qp_cursor_key[qp]        <= 32'd0;
-                qp_cursor_address[qp]    <= 64'd0;
-                qp_cursor_remaining[qp]  <= 32'd0;
-                qp_cursor_offset[qp]     <= 32'd0;
-                qp_cursor_wqe_index[qp]  <= 16'd0;
+            // 只清本 lane 的 32 项：非属主项本 lane 根本没有存储（S4 缩容），
+            // 它们的状态在属主 lane 的复位里清，roce_top 对 4 个 lane 同时给 rst。
+            for (int lq = 0; lq < LANE_QPS; lq++) begin
+                qp_expected_psn[lq]      <= 24'd0;
+                qp_msn[lq]               <= 24'd0;
+                qp_ack_counter[lq]       <= 5'd0;
+                qp_nak_sent[lq]          <= 1'b0;
+                qp_rq_producer[lq]       <= 16'd0;
+                qp_rq_consumer[lq]       <= 16'd0;
+                qp_message_active[lq]    <= 1'b0;
+                qp_cursor_key[lq]        <= 32'd0;
+                qp_cursor_address[lq]    <= 64'd0;
+                qp_cursor_remaining[lq]  <= 32'd0;
+                qp_cursor_offset[lq]     <= 32'd0;
+                qp_cursor_wqe_index[lq]  <= 16'd0;
             end
         end else begin
             // access error 快照的「已锁存」标志：软件写窗口基址或复位清；与 capture 在同一 always 块里，
             // capture 分支（MAIN_TRANSLATE_WAIT）后写，优先级更高。
             if (dbg_access_snapshot_clr) acc_err_seen <= 1'b0;
             case (main_state)
-            // IDLE 与 LOAD 合并：`rx_header` 的 qp_index 一拍就能直接寻址各工作副本，
-            // 不必先把头寄存一拍再装。省下的 1 拍在 1024 B 包上约占每包固定开销的 6%。
-            // 时序上只是把 512 位 QPC 的 16:1 选择器换成 rx_header 输出的索引，与原来同一条路径。
-            MAIN_IDLE: if (rx_header_valid && !rx_header_ready) begin
+            // S3：QPC 改读 roce_tbl 的 M20K 寄存读口（地址 = rx_header.qp_index，恒发），装载拆成
+            // 「命中就直接装 / 未命中先 MAIN_LOAD 一拍」两条路：
+            //   qpc_hit = 读口数据就是本包 QP 且读那一沿没有 QPC 写入。头部从到达起一直保持
+            //   valid 到被受理，地址提前一拍就发出去，所以稳态下 qpc_hit 恒成立，**仍是一拍装载**，
+            //   与原来「IDLE 与 LOAD 合并」的拍数完全相同。
+            //   代价（§63.5 必须实测的那 1 拍）：头部**刚到达**的那一拍（上一拍总线上的 qp_index 还是
+            //   别人）、或读那一沿正好有主机 QPC 写入时，多停一拍 MAIN_LOAD 重读。1024 B 包每包
+            //   固定开销原先约 1 拍（≈6%），若每包都吃到这一拍会变成 2 拍。本改动上板/仿真实测见
+            //   roce-optimization-log.md §63.6：test_resp_profile 串行开销与改动前相同。
+            // 原来的注释（保留作历史）：IDLE 与 LOAD 合并，省下的 1 拍在 1024 B 包上约占每包固定开销的 6%。
+            MAIN_IDLE, MAIN_LOAD: if (rx_header_valid && !rx_header_ready && !qpc_hit) begin
+                        main_state   <= MAIN_LOAD;         // 预读未命中：读口下一拍就是这个 QP
+                    end else if (rx_header_valid && !rx_header_ready) begin
                         rx_header_ready <= 1'b1;
                         header       <= rx_header;
                         qp_index      <= rx_header.qp_index;
-                        qp_context    <= qpc[rx_header.qp_index*512 +: 512];
-                        expected_psn <= qp_expected_psn[rx_header.qp_index];  msn  <= qp_msn[rx_header.qp_index];  ack_counter <= qp_ack_counter[rx_header.qp_index];
-                        nak_sent <= qp_nak_sent[rx_header.qp_index];   rq_consumer <= qp_rq_consumer[rx_header.qp_index]; message_active <= qp_message_active[rx_header.qp_index];
-                        cursor_key <= qp_cursor_key[rx_header.qp_index];  cursor_address  <= qp_cursor_address[rx_header.qp_index];  cursor_remaining <= qp_cursor_remaining[rx_header.qp_index];
-                        cursor_offset <= qp_cursor_offset[rx_header.qp_index];  cursor_wqe_index <= qp_cursor_wqe_index[rx_header.qp_index];
+                        qp_context    <= {qpc_rd_data, qp_state_i[rx_header.qp_index*3 +: 3]};
+                        // B6441：同一拍把 path_mtu 也装上（纯函数，与现算逐位等价，不加拍）
+                        // **位偏移必须自己补**：qpc_rd_data 是 [508:0]，即 QPC 的 [511:3]（低 3 位 state
+                        // 走另一条线，见上一行的拼接）。直接传给 qpc_xxx() 会被右对齐零扩展到 512 位，
+                        // PMTU 取到的就是 QPC[8:6]（scq 的低位）而不是 QPC[5:3]——2026-11-14 凌晨
+                        // 就是这么写错一版，导致所有多包 WRITE 报 REM_ACCESS_ERR（st=9）。
+                        pmtu_code_q   <= qpc_pmtu({qpc_rd_data, 3'd0});
+                        path_mtu_q    <= pmtu_bytes(qpc_pmtu({qpc_rd_data, 3'd0}));
+                        // S4：索引取 rx_header.qp_index 的 lane 局部位（qp_index 寄存器这一拍才装载，
+                        // 还不能用）。32:1 选路，不是 128:1——这是缩容的收益所在。
+                        expected_psn <= qp_expected_psn[rx_header.qp_index[QP_W-1:LANE_BITS]];  msn  <= qp_msn[rx_header.qp_index[QP_W-1:LANE_BITS]];  ack_counter <= qp_ack_counter[rx_header.qp_index[QP_W-1:LANE_BITS]];
+                        nak_sent <= qp_nak_sent[rx_header.qp_index[QP_W-1:LANE_BITS]];   rq_consumer <= qp_rq_consumer[rx_header.qp_index[QP_W-1:LANE_BITS]]; message_active <= qp_message_active[rx_header.qp_index[QP_W-1:LANE_BITS]];
+                        cursor_key <= qp_cursor_key[rx_header.qp_index[QP_W-1:LANE_BITS]];  cursor_address  <= qp_cursor_address[rx_header.qp_index[QP_W-1:LANE_BITS]];  cursor_remaining <= qp_cursor_remaining[rx_header.qp_index[QP_W-1:LANE_BITS]];
+                        cursor_offset <= qp_cursor_offset[rx_header.qp_index[QP_W-1:LANE_BITS]];  cursor_wqe_index <= qp_cursor_wqe_index[rx_header.qp_index[QP_W-1:LANE_BITS]];
                         payload_consumed <= (rx_header.payload_length == 13'd0);
                         need_cqe <= 1'b0; need_ack <= 1'b0; need_error <= 1'b0; need_rq_wqe <= 1'b0;
                         main_state   <= MAIN_CLASSIFY;
+                    end else begin
+                        main_state   <= MAIN_IDLE;
                     end
-            MAIN_LOAD: main_state <= MAIN_CLASSIFY;      // 保留编码（调试/旧镜像兼容），不再进入
             MAIN_CLASSIFY: begin
                 syndrome     <= AETH_ACK;
                 ack_psn <= header.psn;
@@ -501,13 +604,25 @@ module roce_resp
                             need_error <= 1'b1; need_ack <= 1'b1; syndrome <= AETH_NAK_INV;
                             main_state <= MAIN_ACK;
                         end else if (rq_is_empty) begin
-                            event_rnr_nak <= 1'b1;
-                            need_ack <= 1'b1; syndrome <= AETH_RNR_NAK | {3'd0, qpc_min_rnr(qp_context)};
-                            main_state <= MAIN_ACK;
+                            // UD 没有 RNR 语义（对端不会重传）：RQ 空时静默丢包，不回首包 RNR_NAK。
+                            // 回 NAK 反而会让对端把一条「不可靠」报文当可靠报文处理。
+                            if (is_ud_send) begin
+                                event_drop <= 1'b1;
+                                main_state <= MAIN_DRAIN;
+                            end else begin
+                                event_rnr_nak <= 1'b1;
+                                need_ack <= 1'b1; syndrome <= AETH_RNR_NAK | {3'd0, qpc_min_rnr(qp_context)};
+                                main_state <= MAIN_ACK;
+                            end
                         end else
                             main_state <= MAIN_RQ_FETCH;
                     end else if (is_send) begin
-                        if (is_send_first || {19'd0, header.payload_length} > cursor_remaining) begin
+                        if (is_ud_send) begin
+                            // UD 的 message_active 应该恒 0（每包都是一条完整消息）。真走到这里说明
+                            // 同一 QP 上还有 RC 的 SEND 消息未收完——不报错、不毁 QP，静默丢这一包。
+                            event_drop <= 1'b1;
+                            main_state <= MAIN_DRAIN;
+                        end else if (is_send_first || {19'd0, header.payload_length} > cursor_remaining) begin
                             need_error <= 1'b1; need_ack <= 1'b1; syndrome <= AETH_NAK_INV;
                             main_state <= MAIN_ACK;
                         end else begin
@@ -589,7 +704,11 @@ module roce_resp
                            if ({19'd0, header.payload_length} > dma_read_data[31:0]) begin
                                need_cqe <= 1'b1; cqe_opcode <= WC_RECV; cqe_status <= WCS_LOC_LEN_ERR;
                                cqe_length <= 32'd0;
-                               need_error <= 1'b1; need_ack <= 1'b1; syndrome <= AETH_NAK_INV;
+                               /* UD 没有 ACK/NAK 语义（IBTA §9.8.5）：出错只报本地 CQE，
+                                * 不能回线上 NAK，否则对端会收到一个不该存在的 ACK/Nak。 */
+                               if (!is_ud_send) begin
+                                   need_error <= 1'b1; need_ack <= 1'b1; syndrome <= AETH_NAK_INV;
+                               end
                                main_state <= MAIN_CQE;
                            end else begin
                                translate_key_main <= dma_read_data[63:32]; translate_address_main <= dma_read_data[127:64];
@@ -611,10 +730,16 @@ module roce_resp
                                dbg_access_shot <= {cursor_remaining, cursor_offset,
                                                  {translate_length_main, 3'd0, rq_consumer},
                                                  translate_address_main[31:0], translate_key_main, header.psn,
-                                                 {header.opcode, header.bad, header.qp_valid, 2'd0, qp_index,
-                                                  3'd0, header.payload_length}};
+                                                 // S4：qp_index 从 4 位截断改成 QP_W 位（128 QP 下 7 位），
+                                                 // 去掉原来的 3'd0 填充正好补上 3 位，字宽仍是 32。
+                                                 // 字段位置随之变成 [19:13] —— tool/roce_acc_snapshot.sh 要同步改。
+                                                 {header.opcode, header.bad, header.qp_valid, 2'd0, QP_W'(qp_index),
+                                                  header.payload_length}};
                            end
-                           need_error <= 1'b1; need_ack <= 1'b1; syndrome <= AETH_NAK_ACCESS;
+                           /* 同 M2a：UD 的翻译失败只报 CQE，不回 NAK。 */
+                           if (!is_ud_send) begin
+                               need_error <= 1'b1; need_ack <= 1'b1; syndrome <= AETH_NAK_ACCESS;
+                           end
                            if (is_send) begin
                                need_cqe <= 1'b1; cqe_opcode <= WC_RECV; cqe_status <= WCS_LOC_PROT_ERR;
                                cqe_length <= 32'd0;
@@ -717,9 +842,18 @@ module roce_resp
             MAIN_CQE: begin
                 cqe_valid <= 1'b1;
                 cqe_cq_index    <= qpc_rcq(qp_context);
-                cqe_data   <= {(header.has_immediate ? header.immediate : 32'd0), cqe_length,
-                            8'd0, 4'd0, qp_index, cursor_wqe_index,
-                            1'b0, 13'd0, 1'b1, header.has_immediate, cqe_status, cqe_opcode};
+                // dw4[24:0] = {src_qp_valid, src_qp[23:0]}：UD recv 时填 DETH 源 QPN；RC 时全 0。
+                // dw0[18] = has_grh：**恒 0**。GRH 目前没有实现——接收缓冲里只有 payload，
+                // 没有那 40 B（RoCEv2 线上本来就没有 GRH，要由接收侧从 IPv4/UDP 头合成）。
+                // 声明 has_grh=1 会让 ULP 按 IB 语义从 buf[40] 起读载荷（标准 ud_pingpong 就是
+                // 这么写的），读到的是错位数据。dw4 的 src_qp 仍然有效（DETH 里有），
+                // 只是不带 IBV_WC_GRH 标志。实现 GRH 写入后再把这一位改回 header.has_deth，
+                // 并同步 yuanrdma_hw.h 的 dw0[18] 与 provider 的注释。
+                // dw0[17] = is_recv（recv CQE 恒 1，不能丢）。
+                cqe_data   <= {7'd0, header.has_deth, header.deth_src_qp,     // dw4[31:0]
+                               (header.has_immediate ? header.immediate : 32'd0), cqe_length,
+                               8'd0, 8'(qp_index), cursor_wqe_index,          // dw1[23:16] qp_idx（ABI 8 位）
+                               1'b0, 12'd0, 1'b0, 1'b1, header.has_immediate, cqe_status, cqe_opcode};
                 if (cqe_valid && cqe_ready) begin
                     cqe_valid <= 1'b0;
                     main_state      <= MAIN_ACK;
@@ -741,6 +875,7 @@ module roce_resp
                     response_in.virtual_address    <= header.reth_virtual_address;
                     response_in.rkey  <= header.reth_rkey;
                     response_in.payload_length   <= header.reth_length;
+                    fill_response_ctx;
                     if (syndrome == AETH_ACK) event_tx_ack <= !(is_read_request && !need_ack);
                     else                 event_tx_nak <= 1'b1;
                 end
@@ -753,14 +888,16 @@ module roce_resp
                     main_state <= (payload_consumed && !need_error) ? MAIN_WRITE_BACK : MAIN_DRAIN;
             end
             MAIN_DRAIN: if (payload_consumed || (rx_payload_valid && rx_payload_last)) begin
-                         if (need_error) qp_set_error_main[qp_index] <= 1'b1;
+                         // UD 的错误不把 QP 打进 ERR：UD 没有重传，一个坏包不该毁掉整个 QP。
+                         // 错误本身仍按路径报（长度不符 → LOCAL_LEN_ERR CQE；翻译失败 → LOC_PROT_ERR）。
+                         if (need_error && !is_ud_send) qp_set_error_main[qp_index] <= 1'b1;
                          main_state <= MAIN_WRITE_BACK;
                      end
             MAIN_WRITE_BACK: begin
-                qp_expected_psn[qp_index] <= expected_psn; qp_msn[qp_index]  <= msn;  qp_ack_counter[qp_index] <= ack_counter;
-                qp_nak_sent[qp_index]  <= nak_sent; qp_rq_consumer[qp_index] <= rq_consumer; qp_message_active[qp_index] <= message_active;
-                qp_cursor_key[qp_index] <= cursor_key; qp_cursor_address[qp_index]  <= cursor_address;  qp_cursor_remaining[qp_index] <= cursor_remaining;
-                qp_cursor_offset[qp_index] <= cursor_offset; qp_cursor_wqe_index[qp_index] <= cursor_wqe_index;
+                qp_expected_psn[qp_index[QP_W-1:LANE_BITS]] <= expected_psn; qp_msn[qp_index[QP_W-1:LANE_BITS]]  <= msn;  qp_ack_counter[qp_index[QP_W-1:LANE_BITS]] <= ack_counter;
+                qp_nak_sent[qp_index[QP_W-1:LANE_BITS]]  <= nak_sent; qp_rq_consumer[qp_index[QP_W-1:LANE_BITS]] <= rq_consumer; qp_message_active[qp_index[QP_W-1:LANE_BITS]] <= message_active;
+                qp_cursor_key[qp_index[QP_W-1:LANE_BITS]] <= cursor_key; qp_cursor_address[qp_index[QP_W-1:LANE_BITS]]  <= cursor_address;  qp_cursor_remaining[qp_index[QP_W-1:LANE_BITS]] <= cursor_remaining;
+                qp_cursor_offset[qp_index[QP_W-1:LANE_BITS]] <= cursor_offset; qp_cursor_wqe_index[qp_index[QP_W-1:LANE_BITS]] <= cursor_wqe_index;
                 done_reg <= 1'b1;
                 main_state   <= MAIN_IDLE;
             end
@@ -784,6 +921,10 @@ module roce_resp
     reg  [63:0]  out_physical_address0, out_physical_page1;
     reg  [QP_NUM-1:0] qp_set_error_out;
     assign qp_set_error = qp_set_error_main | qp_set_error_out;
+    // B6439：READ RESP 的 opcode 与派生长度共用（out_first/out_last_chunk 只在本状态机里改）
+    wire [7:0]   out_emit_opcode = (out_first && out_last_chunk) ? OP_READ_RESP_ONLY :
+                                   out_first ? OP_READ_RESP_FIRST :
+                                   out_last_chunk  ? OP_READ_RESP_LAST : OP_READ_RESP_MID;
 
     assign translate_valid[1]     = (out_state == OUT_TRANSLATE);
     assign translate_key[63:32]   = entry.rkey;
@@ -792,6 +933,21 @@ module roce_resp
     assign translate_access[7:4]     = ACC_REMOTE_READ;
     assign translate_protection_domain[31:16]    = out_protection_domain;
 
+    // 回包任务的组头字段 + 派生长度（S3 与 B6439 的字段在同一处装，避免两版各自漂移）
+    task automatic fill_job_hdr(input logic [7:0] opcode, input logic [12:0] payload_length);
+        tx_job.tos       <= entry.tos;
+        tx_job.ttl       <= entry.ttl;
+        tx_job.dmac      <= entry.dmac;
+        tx_job.dip       <= entry.dip;
+        tx_job.sport     <= entry.sport;
+        tx_job.dqpn      <= entry.dqpn;
+        tx_job.csum_base <= ip_csum_base(entry.dip, entry.ttl, local_ip);
+        // B6439：头长随 opcode 变（ACK/NAK 58 B；READ RESP 70/58/62 B 视 RETH/AETH/IMM）
+        tx_job.header_length   <= tx_header_length(opcode);
+        tx_job.header_skip     <= 7'd128 - tx_header_length(opcode);
+        tx_job.ip_total_length <= tx_ip_total_length(opcode, payload_length);
+        tx_job.frame_length    <= tx_frame_length(opcode, payload_length);
+    endtask
     always @(posedge clk) begin
         qp_set_error_out   <= '0;
         response_out_ready <= 1'b0;
@@ -802,8 +958,8 @@ module roce_resp
             OUT_IDLE: if (response_out_valid && !response_out_ready) begin
                         response_out_ready <= 1'b1;
                         entry      <= response_out;
-                        out_path_mtu  <= pmtu_bytes(qpc_pmtu(qpc[response_out.qp_index*512 +: 512]));
-                        out_protection_domain    <= qpc_pd(qpc[response_out.qp_index*512 +: 512]);
+                        out_path_mtu  <= pmtu_bytes(response_out.pmtu);
+                        out_protection_domain    <= response_out.pd;
                         out_address    <= response_out.virtual_address;
                         out_remaining   <= response_out.payload_length;
                         out_psn   <= response_out.psn;
@@ -818,6 +974,7 @@ module roce_resp
                         tx_job.psn      <= out_psn;
                         tx_job.aeth_syndrome <= (out_state == OUT_NAK) ? AETH_NAK_ACCESS : entry.syndrome;
                         tx_job.aeth_msn <= entry.msn;
+                        fill_job_hdr(OP_ACK, 13'd0);
                         if (tx_job_valid && tx_job_ready) begin
                             tx_job_valid <= 1'b0;
                             out_state      <= OUT_IDLE;
@@ -844,15 +1001,14 @@ module roce_resp
                         tx_job_valid        <= 1'b1;
                         tx_job          <= '0;
                         tx_job.qp_index       <= entry.qp_index;
-                        tx_job.opcode   <= (out_first && out_last_chunk) ? OP_READ_RESP_ONLY :
-                                          out_first ? OP_READ_RESP_FIRST :
-                                          out_last_chunk  ? OP_READ_RESP_LAST : OP_READ_RESP_MID;
+                        tx_job.opcode   <= out_emit_opcode;
                         tx_job.psn      <= out_psn;
                         tx_job.aeth_syndrome <= AETH_ACK;
                         tx_job.aeth_msn <= entry.msn;
                         tx_job.payload_length      <= out_chunk_length;
                         tx_job.physical_address0      <= out_physical_address0;
                         tx_job.physical_page1      <= out_physical_page1;
+                        fill_job_hdr(out_emit_opcode, out_chunk_length);
                         if (tx_job_valid && tx_job_ready) begin
                             tx_job_valid <= 1'b0;
                             out_address     <= out_address + {51'd0, out_chunk_length};

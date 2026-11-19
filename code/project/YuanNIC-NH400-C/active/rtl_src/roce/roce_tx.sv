@@ -1,17 +1,17 @@
 // roce_tx.sv
 // TX 组包：2 个任务源（0 响应方 ACK/READ RESP，1 请求方）按包轮询 ->
 //  A 级：有 payload 的任务先发 DMA 读，再进在途 FIFO（读与组包流水，掩盖 PCIe 读延迟）；
-//  B 级：查 QPC，组 Eth/IPv4/UDP/BTH/扩展头（含 IP 校验和），头部右对齐放进 128 B 两拍，
+//  B 级：用任务自带的组头字段（S3 起不再查 QPC）组 Eth/IPv4/UDP/BTH/扩展头（含 IP 校验和），头部右对齐放进 128 B 两拍，
 //        与 payload（尾部 pad_count 补 0）一起送 roce_skip_align 去掉头前填充，输出连续以太网帧
 //        （不含 ICRC）。frame_last_bytes = (帧长 + 4) mod 128（加上 ICRC 后末拍有效字节，供 MAC 侧）。
 // 头长只有 54/58/70/74 四种（skip = 74/70/58/54，mod 64 不落在 1..3，冲刷最多一拍）。
 //
 // 每包时序（1024 bit，1 KB 包 = 9 拍）：
-//   BUILD_PREP          1 拍：取任务 + 查 QPC + 组头 + 算 IP 校验和 + 右对齐到 128 B + 给
+//   BUILD_PREP          1 拍：取任务 + 组头 + 算 IP 校验和 + 右对齐到 128 B + 给
 //                            skip_align 元数据，并把头部（恒单拍）同拍送出
 //   BUILD_PAYLOAD       8 拍：每拍 128 B payload
-// 组包所需的全部组合逻辑都吃 build_job_head（在途 FIFO 的输出，PREP 拍有效）与
-// qpc[build_job_head.qp_index]，所以 PREP 一拍就能出完整头部。
+// 组包所需的全部组合逻辑只吃 build_job_head（在途 FIFO 的输出，PREP 拍有效），
+// 所以 PREP 一拍就能出完整头部。
 //
 // 1024 bit（B6386）：引擎内部由 512 位加宽到 1024 位，与 roce_top/MAC 侧同宽，
 // 删掉了 roce_tx_out 的 512→1024 适配器。头部最长 74 B，一拍装得下，
@@ -25,7 +25,6 @@ module roce_tx
     input  wire                    rst,
     input  wire  [47:0]            local_mac,
     input  wire  [31:0]            local_ip,
-    input  wire  [QP_NUM*512-1:0]  qpc,
     // 任务
     input  wire  [1:0]             tx_job_valid,
     output wire  [1:0]             tx_job_ready,
@@ -55,7 +54,7 @@ module roce_tx
     // 因为它是「这个包被允许上线」的那一拍，且 job 的值稳定（event_tx_packet 那拍 job 可能
     // 已被下一包的 PREP 覆盖）。
     output reg                     event_tx_admit,
-    output reg  [3:0]              event_tx_admit_qp,
+    output reg  [QP_W-1:0]         event_tx_admit_qp,
     output reg  [12:0]             event_tx_admit_length,
     // 调试：{inflight_used[4:0], skip_align_state[2:0], build_state[1:0]}
     // 布局见 roce_debug.sv 0x056C：[10] = inflight[4]（B6413 起；此前该位恒 0），
@@ -136,61 +135,32 @@ module roce_tx
     function automatic [31:0] swap32(input [31:0] value); swap32 = {value[7:0], value[15:8], value[23:16], value[31:24]}; endfunction
     function automatic [63:0] swap64(input [63:0] value); swap64 = {swap32(value[31:0]), swap32(value[63:32])}; endfunction
 
-    // 组包输入：在途 FIFO 的输出（PREP 拍有效）与它对应的 QPC。全部是组合值，
-    // 所以 PREP 一拍内就能算出完整头部、校验和与右对齐结果。
+    // 组包输入：在途 FIFO 的输出（PREP 拍有效）。S3 起组头字段都在任务里，没有任何按 QP 的选路。
     tx_job_t      build_job;             // 别名，强调下面这一整段读的是 FIFO 输出
-    wire [511:0]  build_qpc;
     assign build_job = build_job_head;
-    assign build_qpc = qpc[build_job_head.qp_index*512 +: 512];
 
     wire       header_has_reth = op_has_reth(build_job.opcode);
     wire       header_has_aeth = op_has_aeth(build_job.opcode);
     wire       header_has_immediate  = op_has_imm(build_job.opcode);
+    // UD（0x64/0x65）：BTH 后跟 DETH 8 B（Q_Key 4 B + 源 QPN 3 B + 1 B 保留），而不是 RETH。
+    // 目的 QPN 不另带——BTH 的 Dest QP 本身就是 UD 的目的 QPN（复用 build_job.dqpn）。
+    wire       header_has_deth = op_has_deth(build_job.opcode);
     // CNP：BTH 后跟 16 B 保留（不是 RETH），所以头长与 READ RESP 一样是 70 B，但内容全 0。
     wire       header_is_cnp   = op_is_cnp(build_job.opcode);
-    wire [6:0] extension_length    = (header_has_reth ? 7'd16 : 7'd0) + (header_has_aeth ? 7'd4 : 7'd0) +
-                                     (header_has_immediate ? 7'd4 : 7'd0) + (header_is_cnp ? 7'd16 : 7'd0);
-    wire [1:0] job_pad_count   = 2'(-build_job.payload_length);
-    // IP 总长 = 20 + 8 + 12 + extension_length + payload + pad_count + 4(ICRC)
-    wire [15:0] computed_ip_total_length = 16'd44 + {9'd0, extension_length} + {3'd0, build_job.payload_length} + {14'd0, job_pad_count};
+    // B6439：extension_length / header_length / header_skip / ip_total_length / frame_length
+    // 全部由产生方算好、随 tx_job 流过在途 FIFO，PREP 拍只读寄存器。
+    // B6438 的 core −0.301 ns 最差路径正是「FIFO 出口 → 这四项译码求和 → add_4/5/87/86/88
+    // → skip_align 移位」，见 roce-optimization-log.md §68。
+    wire [1:0] job_pad_count   = tx_pad_count(build_job.payload_length);
+    wire [15:0] computed_ip_total_length = build_job.ip_total_length;
 
-    // ---- 每 QP 预算的包头静态部分（B6433）
-    // B6432 STA：全片最差的 core 路径是 PREP 拍「在途 FIFO 出口 → 512 位 QPC 16 选 1 → 9 操作数 IP 校验和
-    // 加法 → 两级折叠 → 包头 → 对齐移位」（每 lane 数千条，−0.20~−0.265 ns）；阶段 2 又往这条链上加了
-    // tos_valid 选择与 CNP 的扩展长度。校验和里与包无关的部分（0x4000 标志、TTL/协议、源/目的 IP）只取决于
-    // QPC 与本地 IP，二者在 QP 存活期间是准静态的，所以按 QP 预先加好、寄存：PREP 拍只剩「选 1 个 20 位
-    // 预算和 + TOS 字 + IP 总长」三操作数加法。QPC 改写后 1 拍生效（QP 建链到发第一个包之间隔着 PCIe 门铃，
-    // 远大于 1 拍）。TOS 也按 QP 寄存一份，PREP 拍不再从 512 位 QPC 里选。
-    // 每个 QP 一个生成块、各自的寄存器，再打平成向量：避免同一非打平数组被多个 always 块写
-    // （Quartus 会按多驱动报错，见 roce_pfc.sv gen_prio_occ 的注释）。
-    wire [QP_NUM*20-1:0] qp_csum_base_flat;
-    wire [QP_NUM*8-1:0]  qp_tos_flat;
-    genvar gq;
-    generate
-        for (gq = 0; gq < QP_NUM; gq = gq + 1) begin : gen_qp_hdr
-            wire [511:0] qc  = qpc[gq*512 +: 512];
-            wire [31:0]  dip = qpc_dip(qc);
-            wire [7:0]   ttl = qpc_ttl(qc);
-            reg  [19:0]  base_q;
-            reg  [7:0]   tos_q;
-            always @(posedge clk) begin
-                tos_q  <= qpc_tos(qc);
-                base_q <= 20'h04000 + {4'd0, ttl, 8'h11} +
-                          {4'd0, local_ip[7:0], local_ip[15:8]} + {4'd0, local_ip[23:16], local_ip[31:24]} +
-                          {4'd0, dip[7:0], dip[15:8]} + {4'd0, dip[23:16], dip[31:24]};
-            end
-            assign qp_csum_base_flat[gq*20 +: 20] = base_q;
-            assign qp_tos_flat[gq*8 +: 8]         = tos_q;
-        end
-    endgenerate
-
-    // TOS：CNP 用独立 DSCP（NVIDIA cnp_dscp 默认 48，且 ECN 必须为 00，否则 CNP 自己又被标 CE），
-    // 其它包沿用 QPC 的 TOS。tos_valid 是任务自带的覆盖位，只有 CNP 置 1。
-    wire [7:0]  header_tos = build_job.tos_valid ? build_job.tos : qp_tos_flat[build_job_head.qp_index*8 +: 8];
-
-    // IPv4 头校验和（大端 16 bit 字求和，校验和字段为 0、id 为 0）。当拍算完当拍用，不再寄存。
-    // 与 B6432 及以前的 9 操作数写法逐位等价：加法结合律，20 位不溢出（9 × 0xFFFF < 2^20）。
-    wire [19:0] computed_checksum_sum = qp_csum_base_flat[build_job_head.qp_index*20 +: 20] +
+    // ---- IP 校验和（B6433 起三操作数口径）
+    // B6433 把与包无关的部分（0x4000 标志、TTL/协议、源/目的 IP）按 QP 预加并寄存，PREP 拍只剩
+    // 「静态和 + TOS 字 + IP 总长」三项。S3 起静态和 csum_base 由生成任务的一方从已装载上下文算好、
+    // 随任务进在途 FIFO，PREP 拍直接取用：原来的 16 选 1（128 QP 时 128 选 1）选路彻底去掉。
+    // TOS 同理：任务里的 tos 恒有效（CNP 由引擎填 cnp_tos），原来的 tos_valid 二选一也去掉。
+    wire [7:0]  header_tos = build_job.tos;
+    wire [19:0] computed_checksum_sum = build_job.csum_base +
                         {4'd0, 8'h45, header_tos} + {4'd0, computed_ip_total_length};
     wire [16:0] checksum_fold1 = {1'b0, computed_checksum_sum[15:0]} + {13'd0, computed_checksum_sum[19:16]};
     wire [15:0] checksum_fold2 = checksum_fold1[15:0] + {15'd0, checksum_fold1[16]};
@@ -199,26 +169,26 @@ module roce_tx
     reg [1023:0] header_computed;
     always @* begin
         header_computed = '0;
-        header_computed[0   +: 48] = qpc_dmac(build_qpc);
+        header_computed[0   +: 48] = build_job.dmac;
         header_computed[48  +: 48] = local_mac;
         header_computed[96  +: 16] = 16'h0008;                 // EtherType 0x0800
         header_computed[112 +: 8]  = 8'h45;
         header_computed[120 +: 8]  = header_tos;
         header_computed[128 +: 16] = swap16(computed_ip_total_length);
         header_computed[160 +: 16] = 16'h0040;                 // DF
-        header_computed[176 +: 8]  = qpc_ttl(build_qpc);
+        header_computed[176 +: 8]  = build_job.ttl;
         header_computed[184 +: 8]  = 8'h11;
         header_computed[192 +: 16] = computed_checksum;        // IP 校验和（当拍算完当拍写，不再单独占一拍）
         header_computed[208 +: 32] = local_ip;
-        header_computed[240 +: 32] = qpc_dip(build_qpc);
-        header_computed[272 +: 16] = swap16(qpc_sport(build_qpc));
+        header_computed[240 +: 32] = build_job.dip;
+        header_computed[272 +: 16] = swap16(build_job.sport);
         header_computed[288 +: 16] = 16'hB712;                 // 4791
         header_computed[304 +: 16] = swap16(computed_ip_total_length - 16'd20);
         header_computed[336 +: 8]  = build_job.opcode;
         // BTH byte1 = {SE, M, PadCnt, TVer}。M 只有 CNP 以外的 opcode 才置 1（CNP 的 M 必须为 0）。
         header_computed[344 +: 8]  = {build_job.solicited, !header_is_cnp, job_pad_count, 4'd0};
         header_computed[352 +: 16] = 16'hFFFF;                 // P_Key
-        header_computed[376 +: 24] = swap24(qpc_dqpn(build_qpc));
+        header_computed[376 +: 24] = swap24(build_job.dqpn);
         header_computed[400 +: 8]  = {build_job.ack_request, 7'd0};
         header_computed[408 +: 24] = swap24(build_job.psn);
         if (header_has_reth) begin
@@ -227,9 +197,24 @@ module roce_tx
             header_computed[528 +: 32] = swap32(build_job.reth_length);
         end
         if (header_has_aeth) header_computed[432 +: 32] = {swap24(build_job.aeth_msn), build_job.aeth_syndrome};
+        // UD 的 DETH（IBTA §9.8.5）：BTH 起于字节 42、12 B → DETH 起于字节 54。
+        //   [432 +: 32] = 字节 54..57 = Q_Key（网络序，任务里是主机序，swap32）
+        //   [464 +: 24] = 字节 58..60 = 源 QPN（24 bit，网络序，swap24）
+        //   字节 61（[488 +: 8]）= 保留，header_computed 复位即 0，这里不写。
+        // 目的 QPN 在 BTH（[376 +: 24]，上面已按 build_job.dqpn 写过），DETH 里没有。
+        if (header_has_deth) begin
+            header_computed[432 +: 32] = swap32(build_job.deth_qkey);
+            header_computed[464 +: 24] = swap24(build_job.deth_src_qp);
+        end
         if (header_has_immediate)  begin
-            if (header_has_reth) header_computed[560 +: 32] = build_job.immediate;
-            else        header_computed[432 +: 32] = build_job.immediate;
+            // ImmDt 的位置随前一种扩展头走：RETH 之后 = 字节 70；DETH 之后 = 字节 62；
+            // 都没有 = 字节 54（RC 的 SEND_ONLY_IMM / SEND_LAST_IMM）。
+            // **UD_IMM 无 RETH 但有 DETH**，必须落在 62——旧代码只判 RETH，会把它写进 432
+            // （字节 54）覆盖 DETH 的 Q_Key，对端 qkey 校验失败整包丢，是静默错帧。
+            // 与接收侧 roce_rx_parse.sv 的 immediate_offset（reth?70 : ud?62 : 54）同口径。
+            if (header_has_reth)       header_computed[560 +: 32] = build_job.immediate;
+            else if (header_has_deth)  header_computed[496 +: 32] = build_job.immediate;
+            else                       header_computed[432 +: 32] = build_job.immediate;
         end
         // CNP：BTH byte4 = {FECN, BECN, 6'b0}，BECN 置 1（对端据此知道这是拥塞通知）；
         // 16 B 保留字段全 0（header_computed 复位即 0），PSN / AckReq 也都是 0。
@@ -240,8 +225,8 @@ module roce_tx
         end
     end
 
-    wire [6:0]    build_header_length = 7'd54 + extension_length;
-    wire [12:0]   frame_length = 13'd54 + {6'd0, extension_length} + build_job.payload_length + {11'd0, job_pad_count};
+    wire [6:0]    build_header_length = build_job.header_length;
+    wire [12:0]   frame_length = build_job.frame_length;
 
     // 1024 bit（B6386）：一拍 128 B，最长头 74 B 也装得进，所有包都是**单拍头**，
     // BUILD_HEADER_BEAT1 状态整个删掉。skip 恒为 128 - header_length。
@@ -249,16 +234,22 @@ module roce_tx
     // 历史（512 bit，§23）：那时头长 <= 64 的对齐到 64 B 以避开 skip_align 的
     // first_useful_beat=1，否则第 0 拍整拍被丢弃。1024 下 skip < 128 = BEAT_BYTES，
     // first_useful_beat 恒 0，这个区分不再需要，统一对齐到 128 B。
-    wire [6:0]    header_skip = 7'd128 - build_header_length;
+    wire [6:0]    header_skip = build_job.header_skip;
 
-    // 头部右对齐到 128 B。常量移位，纯连线 + 4:1 选择。
+    // 头部右对齐到 128 B。常量移位，纯连线 + 选择。
+    // 语义：128 B 一拍里，头占**最低** header_length 字节([0 +: header_length*8])，
+    // 右对齐后这 header_length 字节要落在 [ (128-L)*8 +: L*8 ]，即左移 (128-L)*8 位；
+    // 之后 skip_align 用 meta_skip = header_skip = 128-L 丢掉低 (128-L) 字节，剩下的正好是头。
+    // **两项必须成对**：case 里的移位量写错，skip 却仍按 L 丢字节 → 头整体错位（静默错帧）。
     reg [1023:0] header_aligned;
     always @* begin
         case (build_header_length)
             7'd54:   header_aligned = header_computed << (74*8);    // 对齐 128 B
             7'd58:   header_aligned = header_computed << (70*8);    // 对齐 128 B
+            7'd62:   header_aligned = header_computed << (66*8);    // UD（DETH 8 B）：(128-62)*8
+            7'd66:   header_aligned = header_computed << (62*8);    // UD_IMM（DETH 8 + Imm 4）：(128-66)*8
             7'd70:   header_aligned = header_computed << (58*8);    // 对齐 128 B
-            default: header_aligned = header_computed << (54*8);    // 74 B 头
+            default: header_aligned = header_computed << (54*8);    // 74 B 头（CNP / READ RESP）
         endcase
     end
 
@@ -284,7 +275,13 @@ module roce_tx
     assign dma_read_ready = (build_state == BUILD_PAYLOAD) && align_in_ready;
 
     wire [2:0] align_debug_state;
-    roce_skip_align #(.DW(1024)) u_skip_align (
+    // B6502：skip 的取值范围是**有限**的（header_length 只有 54/58/62/66/70/74 → skip ∈ 54..74），
+    // 所以把移位窗口收窄到 [54, 74]：常数 54 B 变成纯连线的位选，桶形移位从 7 位降到 5 位、
+    // 操作数从 2048 位降到 1192 位。语义与全窗口逐位等价，见 roce_skip_align.sv 文件头。
+    // G0.4 残余（B6501 core −0.320 ns 的 4 条最差路径）的落地改动之一。
+    roce_skip_align #(
+        .DW(1024), .SKIP_BASE(54), .SKIP_RANGE(21)
+    ) u_skip_align (
         .clk(clk), .rst(rst),
         .debug_state(align_debug_state),
         .meta_valid(align_meta_valid), .meta_ready(align_meta_ready), .meta_skip(header_skip), .meta_length(frame_length),

@@ -49,7 +49,9 @@ module roce_engine
     output wire                   table_ack,
     output wire                   table_error,
     output wire [511:0]           table_read_data,
-    output wire [QP_NUM*512-1:0]  qpc_o,                 // 调试与共享 CQ 用（只取 lane 0）
+    // S3：原来这里输出整张 QPC（QP_NUM×512 位）给 roce_top 做调试读回；现在只给当前 QP 的 dw0
+    // （u_req 的 qp_context 快照低 32 位），roce_top 不再有按 qp_index 的 512 位选路。
+    output wire [31:0]            debug_qp_context_low,
     output wire [CQ_NUM*$bits(cqc_t)-1:0] cqc_flat,
     output wire [CQ_NUM-1:0]      cq_reset,
     // doorbell（未过滤，本模块按 QP 归属过滤）
@@ -113,12 +115,15 @@ module roce_engine
     // CQE 出口（到共享 roce_cq）
     output wire                   resp_cqe_valid,
     input  wire                   resp_cqe_ready,
-    output wire [3:0]             resp_cqe_cq,
-    output wire [127:0]           resp_cqe_data,
+    output wire [CQ_W-1:0]        resp_cqe_cq,
+    // S（UD）：CQE 160 bit —— dw0..dw3 是原来的 128 bit，dw4 = {7'd0, src_qp_valid, src_qp[23:0]}
+    // （UD recv 时填 DETH 源 QPN；RC 恒 0）。roce_resp/roce_req 输出 160 bit，
+    // roce_cq 也按 160 bit/client 收；这里若写回 128 会**静默丢掉 dw4**（-Wno-WIDTH 掩盖）。
+    output wire [159:0]           resp_cqe_data,
     output wire                   req_cqe_valid,
     input  wire                   req_cqe_ready,
-    output wire [3:0]             req_cqe_cq,
-    output wire [127:0]           req_cqe_data,
+    output wire [CQ_W-1:0]        req_cqe_cq,
+    output wire [159:0]           req_cqe_data,
     // 共享 roce_cq 的写回经本 lane DMA 写客户端 2
     input  wire                   cq_dma_write_request_valid,
     output wire                   cq_dma_write_request_ready,
@@ -188,7 +193,13 @@ module roce_engine
     wire lane_doorbell_rq   = doorbell_rq_valid && owns_doorbell_qp;
 
     // ------------------------------------------------------------ 资源表
-    wire [QP_NUM*512-1:0] qpc;
+    // S3：QPC 读口（0 = req 主状态机，1 = req 取指，2 = resp 主状态机）与小字段镜像
+    wire [3*16-1:0]       qpc_rdp_addr, qpc_rdp_addr_q;
+    wire [3*509-1:0]      qpc_rdp_data;
+    wire [2:0]            qpc_rdp_fresh;
+    wire [QP_NUM*5-1:0]   qp_timeout_flat;
+    wire [QP_NUM*3-1:0]   qp_prio_flat;
+    wire [511:0]          qpc_last_write;
     wire [QP_NUM*3-1:0]   qp_state_flat;
     wire [QP_NUM-1:0]     qp_state_change, qp_set_error, qp_set_error_requester, qp_set_error_responder;
     cqc_t                 cqc [CQ_NUM];
@@ -201,7 +212,6 @@ module roce_engine
     wire [63:0]           translate_physical_address0, translate_physical_page1;
     wire                  translate_error;
     assign qp_set_error = qp_set_error_requester | qp_set_error_responder;
-    assign qpc_o        = qpc;
     genvar ci;
     generate
         for (ci = 0; ci < CQ_NUM; ci = ci + 1) begin : gen_cqc
@@ -209,13 +219,17 @@ module roce_engine
         end
     endgenerate
 
-    roce_tbl #(.CLIENTS(3)) u_tbl (
+    roce_tbl #(.CLIENTS(3), .LANE_ID(LANE_ID), .LANE_BITS(LANE_W)) u_tbl (
         .clk(core_clk), .rst(rst_tbl),
         .table_request(table_request), .table_write_enable(table_write_enable),
         .table_select(table_select), .table_index(table_index),
         .table_write_data(table_write_data), .table_ack(table_ack),
         .table_error(table_error), .table_read_data(table_read_data),
-        .qpc(qpc), .qp_state_o(qp_state_flat), .qp_state_change(qp_state_change),
+        .qp_state_o(qp_state_flat), .qp_state_change(qp_state_change),
+        .qpc_rd_en(1'b0), .qpc_rd_addr(16'd0), .qpc_rd_data(), .qpc_rd_valid(),
+        .qpc_rdp_addr(qpc_rdp_addr), .qpc_rdp_data(qpc_rdp_data),
+        .qpc_rdp_addr_q(qpc_rdp_addr_q), .qpc_rdp_fresh(qpc_rdp_fresh),
+        .qp_timeout_o(qp_timeout_flat), .qp_prio_o(qp_prio_flat), .qpc_last_write(qpc_last_write),
         .qp_set_error(qp_set_error), .cqc(cqc), .cq_reset(cq_reset),
         .translate_valid(translate_valid), .translate_ready(translate_ready),
         .translate_key(translate_key), .translate_virtual_address(translate_virtual_address),
@@ -500,9 +514,14 @@ module roce_engine
     // ------------------------------------------------------------ 响应方
     wire     responder_job_valid, responder_job_ready;
     tx_job_t responder_job;
+    wire [511:0] resp_qp_context;     // u_resp 当前包的 QPC 工作副本（CNP 组头字段从这里锁存）
 
-    roce_resp u_resp (
-        .clk(core_clk), .rst(rst_resp), .qpc(qpc), .qp_state_i(qp_state_flat),
+    // S4：LANE_ID 让每个实例只持有自己 1/4 的每 QP 阵列（应答方 32 项而不是 128 项）
+    roce_resp #(.LANE_ID(LANE_ID)) u_resp (
+        .clk(core_clk), .rst(rst_resp), .local_ip(local_ip), .qp_context_o(resp_qp_context),
+        .qpc_rd_addr(qpc_rdp_addr[2*16 +: 16]), .qpc_rd_data(qpc_rdp_data[2*509 +: 509]),
+        .qpc_rd_addr_q(qpc_rdp_addr_q[2*16 +: 16]), .qpc_rd_fresh(qpc_rdp_fresh[2]),
+        .qpc_last_write(qpc_last_write), .qp_state_i(qp_state_flat),
         .qp_state_change(qp_state_change), .qp_set_error(qp_set_error_responder),
         .doorbell_rq_valid(lane_doorbell_rq), .doorbell_data(doorbell_data),
         .table_request(table_request), .table_write_enable(table_write_enable),
@@ -606,8 +625,17 @@ module roce_engine
         end
     end
 
-    roce_req #(.CORE_CLOCK_MHZ(CORE_CLOCK_MHZ)) u_req (
-        .clk(core_clk), .rst(rst_req), .qpc(qpc), .qp_state_i(qp_state_flat),
+    // S4：roce_req 的每 QP 阵列缩容只有 impl:roce_req 做了才生效，参数在这里一并传好
+    //（未声明的 parameter 由 Verilator 报 PINNOTFOUND 警告，-Wno-fatal 不拦；
+    //  roce_req 加了参数之后自动接上，不需要再改本文件）。
+    roce_req #(.CORE_CLOCK_MHZ(CORE_CLOCK_MHZ), .LANE_ID(LANE_ID)) u_req (
+        .clk(core_clk), .rst(rst_req), .local_ip(local_ip),
+        .qpc_rd0_addr(qpc_rdp_addr[0 +: 16]), .qpc_rd0_data(qpc_rdp_data[0 +: 509]),
+        .qpc_rd0_addr_q(qpc_rdp_addr_q[0 +: 16]), .qpc_rd0_fresh(qpc_rdp_fresh[0]),
+        .qpc_rd1_addr(qpc_rdp_addr[16 +: 16]), .qpc_rd1_data(qpc_rdp_data[509 +: 509]),
+        .qpc_rd1_addr_q(qpc_rdp_addr_q[16 +: 16]), .qpc_rd1_fresh(qpc_rdp_fresh[1]),
+        .qp_timeout_i(qp_timeout_flat), .qp_prio_i(qp_prio_flat), .qpc_last_write(qpc_last_write),
+        .debug_qp_context_low(debug_qp_context_low), .qp_state_i(qp_state_flat),
         .qp_state_change(qp_state_change), .qp_set_error(qp_set_error_requester),
         .doorbell_sq_valid(lane_doorbell_sq), .doorbell_data(doorbell_data),
         .rx_pfc(rx_pfc), .pfc_gate_enable(pfc_gate_enable),
@@ -674,7 +702,17 @@ module roce_engine
     wire cnp_qualified  = rx_header_take && !rx_header.bad && rx_header.qp_valid &&
                           (rx_header.opcode <= OP_READ_REQ) && rx_header.ecn_congestion;
     reg        cnp_pending;
-    reg  [3:0] cnp_qp;
+    reg  [QP_W-1:0] cnp_qp;
+    // S3：CNP 的组头字段（dmac/dip/sport/dqpn/ttl）与 IP 校验和静态部分在挂起时一并锁存，
+    // 不再让 roce_tx 按 cnp_qp 查 QPC。来源是 u_resp 的 qp_context：CNP 只对请求类包触发，
+    // 请求类包路由给 u_resp，而 u_resp 在拉 rx_header_ready 的同一沿装载 qp_context，
+    // 握手（cnp_qualified）发生在下一拍——此时 qp_context 恰是这个 CE 包所属 QP 的 QPC。
+    reg  [7:0]  cnp_ttl;
+    reg  [47:0] cnp_dmac;
+    reg  [31:0] cnp_dip;
+    reg  [15:0] cnp_sport;
+    reg  [23:0] cnp_dqpn;
+    reg  [19:0] cnp_csum_base;
     // 发出（被 roce_tx 取走）的那一拍清挂起位。cnp_grant 是 roce_cnp 的寄存器输出，
     // 与它同拍的 cnp_job_valid 一定能被 roce_tx 看到（槽 0 的 issue_take 只看在途 FIFO
     // 有没有空位），所以不需要额外的 skid。ready 就是 roce_tx 槽 0 的 ready。
@@ -703,6 +741,12 @@ module roce_engine
         end else if (cnp_qualified) begin
             cnp_pending <= 1'b1;
             cnp_qp      <= rx_header.qp_index;
+            cnp_ttl       <= qpc_ttl(resp_qp_context);
+            cnp_dmac      <= qpc_dmac(resp_qp_context);
+            cnp_dip       <= qpc_dip(resp_qp_context);
+            cnp_sport     <= qpc_sport(resp_qp_context);
+            cnp_dqpn      <= qpc_dqpn(resp_qp_context);
+            cnp_csum_base <= ip_csum_base(qpc_dip(resp_qp_context), qpc_ttl(resp_qp_context), local_ip);
         end
     end
     assign event_cnp_sent = cnp_sent;
@@ -728,7 +772,24 @@ module roce_engine
         physical_address0: 64'd0,
         physical_page1: 64'd0,
         tos: cnp_tos,
-        tos_valid: 1'b1
+        ttl: cnp_ttl,
+        dmac: cnp_dmac,
+        dip: cnp_dip,
+        sport: cnp_sport,
+        dqpn: cnp_dqpn,
+        csum_base: cnp_csum_base,
+        // B6439：CNP 无 payload，头长 70（BTH 12 + 保留 16 + ... 见 roce_pkg 的 extension_length）
+        header_length: tx_header_length(OP_CNP),
+        header_skip: 7'd128 - tx_header_length(OP_CNP),
+        ip_total_length: tx_ip_total_length(OP_CNP, 13'd0),
+        frame_length: tx_frame_length(OP_CNP, 13'd0),
+        // UD 的 DETH：CNP 不是 UD，这两项必须显式清零。
+        // cnp_job 是全字段 assignment pattern，加字段时漏写会直接编译报错（Verilator
+        // "Assignment pattern missed initializing elements"）；但即使编译器放过的情形，
+        // 未赋值留下的 X / 上一包残留也会顺着 roce_tx 的 header_computed 进帧（§76.5 的教训），
+        // 所以这里按「先清零再逐字段填」的口径写明白。
+        deth_qkey: 32'd0,
+        deth_src_qp: 24'd0
     };
 
     // ------------------------------------------------------------ TX
@@ -744,19 +805,33 @@ module roce_engine
     // 对端暂停该优先级时也不能发（mlx5 同样按 QP 的 traffic class 发 ACK）。
     // roce_resp 的 tx_job 是寄存器，valid 期间字段保持不变，所以在这里挡 valid 即可；
     // roce_tx 的 tx_job_ready 只在看到 valid 时才拉高，ready 不用另外处理。
-    // 每 QP 的 blocked 位先寄存（与 roce_req.tx_pfc_blocked_q 同口径），选路只剩 16:1 选 1 位。
+    // 每 QP 的 blocked 位先寄存（与 roce_req.tx_pfc_blocked_q 同口径），选路只剩 32:1 选 1 位。
     // 代价：同一 lane 的 response FIFO 被挡住时，排在后面的其他 QP 的回包也要等（HOL）；
     // response FIFO 满后 roce_resp 主状态机停收 RX，staging 涨到 XOFF 阈值时本端会向对端发 PFC
     // —— 这正是 PFC 逐跳反压的语义。
-    reg  [QP_NUM-1:0] resp_pfc_blocked_q;
-    always @(posedge core_clk) begin
-        if (rst_glue) resp_pfc_blocked_q <= '0;
-        else
-            for (int qp = 0; qp < QP_NUM; qp++)
-                resp_pfc_blocked_q[qp] <= pfc_gate_enable && resp_gate &&
-                                          (rx_pfc[8] || rx_pfc[qpc[qp*512 + 7*32+16+5 +: 3]]);
-    end
-    wire responder_job_blocked     = resp_pfc_blocked_q[responder_job.qp_index];
+    //
+    // S4：本 lane 的 resp 只会发属主 QP 的回包（roce_rx_qpn_split 保证了投递），
+    // 所以 blocked 位只需要 QP_NUM/4 位。全局 QP 索引用拼接重建：global = (lq << LANE_BITS) | LANE_ID，
+    // lq 是 generate 展开的常量，qp_prio_flat 的切片因此静态，没有变址移位。
+    reg  [LANE_QPS-1:0] resp_pfc_blocked_q;
+    genvar lq;
+    generate
+        for (lq = 0; lq < LANE_QPS; lq = lq + 1) begin : gen_resp_pfc_blk
+            // GQ 是 generate 常量 → qp_prio_flat 的切片静态，无变址移位；
+            // rx_pfc 是 9 位（[8]=802.3x，[7:0]=每优先级），下标只能是这 3 位。
+            // **必须掩掉高位**：LANE_ID 是 int 类型形参（没有 0..3 的类型约束），
+            // PKG_LANE_W'(LANE_ID) 只是显式位宽转换、不截断，LANE_ID 若被传成 4 就会
+            // 让 GQ 取到 128 以上 → qp_prio_flat[509:506] 越界（roce_top 层面 lint 报 2 条 SELRANGE）。
+            localparam int GQ = (lq << LANE_BITS) | (LANE_ID & ((1 << LANE_BITS) - 1));
+            always @(posedge core_clk) begin
+                if (rst_glue) resp_pfc_blocked_q[lq] <= 1'b0;
+                else
+                    resp_pfc_blocked_q[lq] <= pfc_gate_enable && resp_gate &&
+                                              (rx_pfc[8] || rx_pfc[qp_prio_flat[GQ*3 +: 3]]);
+            end
+        end
+    endgenerate
+    wire responder_job_blocked     = resp_pfc_blocked_q[qp_local(responder_job.qp_index)];
     wire responder_job_valid_gated = responder_job_valid && !responder_job_blocked;
 
     wire          tx_frame_valid, tx_frame_ready, tx_frame_last;
@@ -765,7 +840,7 @@ module roce_engine
     wire [6:0]    tx_frame_last_bytes, tx_frame_last_beat_bytes;
 
     roce_tx u_tx (
-        .clk(core_clk), .rst(rst_tx), .local_mac(local_mac), .local_ip(local_ip), .qpc(qpc),
+        .clk(core_clk), .rst(rst_tx), .local_mac(local_mac), .local_ip(local_ip),
         .tx_job_valid({requester_job_valid, slot0_resp | slot0_cnp}),
         .tx_job_ready({requester_job_ready, slot0_ready}),
         .tx_job(tx_jobs),
@@ -789,12 +864,20 @@ module roce_engine
         .debug_state(tx_debug_state)
     );
 
-    // 准入事件：roce_tx 给的是「索引 + 长度」，这里转成 one-hot 送给 roce_top
+    // 准入事件：roce_tx 给的是「索引 + 长度」，这里转成 one-hot 送给 roce_top。
+    // S4：不用 QP_NUM'(1) << idx —— 128 位变址移位是 7 级 LUT。改成 generate 展开的常量比较，
+    // 每位只有「索引相等」一级 + 与 lane_tx_admit 相与，扇出最坏是那位比较器而不是整条移位链。
     wire                lane_tx_admit;
-    wire [3:0]          lane_tx_admit_qp_idx;
+    wire [QP_W-1:0]     lane_tx_admit_qp_idx;
     // (lane_tx_admit_qp_idx 只给 one-hot 转换用)
     wire [12:0]         lane_tx_admit_len;
-    wire [QP_NUM-1:0]   lane_tx_admit_qp_vec = lane_tx_admit ? (QP_NUM'(1) << lane_tx_admit_qp_idx) : '0;
+    wire [QP_NUM-1:0]   lane_tx_admit_qp_vec;
+    genvar gi;
+    generate
+        for (gi = 0; gi < QP_NUM; gi = gi + 1) begin : gen_admit_onehot
+            assign lane_tx_admit_qp_vec[gi] = lane_tx_admit && (lane_tx_admit_qp_idx == QP_W'(gi));
+        end
+    endgenerate
     assign event_tx_admit_qp     = lane_tx_admit_qp_vec;
     assign event_tx_admit_length = lane_tx_admit_len;
 

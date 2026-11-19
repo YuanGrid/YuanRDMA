@@ -230,7 +230,9 @@ module roce_top
     wire [31:0]  dma_test_repeat, dma_test_cycles;
     wire         dma_test_start, dma_test_busy, dma_test_done, dma_test_error;
     wire [31:0]  counter_rx_icrc_error, counter_rx_drop;
-    wire [5*32-1:0] counter_bas;
+    wire [5*32-1:0] counter_bas_raw;   // u_bas_mon 原始输出（内部 ar_outstanding 仍用它）
+    reg  [5*32-1:0] counter_bas_q;     // 出口打一拍，切断到 u_csr / u_debug 的长走线
+    wire [5*32-1:0] counter_bas = counter_bas_q;
     wire [10:0]  debug_bas_sticky;
     wire [7:0]   debug_bas_live;
     wire         debug_bas_sticky_clear;
@@ -353,10 +355,9 @@ module roce_top
     assign table_error     = lane_table_error[0];
     assign table_read_data = lane_table_read_data[table_read_lane*512 +: 512];
 
-    wire [LANES*QP_NUM*512-1:0]   lane_qpc;
+    wire [LANES*32-1:0]           lane_qp_context_low;   // S3：每 lane 当前 QP 的 QPC dw0
     wire [LANES*CQ_NUM*CQC_W-1:0] lane_cqc_flat;
     wire [LANES*CQ_NUM-1:0]       lane_cq_reset;
-    wire [QP_NUM*512-1:0]         qpc      = lane_qpc[0 +: QP_NUM*512];     // 调试观测用 lane 0
     wire [CQ_NUM-1:0]             cq_reset = lane_cq_reset[0 +: CQ_NUM];
     cqc_t                         cqc [CQ_NUM];                             // CQC 只由主机写，各 lane 一致
     genvar ci;
@@ -378,12 +379,24 @@ module roce_top
     roce_bas_mon u_bas_mon (
         .pcie_clk(pcie_clk), .pcie_rst(dp_pcie_rst), .clk(core_clk), .rst(dp_rst_misc),
         .bas_m2s(bas_m2s), .bas_s2m(bas_s2m), .sticky_clear(bas_sticky_clear_all),
-        .count_aw(counter_bas[0*32 +: 32]), .count_w_last(counter_bas[1*32 +: 32]), .count_b(counter_bas[2*32 +: 32]),
-        .count_ar(counter_bas[3*32 +: 32]), .count_r_last(counter_bas[4*32 +: 32]),
+        .count_aw(counter_bas_raw[0*32 +: 32]), .count_w_last(counter_bas_raw[1*32 +: 32]), .count_b(counter_bas_raw[2*32 +: 32]),
+        .count_ar(counter_bas_raw[3*32 +: 32]), .count_r_last(counter_bas_raw[4*32 +: 32]),
         .sticky(debug_bas_sticky), .live(debug_bas_live),
         .debug_ar_outstanding(debug_ar_outstanding),
         .debug_resp_sticky(debug_resp_sticky)
     );
+    // ---- BAS 计数的边界寄存（时序 G0.4 第 2 处，单独拆出来合入）
+    //
+    // 违例来源：u_bas_mon → u_csr / u_debug，数据延迟 4.381 ns 里 2.934 是 IC，
+    // 其中一跳从 X143 走到 X293（150 列、2.398 ns）。原因是 §65 的 LL_BAS_MON 把
+    // u_bas_mon 钉在保留区右缘 (132,196)-(143,215)，而 u_debug / u_csr 在 X293..305
+    // ——区域约束本身没错（它治的是 BAS 总线那一侧），错的是让计数器**组合**穿过这段距离。
+    //
+    // 这里在 u_bas_mon 出口打一拍：计数器是纯观测量（CSR 的 CNT_BAS_* 读回、0x0574 的
+    // debug_wr_outstanding），晚一拍对读回没有任何影响（software 侧本来就是轮询）。
+    // u_bas_mon 内部的 ar_outstanding 用的是它自己的 count_ar/count_r_last，仍走原始值，
+    // 不受这一拍影响。
+    always @(posedge core_clk) counter_bas_q <= counter_bas_raw;
 
     // ---- RX：front（mac_clk）-> demux（按 dest_qpn 分流，每 lane 各自过 CDC）
     //      -> 每 lane 一份 parse -> 对应 lane 的引擎
@@ -488,8 +501,9 @@ module roce_top
     // ---- 共享 CQ：客户端 = lane*2 + {0 resp, 1 req}；写回走产生该 CQE 的 lane 的 DMA
     localparam int CQ_CLIENTS = 2 * LANES;
     wire [CQ_CLIENTS-1:0]     cq_cqe_valid, cq_cqe_ready;
-    wire [CQ_CLIENTS*4-1:0]   cq_cqe_cq;
-    wire [CQ_CLIENTS*128-1:0] cq_cqe_data;
+    // S6：每个客户端的 CQ 编号 CQ_W 位（与 roce_engine 的 resp/req_cqe_cq 宽度一致）。
+    wire [CQ_CLIENTS*CQ_W-1:0] cq_cqe_cq;
+    wire [CQ_CLIENTS*160-1:0] cq_cqe_data;
     wire                      cq_dma_request_valid, cq_dma_write_valid;
     wire [63:0]               cq_dma_address, cq_dma_page1;
     wire [12:0]               cq_dma_length;
@@ -570,7 +584,7 @@ module roce_top
                 .table_select(table_select), .table_index(table_index), .table_write_data(table_write_data),
                 .table_ack(lane_table_ack[lane]), .table_error(lane_table_error[lane]),
                 .table_read_data(lane_table_read_data[lane*512 +: 512]),
-                .qpc_o(lane_qpc[lane*QP_NUM*512 +: QP_NUM*512]),
+                .debug_qp_context_low(lane_qp_context_low[lane*32 +: 32]),
                 .cqc_flat(lane_cqc_flat[lane*CQ_NUM*CQC_W +: CQ_NUM*CQC_W]),
                 .cq_reset(lane_cq_reset[lane*CQ_NUM +: CQ_NUM]),
                 .doorbell_sq_valid(doorbell_sq_valid), .doorbell_rq_valid(doorbell_rq_valid), .doorbell_data(doorbell_data),
@@ -586,9 +600,9 @@ module roce_top
                 .rx_payload_valid(lane_rx_payload_valid[lane]), .rx_payload_ready(lane_rx_payload_ready[lane]),
                 .rx_payload_data(lane_rx_payload_data[lane*1024 +: 1024]), .rx_payload_last(lane_rx_payload_last[lane]),
                 .resp_cqe_valid(cq_cqe_valid[lane*2]),   .resp_cqe_ready(cq_cqe_ready[lane*2]),
-                .resp_cqe_cq(cq_cqe_cq[(lane*2)*4 +: 4]), .resp_cqe_data(cq_cqe_data[(lane*2)*128 +: 128]),
+                .resp_cqe_cq(cq_cqe_cq[(lane*2)*CQ_W +: CQ_W]), .resp_cqe_data(cq_cqe_data[(lane*2)*160 +: 160]),
                 .req_cqe_valid(cq_cqe_valid[lane*2+1]),  .req_cqe_ready(cq_cqe_ready[lane*2+1]),
-                .req_cqe_cq(cq_cqe_cq[(lane*2+1)*4 +: 4]), .req_cqe_data(cq_cqe_data[(lane*2+1)*128 +: 128]),
+                .req_cqe_cq(cq_cqe_cq[(lane*2+1)*CQ_W +: CQ_W]), .req_cqe_data(cq_cqe_data[(lane*2+1)*160 +: 160]),
                 .cq_dma_write_request_valid(cq_dma_request_valid && (cq_dma_lane == LANE_W'(lane))),
                 .cq_dma_write_request_ready(lane_cq_dma_request_ready[lane]),
                 .cq_dma_write_request_address(cq_dma_address), .cq_dma_write_request_page1(cq_dma_page1),
@@ -710,7 +724,7 @@ module roce_top
     // ---- 调试观测：按 lane 打平后再送 roce_debug（分组寄存器见 roce_debug.sv 地址表）
     wire [LANES*20-1:0]      lane_req_state_flat;
     wire [LANES*11-1:0]      lane_tx_state_flat;
-    wire [LANES*4-1:0]       lane_qp_index_flat;
+    wire [LANES*QP_W-1:0]    lane_qp_index_flat;
     wire [LANES*3-1:0]       lane_qp_state_flat;
     wire [LANES*24-1:0]      lane_qp_psn_flat;
     wire [LANES*32-1:0]      lane_qp_context_low_flat;
@@ -733,7 +747,15 @@ module roce_top
     generate
         for (dl = 0; dl < LANES; dl = dl + 1) begin : gen_debug_lane
             wire [127:0] req = lane_req_debug_state[dl*128 +: 128];
-            wire [3:0]   qpi = req[23:20];
+            // S4：lane_qp_index_flat 是 LANES*QP_W = 4*7 位，但 roce_req 的 debug_state 只打包了
+            // 4 位 qp_index（其 debug_state 里的 4'(qp_index) 字段，注释写着「[23:20] 只 4 位」），
+            // 所以这里零扩到 QP_W 位——高位恒 0。
+            // 只影响调试读回：A_CORE_ACTIVE_QP 读 QP_W 位，只有低 4 位是真实值；
+            // 旧地址 A_QP_ACTIVE 本来就只取 [3:0]，行为不变。roce_req 若把该字段扩到 QP_W 位，
+            // 这里要同步改成 req[QP_W+19:20]。
+            // 显式零扩到 QP_W 位：隐式扩位 -Wall 会报 WIDTHEXPAND，Quartus 也要告警。
+            // QP_W >= 4 由引擎 QP_NUM >= 16 保证（QP_NUM = 8 时 QP_W=3，这里按 QP_W 的位宽复制会变成负次数，编译即暴露）。
+            wire [QP_W-1:0] qpi = {{(QP_W-4){1'b0}}, req[23:20]};
             assign lane_req_state_flat      [dl*20 +: 20] = req[19:0];
             // B6413：inflight 由 4 位扩到 5 位（深度 8 → 16），占用原先恒 0 的第 10 位。
             // 平铺宽度仍是 11，原来的 2 位占位缩成 1 位：
@@ -747,10 +769,11 @@ module roce_top
                                                              // 曾写成 [+2 -: 2]，取到 {skip_align[0], build_state[1]}，
                                                              // 结果 0x056C[1:0] 恒读 0 或 2、永远读不到 PAYLOAD（§37.5）。
                                                              lane_tx_debug_state[dl*10 + 1 -: 2]};
-            assign lane_qp_index_flat       [dl*4  +: 4]  = qpi;
-            assign lane_qp_state_flat       [dl*3  +: 3]  = qpc_state(lane_qpc[dl*QP_NUM*512 + qpi*512 +: 512]);
+            assign lane_qp_index_flat       [dl*QP_W +: QP_W] = qpi;
+            // S3：直接用 u_req 的 qp_context 快照（就是 qpi 这个 QP 的 QPC），不再按 qpi 选路
+            assign lane_qp_state_flat       [dl*3  +: 3]  = lane_qp_context_low[dl*32 +: 3];
             assign lane_qp_psn_flat         [dl*24 +: 24] = req[47:24];
-            assign lane_qp_context_low_flat [dl*32 +: 32] = lane_qpc[dl*QP_NUM*512 + qpi*512 +: 32];
+            assign lane_qp_context_low_flat [dl*32 +: 32] = lane_qp_context_low[dl*32 +: 32];
             assign lane_next_psn_flat       [dl*24 +: 24] = req[47:24];
             assign lane_unacked_psn_flat    [dl*24 +: 24] = req[71:48];
             assign lane_ack_counter_flat    [dl*6  +: 6]  = req[77:72];
@@ -765,7 +788,7 @@ module roce_top
     // 两段 1.0~1.1 ns 的跨区走线。观测量晚 1 拍对读回、卡死检测、快照都没有功能影响。
     reg  [LANES*20-1:0]      lane_req_state_q;
     reg  [LANES*11-1:0]      lane_tx_state_q;
-    reg  [LANES*4-1:0]       lane_qp_index_q;
+    reg  [LANES*QP_W-1:0]    lane_qp_index_q;
     reg  [LANES*3-1:0]       lane_qp_state_q;
     reg  [LANES*24-1:0]      lane_qp_psn_q;
     reg  [LANES*32-1:0]      lane_qp_context_low_q;
@@ -921,59 +944,81 @@ module roce_top
     // QP → lane 的绑定是 qp_index[LANE_W-1:0]，但全局上下文表按完整 qp_index 索引，
     // 一份就够了，也避免 4 份计数器互相不同步。
     // 事件汇聚：各 lane 给 one-hot 的「收到 CNP」与「准入发包」，直接或起来。
-    wire [QP_NUM-1:0] lane_rx_cnp_or;
+    //
+    // S5（2026-11-14）：DCQCN 跟着引擎 QP_NUM 一起扩到 128。u_dcqcn 内部的扫描、
+    // 上下文阵列、one-hot 优先级链都按 DCQCN_QP_NUM 展开；128 时扫描周期 128 拍
+    // （512 ns @ 250 MHz），仍小于 ALPHA_US 的 1 µs 预算。S4 时代 DCQCN 只覆盖
+    // QP0..15、QP16..127 恒放行的取舍不再需要——现在全部 128 个 QP 都受限速。
+    // 要回退到只覆盖前 16 个，把本常量改成 16 即可（tx_rate_ready 的高位补 1
+    // 逻辑见下面，QP_NUM > DCQCN_QP_NUM 时自动补恒 1）。
+    localparam int DCQCN_QP_NUM = QP_NUM;
+    // S5：DCQCN_QP_NUM = QP_NUM = 128，所以 DCQCN_QP_W = 7，与引擎的 QP_W 相同。
+    // 下面的 cnp_qp_q / admit_qp_q 仍用 DCQCN_QP_W（而不是直接写 QP_W），以便将来
+    // DCQCN_QP_NUM 再次小于 QP_NUM 时端口宽度还是正确的（位宽不一致时 Quartus 会截断高位）。
+    localparam int DCQCN_QP_W   = (DCQCN_QP_NUM > 1) ? $clog2(DCQCN_QP_NUM) : 1;
+    wire [DCQCN_QP_NUM-1:0] lane_rx_cnp_or;   // QP0..15 的 CNP 合并 one-hot（只扫前 DCQCN_QP_NUM 项）
     wire              lane_tx_admit_len_or;
     wire [12:0]       tx_admit_length_sum;
     wire [31:0]       dcqcn_read_value;
+    wire [DCQCN_QP_NUM-1:0] dcqcn_rate_ready; // u_dcqcn 的 QP_NUM 位输出，再补 1 到 tx_rate_ready
     wire        cc_dcqcn_hit = (csr_address[19:0] >= REG_DCQCN_BASE) && (csr_address[19:0] <= REG_DCQCN_END);
     genvar dq;
     generate
-        for (dq = 0; dq < QP_NUM; dq = dq + 1) begin : gen_dcqcn_or
+        for (dq = 0; dq < DCQCN_QP_NUM; dq = dq + 1) begin : gen_dcqcn_or
+            // lane_rx_cnp_qp 是 LANES*QP_NUM 位（引擎输出，不能改），但每个 lane 的 one-hot 都是
+            // **全局** QP 索引，所以把各 lane 的同一全局索引 q 或起来就够。
+            // S5：DCQCN_QP_NUM = QP_NUM = 128，所以这里覆盖全部 128 个 QP。
             reg [LANES-1:0] cnp_bits;
             always @* begin
                 for (int l = 0; l < LANES; l = l + 1)
                     cnp_bits[l] = lane_rx_cnp_qp[l*QP_NUM + dq];
             end
             assign lane_rx_cnp_or[dq] = |cnp_bits;
-            // admit_bits 只用于下面的长度/索引选择，不需要单独的总线
         end
     endgenerate
     // 准入长度与 QP：同一拍最多一个 lane 有准入事件（每个 lane 的 roce_tx 每拍最多出一个包），
     // 多 lane 同拍撞上时按 lane 0 优先——只影响升速的字节计数，量级可忽略。
-    reg  [3:0]  cnp_qp_q;      // 本拍收到 CNP 的 QP 索引（与 lane_rx_cnp_or 同拍）
+    // S5：DCQCN_QP_NUM = QP_NUM = 128，全部 QP 的准入事件都送进 DCQCN 计字节升速。
+    reg  [DCQCN_QP_W-1:0] cnp_qp_q;  // 本拍收到 CNP 的 QP 索引（与 lane_rx_cnp_or 同拍）
     always @* begin
-        cnp_qp_q = 4'd0;
+        cnp_qp_q = {DCQCN_QP_W{1'b0}};
         for (int l = LANES - 1; l >= 0; l = l - 1)
-            for (int q = 0; q < QP_NUM; q = q + 1)
-                if (lane_rx_cnp_qp[l*QP_NUM + q]) cnp_qp_q = 4'(q);
+            for (int q = 0; q < DCQCN_QP_NUM; q = q + 1)
+                if (lane_rx_cnp_qp[l*QP_NUM + q]) cnp_qp_q = DCQCN_QP_W'(q);
     end
 
     reg  [12:0] admit_len_q;
-    reg  [3:0]  admit_qp_q;
+    reg  [DCQCN_QP_W-1:0] admit_qp_q;
     reg         admit_any;
     always @* begin
         admit_len_q = 13'd0;
-        admit_qp_q  = 4'd0;
+        admit_qp_q  = {DCQCN_QP_W{1'b0}};
         admit_any   = 1'b0;
         for (int l = LANES - 1; l >= 0; l = l - 1)
-            for (int q = 0; q < QP_NUM; q = q + 1)
+            for (int q = 0; q < DCQCN_QP_NUM; q = q + 1)
                 if (lane_tx_admit_qp[l*QP_NUM + q]) begin
                     admit_any   = 1'b1;
-                    admit_qp_q  = 4'(q);
+                    admit_qp_q  = DCQCN_QP_W'(q);
                     admit_len_q = lane_tx_admit_len[l*13 +: 13];
                 end
     end
     assign tx_admit_length_sum  = admit_len_q;
     assign lane_tx_admit_len_or = admit_any;
 
-    roce_dcqcn #(.CORE_CLOCK_MHZ(CORE_CLOCK_MHZ), .QP_NUM(QP_NUM)) u_dcqcn (
+    // tx_rate_ready 是 QP_NUM 位（广播给每个 lane 的 roce_req，按全局 qp_index 索引）：
+    // 低 DCQCN_QP_NUM 位接 u_dcqcn 的输出，高位恒 1'b1 = 恒放行。
+    // S5：DCQCN_QP_NUM = QP_NUM = 128，高位补 0 次（退化成直连，无额外逻辑）。
+    // 若将来 DCQCN_QP_NUM < QP_NUM，高位的 QP 恒放行不受限速。
+    assign tx_rate_ready = {{(QP_NUM-DCQCN_QP_NUM){1'b1}}, dcqcn_rate_ready};
+
+    roce_dcqcn #(.CORE_CLOCK_MHZ(CORE_CLOCK_MHZ), .QP_NUM(DCQCN_QP_NUM)) u_dcqcn (
         .clk(core_clk), .rst(dp_rst_misc),
         .reg_offset(csr_address[19:0]), .reg_write_offset(debug_write_offset), .reg_write(debug_write_enable),
         .reg_write_data(debug_write_value), .reg_read_data(dcqcn_read_value),
         .event_cnp(lane_rx_cnp_or), .cnp_qp_index(cnp_qp_q),
         .event_tx_valid(lane_tx_admit_len_or), .event_tx_qp(admit_qp_q),
         .event_tx_length(tx_admit_length_sum),
-        .tx_rate_ready(tx_rate_ready)
+        .tx_rate_ready(dcqcn_rate_ready)
     );
 
     // ------------------------------------------------------------ 计数器

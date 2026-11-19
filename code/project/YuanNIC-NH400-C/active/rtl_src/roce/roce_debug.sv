@@ -171,7 +171,7 @@ module roce_debug
     input  wire  [LANES*14-1:0]  lane_dma_state,      // 见 RDMA_CORE_x_DMA_STATE
     input  wire  [LANES*2-1:0]   lane_disp_busy_owner,// {busy, owner}
     // 每 lane 的活动 QP 观测（顶层从 lane 的 req debug 状态与 QPC 表里取，按 lane 打平）
-    input  wire  [LANES*4-1:0]   lane_qp_index,
+    input  wire  [LANES*QP_W-1:0] lane_qp_index,
     input  wire  [LANES*3-1:0]   lane_qp_state,
     input  wire  [LANES*24-1:0]  lane_qp_psn,
     input  wire  [LANES*32-1:0]  lane_qp_context_low,
@@ -320,6 +320,7 @@ module roce_debug
     localparam logic [19:0] A_TX_MERGE_LANE_STATE      = 20'h008;  // 两棵子树再 2:1（第三级）
     localparam logic [19:0] A_TX_MERGE_LANE_ABORTS     = 20'h00C;
     localparam logic [19:0] A_RX_SPLIT_STATE           = 20'h010;  // QPN 分流器 {payload_busy, owner}
+
 
     localparam logic [31:0] DEBUG_ID        = 32'h5244_4247;   // "RDBG"
     localparam logic [31:0] DEBUG_VERSION   = {8'd2, 8'd0, 16'(SNAP_WORDS)};
@@ -883,7 +884,10 @@ module roce_debug
             A_RESP_STATE:   reg_read_value = {25'd0, lane_resp_state[0 +: 7]};
             A_RX_PARSE:     reg_read_value = {16'd0, core_rx_state};
             A_TX_BUILD:     reg_read_value = {21'd0, lane_tx_state[0 +: 11]};
-            A_QP_ACTIVE:    reg_read_value = {lane_qp_psn[23:0], 1'b0, lane_qp_state[2:0], lane_qp_index[3:0]};
+            // 旧地址别名：字段布局不变，QP 索引取 lane 0（与改名之前的行为一致）；
+            // QP 扩到 32 以上时用 A_CORE_ACTIVE_QP 读完整索引
+            A_QP_ACTIVE:    reg_read_value = {lane_qp_psn[23:0], 1'b0, lane_qp_state[2:0],
+                                              lane_qp_index[3:0]};
             A_DMA_STATE:    reg_read_value = {8'd0, lane_dma_state[0 +: 14]};
             A_BAS_OUTSTAND: reg_read_value = {16'd0, core_bas_outstanding, core_bas_live};
             A_RESP_STICKY:  reg_read_value = {28'd0, resp_sticky_sync2};
@@ -916,9 +920,9 @@ module roce_debug
                         A_CORE_RESPONDER_STATE:  reg_read_value = {25'd0, lane_resp_state[core_lane_index*7 +: 7]};
                         A_CORE_RX_DISPATCH:      reg_read_value = {30'd0, lane_disp_busy_owner[core_lane_index*2 +: 2]};
                         A_CORE_TX_BUILD:         reg_read_value = {21'd0, lane_tx_state[core_lane_index*11 +: 11]};
-                        A_CORE_ACTIVE_QP:        reg_read_value = {lane_qp_psn    [core_lane_index*24 +: 24], 1'b0,
-                                                                   lane_qp_state  [core_lane_index*3 +: 3],
-                                                                   lane_qp_index  [core_lane_index*4 +: 4]};
+                        A_CORE_ACTIVE_QP:        reg_read_value = {lane_qp_psn  [core_lane_index*24 +: 24],
+                                                                   lane_qp_state[core_lane_index*3 +: 3],
+                                                                   lane_qp_index[core_lane_index*QP_W +: QP_W]};
                         A_CORE_DMA_STATE:        reg_read_value = {18'd0, lane_dma_state[core_lane_index*14 +: 14]};
                         A_CORE_BAS_OUTSTANDING:  reg_read_value = {16'd0, core_bas_outstanding, core_bas_live};
                         A_CORE_RESP_STICKY:      reg_read_value = {28'd0, resp_sticky_sync2};

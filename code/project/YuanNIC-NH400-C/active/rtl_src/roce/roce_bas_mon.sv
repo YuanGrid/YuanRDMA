@@ -110,8 +110,22 @@ module roce_bas_mon (
     // ---------------- 未完成 AR 数（core 域的格雷码计数在此相减，饱和到 255）
     // 跨页请求一个 AR 占两拍 RLAST，所以正常情况下 R_LAST >= AR_HS。这个差值长期 > 0
     // 且不动，就是有条读请求的 R 数据一直没回来（2026-10-25 卡死现场是 67）。
+    //
+    // B6504：**结果寄存一拍再出模块**。B6503 的 core 两条最差路径（−0.272 / −0.268）是
+    //   u_cnt_ar|dest_count[0] → add_1（减法）→ LessThan_1（饱和比较）→ **3.05 ns 跨区走线**
+    //   → u_csr|register_read_value[15]，起点在 core 域、终点在 CSR 的读 mux，中间没有任何
+    //   寄存级。它绕过了 roce_top 的 counter_bas_q——那一拍只挡了 5 个握手计数器的出口，
+    //   挡不住这条「两数相减再判饱和」的派生量。
+    // 两个消费者都是纯观测：CSR 的 REG_DBG_BAS_LIVE（软件轮询）与 roce_debug 的
+    //   core_bas_outstanding（只用来看卡死），晚一拍不改变任何判据。
     wire [31:0] ar_outstanding = (count_ar > count_r_last) ? (count_ar - count_r_last) : 32'd0;
-    assign debug_ar_outstanding = (ar_outstanding > 32'd255) ? 8'hFF : ar_outstanding[7:0];
+    wire [7:0]  ar_outstanding_sat = (ar_outstanding > 32'd255) ? 8'hFF : ar_outstanding[7:0];
+    reg  [7:0]  ar_outstanding_q;
+    always @(posedge clk) begin
+        if (rst) ar_outstanding_q <= 8'd0;
+        else     ar_outstanding_q <= ar_outstanding_sat;
+    end
+    assign debug_ar_outstanding = ar_outstanding_q;
 
     reg  [3:0] resp_sticky_pcie;
     always @(posedge pcie_clk) begin
