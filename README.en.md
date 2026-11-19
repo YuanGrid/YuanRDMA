@@ -180,28 +180,45 @@ Queues, tables and memory translation are consolidated below; the figures follow
 </table>
 
 </td></tr>
-</table>>
+</table>
 
 ## 6 Performance
 
-Setup: YuanNIC-NH400-A, peer NVIDIA ConnectX-7, 400GbE direct link, upstream perftest, 1 MiB messages, 30 s per case.
+Setup: YuanNIC-NH400-A, peer NVIDIA ConnectX-7, 400GbE direct link, upstream perftest. Bandwidth cases use 1 MiB messages, 30 s each; latency cases use 2 B messages, 30 s each, and the tables list perftest's typical (median) values. Figures from image `R26.12.16-B6455-20261118-1X400G`.
 
 <table width="100%" style="width:100%;border:0;border-collapse:collapse">
 <tr><td style="border:0;padding:0">
 
 <table width="100%" style="width:100%">
 <tr><th style="width:26%">Test</th><th style="width:37%">FPGA as client</th><th style="width:37%">FPGA as server</th></tr>
-<tr><td style="width:26%"><code>ib_write_bw</code> (1 QP)</td><td style="width:37%">141.8 Gb/s (35.5%)</td><td style="width:37%">97.9 Gb/s (24.5%)</td></tr>
+<tr><td style="width:26%"><code>ib_write_bw</code> (1 QP)</td><td style="width:37%">142.9 Gb/s (35.7%)</td><td style="width:37%">98.5 Gb/s (24.6%)</td></tr>
 <tr><td style="width:26%"><code>ib_read_bw</code> (1 QP)</td><td style="width:37%">77.2 Gb/s (19.3%)</td><td style="width:37%">89.8 Gb/s (22.5%)</td></tr>
-<tr><td style="width:26%"><code>ib_send_bw</code> (1 QP)</td><td style="width:37%">147.0 Gb/s (36.8%)</td><td style="width:37%">98.5 Gb/s (24.6%)</td></tr>
-<tr><td style="width:26%"><code>ib_write_bw</code> (4 QP)</td><td style="width:37%"><strong>352.1 Gb/s (88.0%)</strong></td><td style="width:37%">—</td></tr>
-<tr><td style="width:26%"><code>ib_read_bw</code> (4 QP)</td><td style="width:37%">—</td><td style="width:37%"><strong>328.2 Gb/s (82.1%)</strong></td></tr>
+<tr><td style="width:26%"><code>ib_send_bw</code> (1 QP)</td><td style="width:37%">142.9 Gb/s (35.7%)</td><td style="width:37%">97.9 Gb/s (24.5%)</td></tr>
+<tr><td style="width:26%"><code>ib_write_bw</code> (4 QP)</td><td style="width:37%"><strong>351.9 Gb/s (88.0%)</strong></td><td style="width:37%">96.9 Gb/s (24.2%)</td></tr>
+<tr><td style="width:26%"><code>ib_read_bw</code> (4 QP)</td><td style="width:37%">99.6 Gb/s (24.9%)</td><td style="width:37%"><strong>328.2 Gb/s (82.1%)</strong></td></tr>
 </table>
 
 </td></tr>
-</table>>
+</table>
 
-Percentages are of the 400 Gb/s line rate. With 4 QPs the transmit direction reaches 88% of line rate and the receive direction 82%; a single QP is limited to about 36% by per-packet assembly overhead, which is the main reason to run multiple QPs in parallel. Latency (typical): `ib_write_lat` about **2.2 µs**; `ib_read_lat` / `ib_send_lat` about 2.7 µs.
+Percentages are of the 400 Gb/s line rate. With 4 QPs the transmit direction reaches 88% of line rate and the receive direction 82%; a single QP is limited to about 36% by per-packet assembly overhead, which is the main reason to run multiple QPs in parallel.
+
+Latency (2 B messages, one-way, typical / p99):
+
+<table width="100%" style="width:100%;border:0;border-collapse:collapse">
+<tr><td style="border:0;padding:0">
+
+<table width="100%" style="width:100%">
+<tr><th style="width:26%">Test</th><th style="width:37%">FPGA as client</th><th style="width:37%">FPGA as server</th></tr>
+<tr><td style="width:26%"><code>ib_write_lat</code></td><td style="width:37%"><strong>2.24 / 2.37 µs</strong></td><td style="width:37%"><strong>2.20 / 2.36 µs</strong></td></tr>
+<tr><td style="width:26%"><code>ib_read_lat</code></td><td style="width:37%">3.68 / 4.65 µs</td><td style="width:37%">2.88 / 3.03 µs</td></tr>
+<tr><td style="width:26%"><code>ib_send_lat</code></td><td style="width:37%">3.31 / 3.51 µs</td><td style="width:37%">2.82 / 2.94 µs</td></tr>
+</table>
+
+</td></tr>
+</table>
+
+Write latency sits near 2.2 µs on both ends and barely moves with message size. Read latency is higher — 3.7 µs in the client direction — the cost of the responding data being copied serially on the receive side. p99 runs 0.1–1.0 µs above typical, most of it host-side interrupt and scheduling jitter; use typical when judging regressions across versions.
 
 ## 7 Supported Hardware
 
@@ -259,7 +276,7 @@ The port mode is chosen at firmware build time and takes effect after link negot
 </table>
 
 </td></tr>
-</table>>
+</table>
 
 ## 9 Quick Start
 

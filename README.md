@@ -180,28 +180,45 @@ YuanSec 以 FPGA 并行计算加 DPDK 转发为数据面，把检测与密码运
 </table>
 
 </td></tr>
-</table>>
+</table>
 
 ## 6 性能
 
-测试条件：YuanNIC-NH400-A，对端 NVIDIA ConnectX-7，400GbE 直连，原版 perftest，消息 1 MiB，每项 30 s。
+测试条件：YuanNIC-NH400-A，对端 NVIDIA ConnectX-7，400GbE 直连，原版 perftest。带宽用例消息 1 MiB、每项 30 s；延迟用例消息 2 B、每项 30 s，表中取 perftest 的典型值（typical，中位）。数据取自镜像 `R26.12.16-B6455-20261118-1X400G`。
 
 <table width="100%" style="width:100%;border:0;border-collapse:collapse">
 <tr><td style="border:0;padding:0">
 
 <table width="100%" style="width:100%">
 <tr><th style="width:26%">用例</th><th style="width:37%">FPGA 作客户端</th><th style="width:37%">FPGA 作服务端</th></tr>
-<tr><td style="width:26%"><code>ib_write_bw</code>（1 QP）</td><td style="width:37%">141.8 Gb/s（35.5%）</td><td style="width:37%">97.9 Gb/s（24.5%）</td></tr>
+<tr><td style="width:26%"><code>ib_write_bw</code>（1 QP）</td><td style="width:37%">142.9 Gb/s（35.7%）</td><td style="width:37%">98.5 Gb/s（24.6%）</td></tr>
 <tr><td style="width:26%"><code>ib_read_bw</code>（1 QP）</td><td style="width:37%">77.2 Gb/s（19.3%）</td><td style="width:37%">89.8 Gb/s（22.5%）</td></tr>
-<tr><td style="width:26%"><code>ib_send_bw</code>（1 QP）</td><td style="width:37%">147.0 Gb/s（36.8%）</td><td style="width:37%">98.5 Gb/s（24.6%）</td></tr>
-<tr><td style="width:26%"><code>ib_write_bw</code>（4 QP）</td><td style="width:37%"><strong>352.1 Gb/s（88.0%）</strong></td><td style="width:37%">—</td></tr>
-<tr><td style="width:26%"><code>ib_read_bw</code>（4 QP）</td><td style="width:37%">—</td><td style="width:37%"><strong>328.2 Gb/s（82.1%）</strong></td></tr>
+<tr><td style="width:26%"><code>ib_send_bw</code>（1 QP）</td><td style="width:37%">142.9 Gb/s（35.7%）</td><td style="width:37%">97.9 Gb/s（24.5%）</td></tr>
+<tr><td style="width:26%"><code>ib_write_bw</code>（4 QP）</td><td style="width:37%"><strong>351.9 Gb/s（88.0%）</strong></td><td style="width:37%">96.9 Gb/s（24.2%）</td></tr>
+<tr><td style="width:26%"><code>ib_read_bw</code>（4 QP）</td><td style="width:37%">99.6 Gb/s（24.9%）</td><td style="width:37%"><strong>328.2 Gb/s（82.1%）</strong></td></tr>
 </table>
 
 </td></tr>
-</table>>
+</table>
 
-括号内为占 400 Gb/s 线速的比例。多 QP 并发时发送方向达 88%、接收方向 82%；单 QP 受每包组包开销限制约 36%，这正是需要多 QP 并行下发的原因。时延（typical）：`ib_write_lat` 约 **2.2 µs**，`ib_read_lat` / `ib_send_lat` 约 2.7 µs。
+括号内为占 400 Gb/s 线速的比例。多 QP 并发时发送方向达 88%、接收方向 82%；单 QP 受每包组包开销限制约 36%，这正是需要多 QP 并行下发的原因。
+
+时延（2 B 消息，单向，typical / p99）：
+
+<table width="100%" style="width:100%;border:0;border-collapse:collapse">
+<tr><td style="border:0;padding:0">
+
+<table width="100%" style="width:100%">
+<tr><th style="width:26%">用例</th><th style="width:37%">FPGA 作客户端</th><th style="width:37%">FPGA 作服务端</th></tr>
+<tr><td style="width:26%"><code>ib_write_lat</code></td><td style="width:37%"><strong>2.24 / 2.37 µs</strong></td><td style="width:37%"><strong>2.20 / 2.36 µs</strong></td></tr>
+<tr><td style="width:26%"><code>ib_read_lat</code></td><td style="width:37%">3.68 / 4.65 µs</td><td style="width:37%">2.88 / 3.03 µs</td></tr>
+<tr><td style="width:26%"><code>ib_send_lat</code></td><td style="width:37%">3.31 / 3.51 µs</td><td style="width:37%">2.82 / 2.94 µs</td></tr>
+</table>
+
+</td></tr>
+</table>
+
+写时延两端都在 2.2 µs 附近，与消息长度基本无关；读时延在客户端方向上偏高到 3.7 µs，是响应数据在接收侧串行搬迁的代价。p99 与 typical 相差 0.1–1.0 µs，主要来自主机侧中断与调度抖动，评估跨版本回归时以 typical 为准。
 
 ## 7 支持的硬件
 
@@ -259,7 +276,7 @@ YuanSec 以 FPGA 并行计算加 DPDK 转发为数据面，把检测与密码运
 </table>
 
 </td></tr>
-</table>>
+</table>
 
 ## 9 快速开始
 
