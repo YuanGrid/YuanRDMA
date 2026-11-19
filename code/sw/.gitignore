@@ -1,4 +1,0 @@
-# rdma-core 与 perftest 的源码拷贝和编译目录不入库
-rdma-core-provider/build/
-perftest-build/src/
-*.log
