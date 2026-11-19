@@ -28,12 +28,12 @@ OBJS = $(patsubst %.c,%.o,$(SRC))
 
 
 # 默认目标
-all: version.h $(TARGET)
+all: build_version.h $(TARGET)
 
-# get_revision.sh 依赖 svn；仓库里没有 svn 工作副本，直接保留已有的 version.h。
+# get_revision.sh 依赖 svn；仓库里没有 svn 工作副本，直接保留已有的 build_version.h。
 # （原脚本取不到版本号时会写 "unknown"，这里等价于那个结果，且不依赖 svn 命令。）
-version.h:
-	@[ -f version.h ] || printf '#ifndef SVN_REVISION_H\n#define SVN_REVISION_H\n#define SVN_REVISION "unknown"\n#endif\n' > version.h
+build_version.h:
+	@[ -f build_version.h ] || printf '#ifndef SVN_REVISION_H\n#define SVN_REVISION_H\n#define SVN_REVISION "unknown"\n#endif\n' > build_version.h
 # 链接目标文件
 $(TARGET): $(OBJS)
 	$(CC) -o $@ $^ $(LDFLAGS)
@@ -44,5 +44,5 @@ $(TARGET): $(OBJS)
 
 # 清理生成的文件
 clean:
-	rm -f $(OBJS) version.h $(TARGET)
+	rm -f $(OBJS) build_version.h $(TARGET)
 .PHONY: all clean

@@ -45,7 +45,7 @@ extern "C" {
 #include "xil_types.h"
 #include "xil_assert.h"
 //#include "xil_io.h"
-#include "xparameters.h"
+#include "xparameters_cfg.h"
 
 /************************** Constant Definitions *****************************/
 

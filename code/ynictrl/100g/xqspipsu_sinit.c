@@ -25,9 +25,9 @@
 
 /***************************** Include Files *********************************/
 
-#include "xstatus.h"
-#include "xqspipsu.h"
-#include "xparameters.h"
+#include "xstatus_codes.h"
+#include "xqspipsu_driver.h"
+#include "xparameters_cfg.h"
 
 /************************** Constant Definitions *****************************/
 

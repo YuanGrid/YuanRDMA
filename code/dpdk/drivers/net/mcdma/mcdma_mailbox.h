@@ -10,7 +10,7 @@
 #include <sys/fcntl.h>
 #include <rte_memzone.h>
 #include <rte_string_fns.h>
-#include "mcdma.h"
+#include "mcdma_regs.h"
 #include "qdma_regs_2_registers.h"
 #include "rte_pmd_mcdma.h"
 #include "mcdma_platform.h"

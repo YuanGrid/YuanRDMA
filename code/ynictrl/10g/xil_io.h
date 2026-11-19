@@ -47,7 +47,7 @@ extern "C" {
 
 #include "xil_types.h"
 //#include "xil_printf.h"
-#include "xstatus.h"
+#include "xstatus_codes_10g.h"
 
 #if defined (__MICROBLAZE__)
 #include "mb_interface.h"

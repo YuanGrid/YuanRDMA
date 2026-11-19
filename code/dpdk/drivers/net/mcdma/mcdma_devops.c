@@ -24,7 +24,7 @@
 #include <string.h>
 #include <sys/eventfd.h>
 
-#include "mcdma.h"
+#include "mcdma_regs.h"
 #include "mcdma_rss.h"
 #include "rte_pmd_mcdma.h"
 #include "mcdma_access.h"

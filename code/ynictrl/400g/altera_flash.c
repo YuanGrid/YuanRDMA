@@ -1,6 +1,6 @@
-#include "altera.h"
-#include "xstatus.h"
-#include "main.h"
+#include "altera_flash.h"
+#include "xstatus_codes.h"
+#include "ynictrl_main.h"
 
 
 extern int fd_user;

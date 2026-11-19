@@ -14,13 +14,13 @@
 #include <errno.h>
 #include <regex.h>
 #include <math.h>
-#include "sleep.h"
+#include "xil_sleep_api.h"
 #include "xqspi_polled.h"
 #include "xspi_polled.h"
-#include "xfast.h"
-#include "main.h"
-#include "version.h"
-#include "altera.h"
+#include "xfast_flash.h"
+#include "ynictrl_main.h"
+#include "build_version.h"
+#include "altera_flash.h"
 
 
 #define IS_POSITIVE_INTEGER(num) ((num) > 0 && (num) == (int)(num))

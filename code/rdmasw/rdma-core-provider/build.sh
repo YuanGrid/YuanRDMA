@@ -28,7 +28,7 @@ rm -rf "$WORK" && mkdir -p "$WORK"
 cp -a "$SRC_RDMACORE/." "$WORK/"
 rm -rf "$WORK/.git_upstream"
 cp -a "$HERE/yuanrdma" "$WORK/providers/yuanrdma"
-cp "$ROOT/code/kernel/yuanrdma/yuanrdma-abi.h" "$WORK/kernel-headers/rdma/yuanrdma-abi.h"
+cp "$ROOT/code/kernel/yuanrdma/yuanrdma_abi_defs.h" "$WORK/kernel-headers/rdma/yuanrdma-abi.h"
 cp "$ROOT/code/rdmasw/include/yuanrdma_hw.h" "$WORK/providers/yuanrdma/yuanrdma_hw.h"
 # 注册 provider 与 ABI 头（两个列表都要加）
 sed -i 's#^  rdma/erdma-abi.h$#  rdma/erdma-abi.h\n  rdma/yuanrdma-abi.h#' "$WORK/kernel-headers/CMakeLists.txt"

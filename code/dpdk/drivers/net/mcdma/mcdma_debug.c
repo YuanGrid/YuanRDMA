@@ -5,7 +5,7 @@
 #include "mcdma_platform.h"
 #include <rte_malloc.h>
 #include <rte_spinlock.h>
-#include "mcdma.h"
+#include "mcdma_regs.h"
 #include "qdma_regs_2_registers.h"
 #include "rte_pmd_mcdma.h"
 #include "mcdma_debug.h"

@@ -301,7 +301,7 @@ extern "C" {
 #include <stdio.h>
 #include "xil_types.h"
 #include "xil_assert.h"
-#include "xstatus.h"
+#include "xstatus_codes_10g.h"
 #include "xspi_l.h"
 
 /************************** Constant Definitions *****************************/

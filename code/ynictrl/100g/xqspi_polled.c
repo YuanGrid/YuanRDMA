@@ -1,5 +1,5 @@
 #include "xqspi_polled.h"
-#include "main.h"
+#include "ynictrl_main.h"
 
 u8 ReadCmd;
 u8 WriteCmd;

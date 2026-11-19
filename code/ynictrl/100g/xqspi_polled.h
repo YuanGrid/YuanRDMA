@@ -5,11 +5,11 @@
 extern "C" {
 #endif
 
-#include "xparameters.h" /* SDK generated parameters */
-#include "xqspipsu.h"	 /* QSPIPSU device driver */
+#include "xparameters_cfg.h" /* SDK generated parameters */
+#include "xqspipsu_driver.h"	 /* QSPIPSU device driver */
 #include "xil_printf.h"
 // #include "xil_cache.h"
-#include "sleep.h"
+#include "xil_sleep_api.h"
 #include <stdio.h>
 #include <fcntl.h>
 #include <ctype.h>

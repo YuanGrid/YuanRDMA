@@ -1,8 +1,8 @@
 #include <unistd.h>
 #include <time.h>
-#include "xfast.h"
-#include "xstatus.h"
-#include "main.h"
+#include "xfast_flash.h"
+#include "xstatus_codes.h"
+#include "ynictrl_main.h"
 
 /************************** Constant Definitions *****************************/
 u32 cmd_seq[]={0xffffffff,0xaa995566,0x20000000,0x30020001,0x00000000,0x30008001,0x0000000f,0x20000000};

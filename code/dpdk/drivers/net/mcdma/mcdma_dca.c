@@ -9,7 +9,7 @@
 #include "dynamic_channel_params.h"
 #include "mcdma_access.h"
 #include "mcdma_platform.h"
-#include "mcdma.h"
+#include "mcdma_regs.h"
 #include "mcdma_dca.h"
 
 #ifdef IFC_QDMA_DYN_CHAN

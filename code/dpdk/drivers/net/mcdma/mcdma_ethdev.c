@@ -27,7 +27,7 @@
 #include <sys/eventfd.h>
 #include <mcdma_ip_params.h>
 #include <pio_reg_registers.h>
-#include "mcdma.h"
+#include "mcdma_regs.h"
 #include "rte_pmd_mcdma.h"
 #include "mcdma_dca.h"
 

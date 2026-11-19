@@ -77,7 +77,7 @@ typedef uint32_t u32;
 typedef uint64_t u64;
 #endif
 
-#include "yuanrdma_gsi_pkt.h"	/* 复用 fgsi_put16/put24/put32 与 get 系列 */
+#include "yuanrdma_gsi_packet.h"	/* 复用 fgsi_put16/put24/put32 与 get 系列 */
 
 #define FGCM_MAD_HDR_LEN	24
 #define FGCM_MAD_DATA_LEN	232

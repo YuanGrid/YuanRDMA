@@ -11,7 +11,7 @@
 #endif
 #include <fcntl.h>
 #include <unistd.h>
-#include "mcdma.h"
+#include "mcdma_regs.h"
 #include "mcdma_debug.h"
 #include "mcdma_access.h"
 #include "qdma_regs_2_registers.h"

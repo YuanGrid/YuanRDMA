@@ -5,7 +5,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-#include "yuanrdma.h"
+#include "provider_driver.h"
 #include "yuanrdma_abi.h"
 
 static const struct verbs_context_ops yuanrdma_context_ops = {

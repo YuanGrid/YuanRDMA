@@ -48,8 +48,8 @@ static inline void yuanrdma_umem_put(struct ib_umem *umem, struct ib_umem_dmabuf
 	ib_umem_release(umem);
 }
 
-#include "yuanrdma.h"
-#include "yuanrdma-abi.h"
+#include "yuanrdma_driver.h"
+#include "yuanrdma_abi_defs.h"
 
 /* ---------------------------------------------------------------- 查询 */
 static int yuanrdma_query_device(struct ib_device *ibdev, struct ib_device_attr *attributes,
@@ -666,7 +666,7 @@ static int yuanrdma_create_qp(struct ib_qp *ibqp, struct ib_qp_init_attr *init, 
 	 *         CQE dw4=src_qp/dw0[18]=has_grh），但**发送侧 RTL 与本次改动并行开发**，
 	 *         没上过板，也无法从寄存器判别比特流是否带 UD TX。因此由 enable_ud 显式放行：
 	 *         未声明时返回 -EOPNOTSUPP（provider 的 ibv_create_qp 直接失败），
-	 *         而不是给出一个「建得起来、发得出去、对端静默丢弃」的 QP。理由详见 yuanrdma.h 里
+	 *         而不是给出一个「建得起来、发得出去、对端静默丢弃」的 QP。理由详见 yuanrdma_driver.h 里
 	 *         yuanrdma_enable_ud 的注释。
 	 *   两者都不支持 SRQ / create_flags。
 	 */

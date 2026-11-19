@@ -5,7 +5,7 @@
 #include <rte_spinlock.h>
 #include "mcdma_access.h"
 #include "mcdma_platform.h"
-#include "mcdma.h"
+#include "mcdma_regs.h"
 
 uint32_t ifc_readl(void *ioaddr)
 {

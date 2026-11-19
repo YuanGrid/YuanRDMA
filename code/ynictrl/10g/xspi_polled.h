@@ -9,7 +9,7 @@ extern "C" {
 /***************************** Include Files *********************************/
 
 #include "xparameters_10g.h"	/* XPAR parameters */
-#include "xspi.h"		/* SPI device driver */
+#include "xspi_driver.h"		/* SPI device driver */
 #include "xspi_l.h"
 //#include "xil_printf.h"
 

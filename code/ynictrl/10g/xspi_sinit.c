@@ -28,7 +28,7 @@
 /***************************** Include Files *********************************/
 
 #include "xparameters_10g.h"
-#include "xspi.h"
+#include "xspi_driver.h"
 
 /************************** Constant Definitions *****************************/
 

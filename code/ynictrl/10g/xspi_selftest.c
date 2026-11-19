@@ -36,7 +36,7 @@
 
 /***************************** Include Files *********************************/
 
-#include "xspi.h"
+#include "xspi_driver.h"
 #include "xspi_i.h"
 
 /************************** Constant Definitions *****************************/

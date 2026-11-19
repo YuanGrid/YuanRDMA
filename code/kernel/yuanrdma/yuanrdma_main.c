@@ -9,7 +9,7 @@
 #include <linux/rtnetlink.h>
 #include <net/addrconf.h>
 
-#include "yuanrdma.h"
+#include "yuanrdma_driver.h"
 
 MODULE_AUTHOR("YuanGrid");
 MODULE_DESCRIPTION("YuanNIC-NH400-B RoCEv2 RDMA driver");
@@ -19,14 +19,14 @@ static ushort pci_device_id = 0x0000;
 module_param(pci_device_id, ushort, 0444);
 MODULE_PARM_DESC(pci_device_id, "PCI device id of the YuanNIC-NH400-B function (vendor 0x1172)");
 
-/* 用户态 UD QP 的放行开关，定义与理由见 yuanrdma.h 里 yuanrdma_enable_ud 的注释。
+/* 用户态 UD QP 的放行开关，定义与理由见 yuanrdma_driver.h 里 yuanrdma_enable_ud 的注释。
  * 放在 main.c：它是模块级开关，不属于某个 ops 文件。 */
 bool yuanrdma_enable_ud;
 module_param_named(enable_ud, yuanrdma_enable_ud, bool, 0444);
 MODULE_PARM_DESC(enable_ud,
 		 "Allow user-space IB_QPT_UD QPs (needs a bitstream whose roce_req supports WQE_UD_SEND=5/6; default 0)");
 
-/* IB_PORT_CM_SUP 的声明开关，理由见 yuanrdma.h 里 yuanrdma_enable_cm_sup 的注释。 */
+/* IB_PORT_CM_SUP 的声明开关，理由见 yuanrdma_driver.h 里 yuanrdma_enable_cm_sup 的注释。 */
 bool yuanrdma_enable_cm_sup;
 module_param_named(enable_cm_sup, yuanrdma_enable_cm_sup, bool, 0444);
 MODULE_PARM_DESC(enable_cm_sup,

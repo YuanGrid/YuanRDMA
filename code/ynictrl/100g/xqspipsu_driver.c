@@ -76,7 +76,7 @@
 
 /***************************** Include Files *********************************/
 
-#include "xqspipsu.h"
+#include "xqspipsu_driver.h"
 #include "xqspipsu_control.h"
 
 /************************** Constant Definitions *****************************/

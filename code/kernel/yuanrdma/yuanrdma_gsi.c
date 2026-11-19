@@ -41,9 +41,9 @@
 #include <rdma/ib_addr.h>
 #include <rdma/ib_verbs.h>
 
-#include "yuanrdma.h"
-#include "yuanrdma_gsi_pkt.h"
-#include "yuanrdma_cm_pkt.h"
+#include "yuanrdma_driver.h"
+#include "yuanrdma_gsi_packet.h"
+#include "yuanrdma_cm_packet.h"
 
 /* 非 QP1 的 RoCE 帧（RC 数据流）在 eth0 上是否直接丢弃。默认放进协议栈（与改造前一致；
  * 4791 上没有监听者，只是走一遍 IP 栈并回限速 ICMP）。开成 1 可省掉这部分开销。 */

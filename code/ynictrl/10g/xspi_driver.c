@@ -98,7 +98,7 @@
 #include <sys/mman.h>
 #include <assert.h>
 
-#include "xspi.h"
+#include "xspi_driver.h"
 #include "xspi_i.h"
 
 /************************** Constant Definitions *****************************/

@@ -15,7 +15,7 @@
 #include <unistd.h>
 #include <sys/time.h>
 
-#include "mcdma.h"
+#include "mcdma_regs.h"
 #include "mcdma_access.h"
 #include "qdma_regs_2_registers.h"
 #include "mcdma_platform.h"

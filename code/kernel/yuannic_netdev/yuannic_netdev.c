@@ -33,7 +33,7 @@
 // #include "linux/ntos_compat.h" /* RHEL_RELEASE_CODE */
 
 #include <asm/byteorder.h>
-#include "onic.h"
+#include "onic_driver.h"
 #include "onic_register.h"
 #include "ifc_mcdma_net.h"
 

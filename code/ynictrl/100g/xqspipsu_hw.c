@@ -25,7 +25,7 @@
 
 /***************************** Include Files *********************************/
 
-#include "xqspipsu.h"
+#include "xqspipsu_driver.h"
 #if defined(__aarch64__)
 #include "xil_smc.h"
 #endif

@@ -23,7 +23,7 @@
 *
 ******************************************************************************/
 
-#include "sleep.h"
+#include "xil_sleep_api.h"
 
 #ifdef _WIN32
   void sleep(unsigned int seconds) {

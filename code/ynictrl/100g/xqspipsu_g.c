@@ -27,8 +27,8 @@
 
 /***************************** Include Files *********************************/
 
-#include "xqspipsu.h"
-#include "xparameters.h"
+#include "xqspipsu_driver.h"
+#include "xparameters_cfg.h"
 
 /************************** Constant Definitions *****************************/
 

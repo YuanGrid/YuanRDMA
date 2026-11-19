@@ -172,7 +172,7 @@ extern "C" {
 
 /***************************** Include Files *********************************/
 
-#include "xstatus.h"
+#include "xstatus_codes.h"
 #include "xqspipsu_hw.h"
 //#include "xil_cache.h"
 //#include "xil_mem.h"

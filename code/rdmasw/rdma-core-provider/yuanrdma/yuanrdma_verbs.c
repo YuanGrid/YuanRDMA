@@ -8,7 +8,7 @@
 #include <util/udma_barrier.h>
 #include <util/util.h>
 
-#include "yuanrdma.h"
+#include "provider_driver.h"
 #include "yuanrdma_abi.h"
 
 /* ---------------------------------------------------------------- 查询 / PD / MR */

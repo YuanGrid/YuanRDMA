@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 OR BSD-2-Clause */
 /*
  * yuanrdma provider：YuanNIC-NH400-B RoCEv2 引擎的 rdma-core 用户态驱动（数据面）。
- * 硬件格式见 code/rdmasw/include/yuanrdma_hw.h，内核接口见 code/kernel/yuanrdma/yuanrdma-abi.h。
+ * 硬件格式见 code/rdmasw/include/yuanrdma_hw.h，内核接口见 code/kernel/yuanrdma/yuanrdma_abi_defs.h。
  */
 #ifndef YUANRDMA_PROVIDER_H
 #define YUANRDMA_PROVIDER_H
