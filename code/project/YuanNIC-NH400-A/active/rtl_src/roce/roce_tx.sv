@@ -68,18 +68,27 @@ module roce_tx
     wire      issue_any  = |tx_job_valid;
     tx_job_t  issue_job;
     assign    issue_job = tx_job[issue_pick];
-    // 在途 FIFO 深度（B6413：8 → 16）。
+    // 在途 FIFO 深度（B6413：8 → 16；B6457：16 → 32）。
     //
     // 依据（§36.9 / §37）：1 MB 读响应的包率不随 core_clk 变化（100 MHz 8.88 Mpps、
     // 125 MHz 9.53 Mpps），而 8 / 包率 在两个频率下都约等于 840~900 ns，正是 PCIe 读往返；
     // 上板用 0x0578[15:8] 采到未完成 AR 数 p50 = 9、p90 = 10、max = 11，说明每个响应包的
     // 1024 B DMA 读把槽位占满。加深后上限由组包侧的 9 拍/包给出（13.89 Mpps ≈ 113.8 Gb/s）。
     //
-    // 选 16 而不是更大：16 个 1024 B 读 = 128 拍，远低于 DMA 侧 read_credit（480），
-    // 且 16 × 9 拍 = 144 拍 ≈ 1.15 µs @125 MHz，已能覆盖 860 ns 往返还有余量。
-    localparam int INFLIGHT_DEPTH = 16;
+    // B6457 改 32 的依据（roce-optimization-log.md §101，定向台子 test/sim/tx_inflight_rtt）：
+    // MTU 1024 下单 QP 实测 143.86 Gb/s = 14.24 拍/包（core 250 MHz），比组包侧结构上限
+    // 9 拍多出 6.24 拍。台子显式注入 PCIe 读延迟扫描，确认这 6.24 拍就是槽位不够：
+    //   RTT 0/220/440 ns → 9.00 拍；RTT 860 ns（板上实测）→ 12.00 拍；1720 ns → 26.36 拍，
+    //   且每轮 inflight_used 都打满。深度 24/32 在 860~1200 ns 全部回到 9.00 拍（结构上限）。
+    //
+    // 为什么选 32 而不是 24：**两者占用同一个 M20K**。每项 $bits(tx_job_t)=628 bit，
+    // 32 深 = 20096 bit = 单个 M20K（20480 bit）的 98.1%，24 深只占 73.6%——RAM 成本相同，
+    // 而 32 深多出 34% 的往返余量（真实 PCIe 往返会随负载浮动）。再往上 40/48 就要第二块 M20K。
+    // ALM 开销可忽略，代价只有 ADDR_WIDTH 4→5 位。
+    // 上限约束不变：32 个 1024 B 读仍在 DMA 侧 read_credit（480）之内。
+    localparam int INFLIGHT_DEPTH = 32;
     wire      inflight_ready;
-    wire [4:0] inflight_used;      // 在途 FIFO 占用（深度 16，$clog2(16)+1 = 5 位）
+    wire [5:0] inflight_used;      // 在途 FIFO 占用（深度 32，$clog2(32)+1 = 6 位）
     wire      issue_needs_read = (issue_job.payload_length != 13'd0);
     assign dma_read_request_valid = issue_any && inflight_ready && issue_needs_read;
     assign dma_read_request_address  = issue_job.physical_address0;
@@ -340,6 +349,11 @@ module roce_tx
             default: build_state <= BUILD_PREP;
         endcase
     end
-    assign debug_state = {inflight_used[4], inflight_used[3:0], align_debug_state, build_state};
+    // debug_state 的位宽与 CSR 0x056C 的布局是**固定契约**（[9:5] inflight / [4:2] skip_align /
+    // [1:0] build_state），深度 32 后 inflight_used 是 6 位，直接拼会让 debug_state 变成 11 位、
+    // roce_top 的 10 位连线失配。这里**饱和到 5 位**：深度 ≥32 时读全 1（即「已满」），
+    // 与原来 depth 16 读 16 的语义一致，CSR 位宽和现有解析工具都不用改。
+    wire [4:0] inflight_used_sat = inflight_used[5] ? 5'h1F : inflight_used[4:0];
+    assign debug_state = {inflight_used_sat, align_debug_state, build_state};
 endmodule
 `default_nettype wire
