@@ -1,0 +1,269 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<deploy
+ date="2026.10.16.17:18:07"
+ outputDirectory="F:/work/release_git_10.4/yuannic_agilex7_400g_d/release_pfs/sys/ip/axi4_adapter/axi4_adapter_axi_bridge_2/">
+ <perimeter>
+  <parameter
+     name="AUTO_GENERATION_ID"
+     type="Integer"
+     defaultValue="0"
+     onHdl="0"
+     affectsHdl="1" />
+  <parameter
+     name="AUTO_UNIQUE_ID"
+     type="String"
+     defaultValue=""
+     onHdl="0"
+     affectsHdl="1" />
+  <parameter
+     name="AUTO_DEVICE_FAMILY"
+     type="String"
+     defaultValue="Agilex 7"
+     onHdl="0"
+     affectsHdl="1" />
+  <parameter
+     name="AUTO_DEVICE"
+     type="String"
+     defaultValue="AGIB023R18A1E1V"
+     onHdl="0"
+     affectsHdl="1" />
+  <parameter
+     name="AUTO_DEVICE_SPEEDGRADE"
+     type="String"
+     defaultValue="1"
+     onHdl="0"
+     affectsHdl="1" />
+  <parameter
+     name="AUTO_BOARD"
+     type="String"
+     defaultValue="default"
+     onHdl="0"
+     affectsHdl="1" />
+  <parameter
+     name="AUTO_CLK_CLOCK_RATE"
+     type="Long"
+     defaultValue="-1"
+     onHdl="0"
+     affectsHdl="1" />
+  <parameter
+     name="AUTO_CLK_CLOCK_DOMAIN"
+     type="Integer"
+     defaultValue="-1"
+     onHdl="0"
+     affectsHdl="1" />
+  <parameter
+     name="AUTO_CLK_RESET_DOMAIN"
+     type="Integer"
+     defaultValue="-1"
+     onHdl="0"
+     affectsHdl="1" />
+  <parameter
+     name="AUTO_S0_CPU_INFO_ID"
+     type="String"
+     defaultValue=""
+     onHdl="0"
+     affectsHdl="1" />
+  <parameter
+     name="AUTO_M0_ADDRESS_MAP"
+     type="AddressMap"
+     defaultValue=""
+     onHdl="0"
+     affectsHdl="1" />
+  <parameter
+     name="AUTO_M0_ADDRESS_WIDTH"
+     type="AddressWidthType"
+     defaultValue="-1"
+     onHdl="0"
+     affectsHdl="1" />
+  <interface name="clk" kind="clock" start="0">
+   <property name="clockRate" value="0" />
+   <property name="externallyDriven" value="false" />
+   <property name="ptfSchematicName" value="" />
+   <port name="aclk" direction="input" role="clk" width="1" />
+  </interface>
+  <interface name="clk_reset" kind="reset" start="0">
+   <property name="associatedClock" value="clk" />
+   <property name="synchronousEdges" value="DEASSERT" />
+   <port name="aresetn" direction="input" role="reset_n" width="1" />
+  </interface>
+  <interface name="s0" kind="axi4lite" start="0">
+   <property name="associatedClock" value="clk" />
+   <property name="associatedReset" value="clk_reset" />
+   <property name="optionalAssociatedReset" value="false" />
+   <property name="trustzoneAware" value="true" />
+   <property name="wakeupSignals" value="false" />
+   <property name="uniqueIdSupport" value="false" />
+   <property name="poison" value="false" />
+   <property name="traceSignals" value="false" />
+   <property name="isTranslator" value="false" />
+   <property name="maximumOutstandingReads" value="1" />
+   <property name="maximumOutstandingWrites" value="1" />
+   <property name="maximumOutstandingTransactions" value="1" />
+   <property name="dataCheck" value="false" />
+   <property name="addressCheck" value="false" />
+   <property name="securityAttribute" value="false" />
+   <property name="userData" value="false" />
+   <property name="readAcceptanceCapability" value="16" />
+   <property name="writeAcceptanceCapability" value="16" />
+   <property name="combinedAcceptanceCapability" value="16" />
+   <property name="readDataReorderingDepth" value="1" />
+   <property name="bridgesToMaster" value="axi4_adapter_axi_bridge_2.m0" />
+   <property name="dfhFeatureGuid" value="0" />
+   <property name="dfhGroupId" value="0" />
+   <property name="dfhParameterId" value="" />
+   <property name="dfhParameterName" value="" />
+   <property name="dfhParameterVersion" value="" />
+   <property name="dfhParameterData" value="" />
+   <property name="dfhParameterDataLength" value="" />
+   <property name="dfhFeatureMajorVersion" value="0" />
+   <property name="dfhFeatureMinorVersion" value="0" />
+   <property name="dfhFeatureId" value="35" />
+   <property name="dfhFeatureType" value="3" />
+   <port name="s0_awaddr" direction="input" role="awaddr" width="14" />
+   <port name="s0_awprot" direction="input" role="awprot" width="3" />
+   <port name="s0_awvalid" direction="input" role="awvalid" width="1" />
+   <port name="s0_awready" direction="output" role="awready" width="1" />
+   <port name="s0_wdata" direction="input" role="wdata" width="32" />
+   <port name="s0_wstrb" direction="input" role="wstrb" width="4" />
+   <port name="s0_wvalid" direction="input" role="wvalid" width="1" />
+   <port name="s0_wready" direction="output" role="wready" width="1" />
+   <port name="s0_bresp" direction="output" role="bresp" width="2" />
+   <port name="s0_bvalid" direction="output" role="bvalid" width="1" />
+   <port name="s0_bready" direction="input" role="bready" width="1" />
+   <port name="s0_araddr" direction="input" role="araddr" width="14" />
+   <port name="s0_arprot" direction="input" role="arprot" width="3" />
+   <port name="s0_arvalid" direction="input" role="arvalid" width="1" />
+   <port name="s0_arready" direction="output" role="arready" width="1" />
+   <port name="s0_rdata" direction="output" role="rdata" width="32" />
+   <port name="s0_rresp" direction="output" role="rresp" width="2" />
+   <port name="s0_rvalid" direction="output" role="rvalid" width="1" />
+   <port name="s0_rready" direction="input" role="rready" width="1" />
+  </interface>
+  <interface name="m0" kind="axi4lite" start="1">
+   <property name="associatedClock" value="clk" />
+   <property name="associatedReset" value="clk_reset" />
+   <property name="optionalAssociatedReset" value="false" />
+   <property name="trustzoneAware" value="true" />
+   <property name="wakeupSignals" value="false" />
+   <property name="uniqueIdSupport" value="false" />
+   <property name="poison" value="false" />
+   <property name="traceSignals" value="false" />
+   <property name="isTranslator" value="false" />
+   <property name="maximumOutstandingReads" value="1" />
+   <property name="maximumOutstandingWrites" value="1" />
+   <property name="maximumOutstandingTransactions" value="1" />
+   <property name="dataCheck" value="false" />
+   <property name="addressCheck" value="false" />
+   <property name="securityAttribute" value="false" />
+   <property name="userData" value="false" />
+   <property name="readIssuingCapability" value="16" />
+   <property name="writeIssuingCapability" value="16" />
+   <property name="combinedIssuingCapability" value="16" />
+   <property name="enableConcurrentSubordinateAccess" value="0" />
+   <property name="noRepeatedIdsBetweenSubordinates" value="0" />
+   <port name="m0_awaddr" direction="output" role="awaddr" width="14" />
+   <port name="m0_awprot" direction="output" role="awprot" width="3" />
+   <port name="m0_awvalid" direction="output" role="awvalid" width="1" />
+   <port name="m0_awready" direction="input" role="awready" width="1" />
+   <port name="m0_wdata" direction="output" role="wdata" width="32" />
+   <port name="m0_wstrb" direction="output" role="wstrb" width="4" />
+   <port name="m0_wvalid" direction="output" role="wvalid" width="1" />
+   <port name="m0_wready" direction="input" role="wready" width="1" />
+   <port name="m0_bresp" direction="input" role="bresp" width="2" />
+   <port name="m0_bvalid" direction="input" role="bvalid" width="1" />
+   <port name="m0_bready" direction="output" role="bready" width="1" />
+   <port name="m0_araddr" direction="output" role="araddr" width="14" />
+   <port name="m0_arprot" direction="output" role="arprot" width="3" />
+   <port name="m0_arvalid" direction="output" role="arvalid" width="1" />
+   <port name="m0_arready" direction="input" role="arready" width="1" />
+   <port name="m0_rdata" direction="input" role="rdata" width="32" />
+   <port name="m0_rresp" direction="input" role="rresp" width="2" />
+   <port name="m0_rvalid" direction="input" role="rvalid" width="1" />
+   <port name="m0_rready" direction="output" role="rready" width="1" />
+  </interface>
+ </perimeter>
+ <entity
+   kind="axi4_adapter_axi_bridge_2"
+   version="1.0"
+   name="axi4_adapter_axi_bridge_2">
+  <parameter name="AUTO_CLK_CLOCK_RATE" value="-1" />
+  <parameter name="AUTO_GENERATION_ID" value="0" />
+  <parameter name="AUTO_DEVICE" value="AGIB023R18A1E1V" />
+  <parameter name="AUTO_DEVICE_FAMILY" value="Agilex 7" />
+  <parameter name="AUTO_BOARD" value="default" />
+  <parameter name="AUTO_M0_ADDRESS_MAP" value="" />
+  <parameter name="AUTO_CLK_RESET_DOMAIN" value="-1" />
+  <parameter name="AUTO_CLK_CLOCK_DOMAIN" value="-1" />
+  <parameter name="AUTO_M0_ADDRESS_WIDTH" value="-1" />
+  <parameter name="AUTO_UNIQUE_ID" value="" />
+  <parameter name="AUTO_DEVICE_SPEEDGRADE" value="1" />
+  <parameter name="AUTO_S0_CPU_INFO_ID" value="" />
+  <generatedFiles>
+   <file
+       path="F:\work\release_git_10.4\yuannic_agilex7_400g_d\release_pfs\sys\ip\axi4_adapter\axi4_adapter_axi_bridge_2\synth\axi4_adapter_axi_bridge_2.v"
+       attributes="CONTAINS_INLINE_CONFIGURATION" />
+  </generatedFiles>
+  <childGeneratedFiles>
+   <file
+       path="F:\work\release_git_10.4\yuannic_agilex7_400g_d\release_pfs\sys\ip\axi4_adapter\axi4_adapter_axi_bridge_2\synth\axi4_adapter_axi_bridge_2.v"
+       attributes="CONTAINS_INLINE_CONFIGURATION" />
+  </childGeneratedFiles>
+  <sourceFiles>
+   <file
+       path="F:/work/release_git_10.4/yuannic_agilex7_400g_d/release_pfs/sys/ip/axi4_adapter/axi4_adapter_axi_bridge_2.ip" />
+  </sourceFiles>
+  <childSourceFiles>
+   <file
+       path="C:/altera_pro/26.1.1/ip/altera/merlin/altera_axi_bridge/altera_axi_bridge_hw.tcl" />
+  </childSourceFiles>
+  <messages>
+   <message level="Info" culprit="axi4_adapter_axi_bridge_2">"Generating: axi4_adapter_axi_bridge_2"</message>
+   <message level="Info" culprit="axi4_adapter_axi_bridge_2">"Generating: axi4_adapter_axi_bridge_2_altera_axi_bridge_19103_mxjdhwq"</message>
+  </messages>
+ </entity>
+ <entity
+   kind="altera_axi_bridge"
+   version="19.10.3"
+   name="axi4_adapter_axi_bridge_2_altera_axi_bridge_19103_mxjdhwq">
+  <parameter name="USE_M0_USER_DATA" value="0" />
+  <parameter name="BURST_LENGTH_WIDTH" value="4" />
+  <parameter name="SID_WIDTH" value="1" />
+  <parameter name="LOCK_WIDTH" value="2" />
+  <parameter name="AWSNOOP_WIDTH" value="3" />
+  <parameter name="UNTRANSLATED_TXN" value="0" />
+  <parameter name="ROLE_BASED_USER" value="0" />
+  <parameter name="POISON_WIDTH" value="1" />
+  <parameter name="ADDRCHK_WIDTH" value="2" />
+  <parameter name="USE_S0_USER_DATA" value="0" />
+  <parameter name="DATACHK_WIDTH" value="4" />
+  <parameter name="ATOMIC_TXN" value="0" />
+  <parameter name="CACHESTASHING_TXN" value="0" />
+  <parameter name="ENABLE_AXI5" value="1" />
+  <parameter name="USER_DATA_WIDTH" value="1" />
+  <generatedFiles>
+   <file
+       path="F:\work\release_git_10.4\yuannic_agilex7_400g_d\release_pfs\sys\ip\axi4_adapter\axi4_adapter_axi_bridge_2\altera_axi_bridge_19103\synth\axi4_adapter_axi_bridge_2_altera_axi_bridge_19103_mxjdhwq.sv"
+       attributes="" />
+   <file
+       path="F:\work\release_git_10.4\yuannic_agilex7_400g_d\release_pfs\sys\ip\axi4_adapter\axi4_adapter_axi_bridge_2\altera_axi_bridge_19103\synth\altera_avalon_st_pipeline_base.v"
+       attributes="" />
+  </generatedFiles>
+  <childGeneratedFiles>
+   <file
+       path="F:\work\release_git_10.4\yuannic_agilex7_400g_d\release_pfs\sys\ip\axi4_adapter\axi4_adapter_axi_bridge_2\altera_axi_bridge_19103\synth\axi4_adapter_axi_bridge_2_altera_axi_bridge_19103_mxjdhwq.sv"
+       attributes="" />
+   <file
+       path="F:\work\release_git_10.4\yuannic_agilex7_400g_d\release_pfs\sys\ip\axi4_adapter\axi4_adapter_axi_bridge_2\altera_axi_bridge_19103\synth\altera_avalon_st_pipeline_base.v"
+       attributes="" />
+  </childGeneratedFiles>
+  <sourceFiles>
+   <file
+       path="C:/altera_pro/26.1.1/ip/altera/merlin/altera_axi_bridge/altera_axi_bridge_hw.tcl" />
+  </sourceFiles>
+  <childSourceFiles/>
+  <instantiator instantiator="axi4_adapter_axi_bridge_2" as="axi_bridge_2" />
+  <messages>
+   <message level="Info" culprit="axi4_adapter_axi_bridge_2">"Generating: axi4_adapter_axi_bridge_2_altera_axi_bridge_19103_mxjdhwq"</message>
+  </messages>
+ </entity>
+</deploy>
