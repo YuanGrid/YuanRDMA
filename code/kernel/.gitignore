@@ -1,0 +1,10 @@
+*.o
+*.ko
+*.mod
+*.mod.c
+*.cmd
+*.d
+*.o.ur-safe
+modules.order
+Module.symvers
+output/
