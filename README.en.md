@@ -190,7 +190,7 @@ Setup: YuanNIC-NH400-A, peer NVIDIA ConnectX-7, 400GbE direct link, upstream per
 <tr><td style="border:0;padding:0">
 
 <table width="100%" style="width:100%">
-<tr><th style="width:26%">Test</th><th style="width:37%">FPGA as client</th><th style="width:37%">FPGA as server</th></tr>
+<tr><th style="width:26%">Test</th><th style="width:37%">YuanNIC as client</th><th style="width:37%">YuanNIC as server</th></tr>
 <tr><td style="width:26%"><code>ib_write_bw</code> (1 QP)</td><td style="width:37%">142.9 Gb/s (35.7%)</td><td style="width:37%">98.5 Gb/s (24.6%)</td></tr>
 <tr><td style="width:26%"><code>ib_read_bw</code> (1 QP)</td><td style="width:37%">77.2 Gb/s (19.3%)</td><td style="width:37%">89.8 Gb/s (22.5%)</td></tr>
 <tr><td style="width:26%"><code>ib_send_bw</code> (1 QP)</td><td style="width:37%">142.9 Gb/s (35.7%)</td><td style="width:37%">97.9 Gb/s (24.5%)</td></tr>
@@ -209,7 +209,7 @@ Latency (2 B messages, one-way, typical / p99):
 <tr><td style="border:0;padding:0">
 
 <table width="100%" style="width:100%">
-<tr><th style="width:26%">Test</th><th style="width:37%">FPGA as client</th><th style="width:37%">FPGA as server</th></tr>
+<tr><th style="width:26%">Test</th><th style="width:37%">YuanNIC as client</th><th style="width:37%">YuanNIC as server</th></tr>
 <tr><td style="width:26%"><code>ib_write_lat</code></td><td style="width:37%"><strong>2.24 / 2.37 µs</strong></td><td style="width:37%"><strong>2.20 / 2.36 µs</strong></td></tr>
 <tr><td style="width:26%"><code>ib_read_lat</code></td><td style="width:37%">3.68 / 4.65 µs</td><td style="width:37%">2.88 / 3.03 µs</td></tr>
 <tr><td style="width:26%"><code>ib_send_lat</code></td><td style="width:37%">3.31 / 3.51 µs</td><td style="width:37%">2.82 / 2.94 µs</td></tr>
