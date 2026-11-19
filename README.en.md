@@ -163,73 +163,71 @@ Shipping forms include security gateways / firewalls, traffic-audit platforms, D
 
 Queues, tables and memory translation are consolidated below; the figures follow parameterized configuration such as `QP_NUM` and can change with firmware.
 
-<table width="100%" style="width:100% !important;display:table !important;table-layout:fixed">
-<tr>
-<td width="100%" valign="top">
+<table width="100%" style="width:100%;border:0;border-collapse:collapse">
+<tr><td style="border:0;padding:0">
 
-<table width="100%" style="width:100% !important;display:table !important;table-layout:fixed">
-<tr><th width="48%">Item</th><th width="52%">Specification</th></tr>
-<tr><td width="48%">QPs</td><td width="52%">128 by default, scalable to 4096 (<code>QP_NUM</code>)</td></tr>
-<tr><td width="48%">CQs</td><td width="52%">64</td></tr>
-<tr><td width="48%">SQ / RQ depth</td><td width="52%">4096</td></tr>
-<tr><td width="48%">CQ depth</td><td width="52%">up to 32768</td></tr>
-<tr><td width="48%">Connection setup</td><td width="52%">CM MADs over QP1 / GSI</td></tr>
-<tr><td width="48%">MTT entries</td><td width="52%">131072</td></tr>
-<tr><td width="48%">Max per MR</td><td width="52%">512 MiB</td></tr>
-<tr><td width="48%">Checking and translation</td><td width="52%"><code>lkey / rkey</code> checks and the address-translation cache in hardware</td></tr>
-<tr><td width="48%">GPU memory access</td><td width="52%"><code>dma-buf</code> MR registration (<code>ibv_reg_dmabuf_mr</code>, kernel ≥ 6.2); software stack complete, on-board validation in progress</td></tr>
+<table width="100%" style="width:100%">
+<tr><th style="width:48%">Item</th><th style="width:52%">Specification</th></tr>
+<tr><td style="width:48%">QPs</td><td style="width:52%">128 by default, scalable to 4096 (<code>QP_NUM</code>)</td></tr>
+<tr><td style="width:48%">CQs</td><td style="width:52%">64</td></tr>
+<tr><td style="width:48%">SQ / RQ depth</td><td style="width:52%">4096</td></tr>
+<tr><td style="width:48%">CQ depth</td><td style="width:52%">up to 32768</td></tr>
+<tr><td style="width:48%">Connection setup</td><td style="width:52%">CM MADs over QP1 / GSI</td></tr>
+<tr><td style="width:48%">MTT entries</td><td style="width:52%">131072</td></tr>
+<tr><td style="width:48%">Max per MR</td><td style="width:52%">512 MiB</td></tr>
+<tr><td style="width:48%">Checking and translation</td><td style="width:52%"><code>lkey / rkey</code> checks and the address-translation cache in hardware</td></tr>
+<tr><td style="width:48%">GPU memory access</td><td style="width:52%"><code>dma-buf</code> MR registration (<code>ibv_reg_dmabuf_mr</code>, kernel ≥ 6.2); software stack complete, on-board validation in progress</td></tr>
 </table>
 
 </td></tr>
-</table>
+</table>>
 
 ## 6 Performance
 
 Setup: YuanNIC-NH400-A, peer NVIDIA ConnectX-7, 400GbE direct link, upstream perftest, 1 MiB messages, 30 s per case.
 
-<table width="100%" style="width:100% !important;display:table !important;table-layout:fixed">
-<tr>
-<td width="100%" valign="top">
+<table width="100%" style="width:100%;border:0;border-collapse:collapse">
+<tr><td style="border:0;padding:0">
 
-<table width="100%" style="width:100% !important;display:table !important;table-layout:fixed">
-<tr><th width="26%">Test</th><th width="37%">FPGA as client</th><th width="37%">FPGA as server</th></tr>
-<tr><td width="26%"><code>ib_write_bw</code> (1 QP)</td><td width="37%">141.8 Gb/s (35.5%)</td><td width="37%">97.9 Gb/s (24.5%)</td></tr>
-<tr><td width="26%"><code>ib_read_bw</code> (1 QP)</td><td width="37%">77.2 Gb/s (19.3%)</td><td width="37%">89.8 Gb/s (22.5%)</td></tr>
-<tr><td width="26%"><code>ib_send_bw</code> (1 QP)</td><td width="37%">147.0 Gb/s (36.8%)</td><td width="37%">98.5 Gb/s (24.6%)</td></tr>
-<tr><td width="26%"><code>ib_write_bw</code> (4 QP)</td><td width="37%"><strong>352.1 Gb/s (88.0%)</strong></td><td width="37%">—</td></tr>
-<tr><td width="26%"><code>ib_read_bw</code> (4 QP)</td><td width="37%">—</td><td width="37%"><strong>328.2 Gb/s (82.1%)</strong></td></tr>
+<table width="100%" style="width:100%">
+<tr><th style="width:26%">Test</th><th style="width:37%">FPGA as client</th><th style="width:37%">FPGA as server</th></tr>
+<tr><td style="width:26%"><code>ib_write_bw</code> (1 QP)</td><td style="width:37%">141.8 Gb/s (35.5%)</td><td style="width:37%">97.9 Gb/s (24.5%)</td></tr>
+<tr><td style="width:26%"><code>ib_read_bw</code> (1 QP)</td><td style="width:37%">77.2 Gb/s (19.3%)</td><td style="width:37%">89.8 Gb/s (22.5%)</td></tr>
+<tr><td style="width:26%"><code>ib_send_bw</code> (1 QP)</td><td style="width:37%">147.0 Gb/s (36.8%)</td><td style="width:37%">98.5 Gb/s (24.6%)</td></tr>
+<tr><td style="width:26%"><code>ib_write_bw</code> (4 QP)</td><td style="width:37%"><strong>352.1 Gb/s (88.0%)</strong></td><td style="width:37%">—</td></tr>
+<tr><td style="width:26%"><code>ib_read_bw</code> (4 QP)</td><td style="width:37%">—</td><td style="width:37%"><strong>328.2 Gb/s (82.1%)</strong></td></tr>
 </table>
 
 </td></tr>
-</table>
+</table>>
 
 Percentages are of the 400 Gb/s line rate. With 4 QPs the transmit direction reaches 88% of line rate and the receive direction 82%; a single QP is limited to about 36% by per-packet assembly overhead, which is the main reason to run multiple QPs in parallel. Latency (typical): `ib_write_lat` about **2.2 µs**; `ib_read_lat` / `ib_send_lat` about 2.7 µs.
 
 ## 7 Supported Hardware
 
-<table width="100%" style="width:100% !important;display:table !important;table-layout:fixed">
+<table width="100%" style="width:100%;border:0;border-collapse:collapse">
 <tr>
-<td width="62%" valign="top">
+<td width="62%" valign="top" style="border:0;padding:0">
 
-<table width="100%" style="width:100% !important;display:table !important;table-layout:fixed">
-<tr><th width="48%">Item</th><th width="52%">Specification</th></tr>
-<tr><td width="48%">Model</td><td width="52%">YuanNIC-NH400-A</td></tr>
-<tr><td width="48%">FPGA device</td><td width="52%">Agilex 7 I <code>AGIB027</code></td></tr>
-<tr><td width="48%">Network port</td><td width="52%">1 × 400G QSFP-112 (F-tile 4x112)</td></tr>
-<tr><td width="48%">Port modes</td><td width="52%">1x400G / 1x200G / 1x100G / 1x40G on the same cage, set by firmware</td></tr>
-<tr><td width="48%">Host interface</td><td width="52%">PCIe Gen5 x16 (R-tile)</td></tr>
-<tr><td width="48%">Core clock</td><td width="52%">RoCE engine at 250 MHz</td></tr>
-<tr><td width="48%">Configuration</td><td width="52%">Active Serial x4</td></tr>
-<tr><td width="48%">Card model</td><td width="52%"><code>YN400GA7B027A</code> / C</td></tr>
-<tr><td width="48%">Form factor</td><td width="52%">Single slot, half-height half-length (with full-height bracket)</td></tr>
-<tr><td width="48%">Dimensions</td><td width="52%">169.5 × 68.9 × 18.5 mm</td></tr>
-<tr><td width="48%">Power</td><td width="52%">75 W max</td></tr>
-<tr><td width="48%">Cooling</td><td width="52%">Passive heatsink, relies on chassis airflow</td></tr>
-<tr><td width="48%">Operating temperature</td><td width="52%">0 – 55 ℃</td></tr>
+<table width="100%" style="width:100%">
+<tr><th style="width:48%">Item</th><th style="width:52%">Specification</th></tr>
+<tr><td style="width:48%">Model</td><td style="width:52%">YuanNIC-NH400-A</td></tr>
+<tr><td style="width:48%">FPGA device</td><td style="width:52%">Agilex 7 I <code>AGIB027</code></td></tr>
+<tr><td style="width:48%">Network port</td><td style="width:52%">1 × 400G QSFP-112 (F-tile 4x112)</td></tr>
+<tr><td style="width:48%">Port modes</td><td style="width:52%">1x400G / 1x200G / 1x100G / 1x40G on the same cage, set by firmware</td></tr>
+<tr><td style="width:48%">Host interface</td><td style="width:52%">PCIe Gen5 x16 (R-tile)</td></tr>
+<tr><td style="width:48%">Core clock</td><td style="width:52%">RoCE engine at 250 MHz</td></tr>
+<tr><td style="width:48%">Configuration</td><td style="width:52%">Active Serial x4</td></tr>
+<tr><td style="width:48%">Card model</td><td style="width:52%"><code>YN400GA7B027A</code> / C</td></tr>
+<tr><td style="width:48%">Form factor</td><td style="width:52%">Single slot, half-height half-length (with full-height bracket)</td></tr>
+<tr><td style="width:48%">Dimensions</td><td style="width:52%">169.5 × 68.9 × 18.5 mm</td></tr>
+<tr><td style="width:48%">Power</td><td style="width:52%">75 W max</td></tr>
+<tr><td style="width:48%">Cooling</td><td style="width:52%">Passive heatsink, relies on chassis airflow</td></tr>
+<tr><td style="width:48%">Operating temperature</td><td style="width:52%">0 – 55 ℃</td></tr>
 </table>
 
 </td>
-<td width="38%" valign="middle" align="center">
+<td width="38%" valign="middle" align="center" style="border:0;padding:0">
   <img src="docs/image/YuanNIC-NH400-A.png" alt="YuanNIC-NH400-A" width="300">
 </td>
 </tr>
@@ -239,30 +237,29 @@ The port mode is chosen at firmware build time and takes effect after link negot
 
 ## 8 Software Environment
 
-<table width="100%" style="width:100% !important;display:table !important;table-layout:fixed">
-<tr>
-<td width="100%" valign="top">
+<table width="100%" style="width:100%;border:0;border-collapse:collapse">
+<tr><td style="border:0;padding:0">
 
-<table width="100%" style="width:100% !important;display:table !important;table-layout:fixed">
-<tr><th width="22%"><strong>Item</strong></th><th width="18%"><strong>Version</strong></th><th width="60%"><strong>Notes</strong></th></tr>
-<tr><td width="22%">OS</td><td width="18%">Ubuntu 22.04, kernel <code>5.15.0-203-generic</code></td><td width="60%">X86_64 and ARM_64; on-board validation was done on X86_64, and driver vermagic must match <code>uname -r</code></td></tr>
-<tr><td width="22%">Host architecture</td><td width="18%">X86_64, ARM_64</td><td width="60%">Drivers, provider, DPDK PMD and tooling all have build paths on both</td></tr>
-<tr><td width="22%">RDMA user space</td><td width="18%">rdma-core v66 (built from this repository, PABI 65)</td><td width="60%">Provider is built against the same rdma-core tree; no stable external ABI, so it must be rebuilt per architecture</td></tr>
-<tr><td width="22%">System RDMA stack</td><td width="18%">DOCA 3.5.0</td><td width="60%">Coexists in isolation, no uninstall needed</td></tr>
-<tr><td width="22%">DPDK</td><td width="18%">25.11.2</td><td width="60%">User-space packet path, PMD <code>net_mcdma</code>; built with meson + ninja</td></tr>
-<tr><td width="22%">CUDA</td><td width="18%">12.4</td><td width="60%">Only needed for NCCL / GPUDirect RDMA (T4 = sm_75, <code>NVCC_GENCODE=compute_75,sm_75</code>)</td></tr>
-<tr><td width="22%">NCCL</td><td width="18%">2.22.3</td><td width="60%">Built from source; matches the 2.19.3–2.22.3 range validated against the reference product</td></tr>
-<tr><td width="22%">nccl-tests</td><td width="18%">v2.21.1</td><td width="60%">Test suite matching the NCCL 2.21 / 2.22 API; two-node <code>all_reduce_perf</code></td></tr>
-<tr><td width="22%">Simulator</td><td width="18%">Verilator 5.032</td><td width="60%">Must be built from source (the apt 4.038 lacks <code>--timing</code>); install to <code>/opt/verilator</code> and add to <code>PATH</code></td></tr>
-<tr><td width="22%">Simulation framework</td><td width="18%">cocotb 1.9.2 · cocotb-bus 0.3.0 · cocotbext-axi 0.1.28</td><td width="60%">Testbenches target the cocotb 1.9 API; do not bump to 2.x casually</td></tr>
-<tr><td width="22%">Python</td><td width="18%">3.10 (system default on Ubuntu 22.04)</td><td width="60%">Testbenches and packet-debug scripts</td></tr>
-<tr><td width="22%">Compilers</td><td width="18%">gcc 11 / g++ 11</td><td width="60%">Ubuntu 22.04 default; the <code>5.15</code> kernel is built with it, so <code>code/kernel</code> builds with a plain <code>make</code></td></tr>
-<tr><td width="22%">Build tools</td><td width="18%">cmake, meson, ninja, make, autoconf/flex/bison</td><td width="60%">cmake for the provider, meson + ninja for DPDK</td></tr>
-<tr><td width="22%">FPGA toolchain</td><td width="18%">Quartus Prime Pro 26.1.1</td><td width="60%">Used only to produce firmware</td></tr>
+<table width="100%" style="width:100%">
+<tr><th style="width:22%"><strong>Item</strong></th><th style="width:18%"><strong>Version</strong></th><th style="width:60%"><strong>Notes</strong></th></tr>
+<tr><td style="width:22%">OS</td><td style="width:18%">Ubuntu 22.04, kernel <code>5.15.0-203-generic</code></td><td style="width:60%">X86_64 and ARM_64; on-board validation was done on X86_64, and driver vermagic must match <code>uname -r</code></td></tr>
+<tr><td style="width:22%">Host architecture</td><td style="width:18%">X86_64, ARM_64</td><td style="width:60%">Drivers, provider, DPDK PMD and tooling all have build paths on both</td></tr>
+<tr><td style="width:22%">RDMA user space</td><td style="width:18%">rdma-core v66 (built from this repository, PABI 65)</td><td style="width:60%">Provider is built against the same rdma-core tree; no stable external ABI, so it must be rebuilt per architecture</td></tr>
+<tr><td style="width:22%">System RDMA stack</td><td style="width:18%">DOCA 3.5.0</td><td style="width:60%">Coexists in isolation, no uninstall needed</td></tr>
+<tr><td style="width:22%">DPDK</td><td style="width:18%">25.11.2</td><td style="width:60%">User-space packet path, PMD <code>net_mcdma</code>; built with meson + ninja</td></tr>
+<tr><td style="width:22%">CUDA</td><td style="width:18%">12.4</td><td style="width:60%">Only needed for NCCL / GPUDirect RDMA (T4 = sm_75, <code>NVCC_GENCODE=compute_75,sm_75</code>)</td></tr>
+<tr><td style="width:22%">NCCL</td><td style="width:18%">2.22.3</td><td style="width:60%">Built from source; matches the 2.19.3–2.22.3 range validated against the reference product</td></tr>
+<tr><td style="width:22%">nccl-tests</td><td style="width:18%">v2.21.1</td><td style="width:60%">Test suite matching the NCCL 2.21 / 2.22 API; two-node <code>all_reduce_perf</code></td></tr>
+<tr><td style="width:22%">Simulator</td><td style="width:18%">Verilator 5.032</td><td style="width:60%">Must be built from source (the apt 4.038 lacks <code>--timing</code>); install to <code>/opt/verilator</code> and add to <code>PATH</code></td></tr>
+<tr><td style="width:22%">Simulation framework</td><td style="width:18%">cocotb 1.9.2 · cocotb-bus 0.3.0 · cocotbext-axi 0.1.28</td><td style="width:60%">Testbenches target the cocotb 1.9 API; do not bump to 2.x casually</td></tr>
+<tr><td style="width:22%">Python</td><td style="width:18%">3.10 (system default on Ubuntu 22.04)</td><td style="width:60%">Testbenches and packet-debug scripts</td></tr>
+<tr><td style="width:22%">Compilers</td><td style="width:18%">gcc 11 / g++ 11</td><td style="width:60%">Ubuntu 22.04 default; the <code>5.15</code> kernel is built with it, so <code>code/kernel</code> builds with a plain <code>make</code></td></tr>
+<tr><td style="width:22%">Build tools</td><td style="width:18%">cmake, meson, ninja, make, autoconf/flex/bison</td><td style="width:60%">cmake for the provider, meson + ninja for DPDK</td></tr>
+<tr><td style="width:22%">FPGA toolchain</td><td style="width:18%">Quartus Prime Pro 26.1.1</td><td style="width:60%">Used only to produce firmware</td></tr>
 </table>
 
 </td></tr>
-</table>
+</table>>
 
 ## 9 Quick Start
 

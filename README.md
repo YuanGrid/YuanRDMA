@@ -163,73 +163,71 @@ YuanSec 以 FPGA 并行计算加 DPDK 转发为数据面，把检测与密码运
 
 队列、表项与内存翻译合并如下；规格由 `QP_NUM` 等参数化配置决定，可随固件调整。
 
-<table width="100%" style="width:100% !important;display:table !important;table-layout:fixed">
-<tr>
-<td width="100%" valign="top">
+<table width="100%" style="width:100%;border:0;border-collapse:collapse">
+<tr><td style="border:0;padding:0">
 
-<table width="100%" style="width:100% !important;display:table !important;table-layout:fixed">
-<tr><th width="48%">项</th><th width="52%">规格</th></tr>
-<tr><td width="48%">QP 数量</td><td width="52%">默认 128，可扩展至 4096（<code>QP_NUM</code> 参数化）</td></tr>
-<tr><td width="48%">CQ 数量</td><td width="52%">64</td></tr>
-<tr><td width="48%">SQ / RQ 深度</td><td width="52%">4096</td></tr>
-<tr><td width="48%">CQ 深度</td><td width="52%">最高 32768</td></tr>
-<tr><td width="48%">建链资源</td><td width="52%">QP1 / GSI 承载 CM MAD</td></tr>
-<tr><td width="48%">MTT 表项</td><td width="52%">131072</td></tr>
-<tr><td width="48%">单个 MR 上限</td><td width="52%">512 MiB</td></tr>
-<tr><td width="48%">校验与翻译</td><td width="52%"><code>lkey / rkey</code> 校验与地址翻译缓存在硬件完成</td></tr>
-<tr><td width="48%">GPU 显存访问</td><td width="52%"><code>dma-buf</code> MR 注册（<code>ibv_reg_dmabuf_mr</code>，内核 ≥ 6.2），软件栈完成、上板验证进行中</td></tr>
+<table width="100%" style="width:100%">
+<tr><th style="width:48%">项</th><th style="width:52%">规格</th></tr>
+<tr><td style="width:48%">QP 数量</td><td style="width:52%">默认 128，可扩展至 4096（<code>QP_NUM</code> 参数化）</td></tr>
+<tr><td style="width:48%">CQ 数量</td><td style="width:52%">64</td></tr>
+<tr><td style="width:48%">SQ / RQ 深度</td><td style="width:52%">4096</td></tr>
+<tr><td style="width:48%">CQ 深度</td><td style="width:52%">最高 32768</td></tr>
+<tr><td style="width:48%">建链资源</td><td style="width:52%">QP1 / GSI 承载 CM MAD</td></tr>
+<tr><td style="width:48%">MTT 表项</td><td style="width:52%">131072</td></tr>
+<tr><td style="width:48%">单个 MR 上限</td><td style="width:52%">512 MiB</td></tr>
+<tr><td style="width:48%">校验与翻译</td><td style="width:52%"><code>lkey / rkey</code> 校验与地址翻译缓存在硬件完成</td></tr>
+<tr><td style="width:48%">GPU 显存访问</td><td style="width:52%"><code>dma-buf</code> MR 注册（<code>ibv_reg_dmabuf_mr</code>，内核 ≥ 6.2），软件栈完成、上板验证进行中</td></tr>
 </table>
 
 </td></tr>
-</table>
+</table>>
 
 ## 6 性能
 
 测试条件：YuanNIC-NH400-A，对端 NVIDIA ConnectX-7，400GbE 直连，原版 perftest，消息 1 MiB，每项 30 s。
 
-<table width="100%" style="width:100% !important;display:table !important;table-layout:fixed">
-<tr>
-<td width="100%" valign="top">
+<table width="100%" style="width:100%;border:0;border-collapse:collapse">
+<tr><td style="border:0;padding:0">
 
-<table width="100%" style="width:100% !important;display:table !important;table-layout:fixed">
-<tr><th width="26%">用例</th><th width="37%">FPGA 作客户端</th><th width="37%">FPGA 作服务端</th></tr>
-<tr><td width="26%"><code>ib_write_bw</code>（1 QP）</td><td width="37%">141.8 Gb/s（35.5%）</td><td width="37%">97.9 Gb/s（24.5%）</td></tr>
-<tr><td width="26%"><code>ib_read_bw</code>（1 QP）</td><td width="37%">77.2 Gb/s（19.3%）</td><td width="37%">89.8 Gb/s（22.5%）</td></tr>
-<tr><td width="26%"><code>ib_send_bw</code>（1 QP）</td><td width="37%">147.0 Gb/s（36.8%）</td><td width="37%">98.5 Gb/s（24.6%）</td></tr>
-<tr><td width="26%"><code>ib_write_bw</code>（4 QP）</td><td width="37%"><strong>352.1 Gb/s（88.0%）</strong></td><td width="37%">—</td></tr>
-<tr><td width="26%"><code>ib_read_bw</code>（4 QP）</td><td width="37%">—</td><td width="37%"><strong>328.2 Gb/s（82.1%）</strong></td></tr>
+<table width="100%" style="width:100%">
+<tr><th style="width:26%">用例</th><th style="width:37%">FPGA 作客户端</th><th style="width:37%">FPGA 作服务端</th></tr>
+<tr><td style="width:26%"><code>ib_write_bw</code>（1 QP）</td><td style="width:37%">141.8 Gb/s（35.5%）</td><td style="width:37%">97.9 Gb/s（24.5%）</td></tr>
+<tr><td style="width:26%"><code>ib_read_bw</code>（1 QP）</td><td style="width:37%">77.2 Gb/s（19.3%）</td><td style="width:37%">89.8 Gb/s（22.5%）</td></tr>
+<tr><td style="width:26%"><code>ib_send_bw</code>（1 QP）</td><td style="width:37%">147.0 Gb/s（36.8%）</td><td style="width:37%">98.5 Gb/s（24.6%）</td></tr>
+<tr><td style="width:26%"><code>ib_write_bw</code>（4 QP）</td><td style="width:37%"><strong>352.1 Gb/s（88.0%）</strong></td><td style="width:37%">—</td></tr>
+<tr><td style="width:26%"><code>ib_read_bw</code>（4 QP）</td><td style="width:37%">—</td><td style="width:37%"><strong>328.2 Gb/s（82.1%）</strong></td></tr>
 </table>
 
 </td></tr>
-</table>
+</table>>
 
 括号内为占 400 Gb/s 线速的比例。多 QP 并发时发送方向达 88%、接收方向 82%；单 QP 受每包组包开销限制约 36%，这正是需要多 QP 并行下发的原因。时延（typical）：`ib_write_lat` 约 **2.2 µs**，`ib_read_lat` / `ib_send_lat` 约 2.7 µs。
 
 ## 7 支持的硬件
 
-<table width="100%" style="width:100% !important;display:table !important;table-layout:fixed">
+<table width="100%" style="width:100%;border:0;border-collapse:collapse">
 <tr>
-<td width="62%" valign="top">
+<td width="62%" valign="top" style="border:0;padding:0">
 
-<table width="100%" style="width:100% !important;display:table !important;table-layout:fixed">
-<tr><th width="48%">项</th><th width="52%">规格</th></tr>
-<tr><td width="48%">型号</td><td width="52%">YuanNIC-NH400-A</td></tr>
-<tr><td width="48%">FPGA 器件</td><td width="52%">Agilex 7 I <code>AGIB027</code></td></tr>
-<tr><td width="48%">网口</td><td width="52%">1 × 400G QSFP-112（F-tile 4x112）</td></tr>
-<tr><td width="48%">端口模式</td><td width="52%">1x400G / 1x200G / 1x100G / 1x40G（同一 400G 笼口，按固件配置）</td></tr>
-<tr><td width="48%">主机接口</td><td width="52%">PCIe Gen5 x16（R-tile）</td></tr>
-<tr><td width="48%">核心时钟</td><td width="52%">RoCE 引擎 250 MHz</td></tr>
-<tr><td width="48%">配置方式</td><td width="52%">Active Serial x4</td></tr>
-<tr><td width="48%">网卡型号</td><td width="52%"><code>YN400GA7B027A</code> / C</td></tr>
-<tr><td width="48%">形态</td><td width="52%">单槽半高半长（配全高挡片）</td></tr>
-<tr><td width="48%">尺寸</td><td width="52%">169.5 × 68.9 × 18.5 mm</td></tr>
-<tr><td width="48%">功耗</td><td width="52%">最大 75 W</td></tr>
-<tr><td width="48%">散热</td><td width="52%">被动散热，依赖机箱风道</td></tr>
-<tr><td width="48%">工作温度</td><td width="52%">0 – 55 ℃</td></tr>
+<table width="100%" style="width:100%">
+<tr><th style="width:48%">项</th><th style="width:52%">规格</th></tr>
+<tr><td style="width:48%">型号</td><td style="width:52%">YuanNIC-NH400-A</td></tr>
+<tr><td style="width:48%">FPGA 器件</td><td style="width:52%">Agilex 7 I <code>AGIB027</code></td></tr>
+<tr><td style="width:48%">网口</td><td style="width:52%">1 × 400G QSFP-112（F-tile 4x112）</td></tr>
+<tr><td style="width:48%">端口模式</td><td style="width:52%">1x400G / 1x200G / 1x100G / 1x40G（同一 400G 笼口，按固件配置）</td></tr>
+<tr><td style="width:48%">主机接口</td><td style="width:52%">PCIe Gen5 x16（R-tile）</td></tr>
+<tr><td style="width:48%">核心时钟</td><td style="width:52%">RoCE 引擎 250 MHz</td></tr>
+<tr><td style="width:48%">配置方式</td><td style="width:52%">Active Serial x4</td></tr>
+<tr><td style="width:48%">网卡型号</td><td style="width:52%"><code>YN400GA7B027A</code> / C</td></tr>
+<tr><td style="width:48%">形态</td><td style="width:52%">单槽半高半长（配全高挡片）</td></tr>
+<tr><td style="width:48%">尺寸</td><td style="width:52%">169.5 × 68.9 × 18.5 mm</td></tr>
+<tr><td style="width:48%">功耗</td><td style="width:52%">最大 75 W</td></tr>
+<tr><td style="width:48%">散热</td><td style="width:52%">被动散热，依赖机箱风道</td></tr>
+<tr><td style="width:48%">工作温度</td><td style="width:52%">0 – 55 ℃</td></tr>
 </table>
 
 </td>
-<td width="38%" valign="middle" align="center">
+<td width="38%" valign="middle" align="center" style="border:0;padding:0">
   <img src="docs/image/YuanNIC-NH400-A.png" alt="YuanNIC-NH400-A" width="300">
 </td>
 </tr>
@@ -239,30 +237,29 @@ YuanSec 以 FPGA 并行计算加 DPDK 转发为数据面，把检测与密码运
 
 ## 8 软件环境
 
-<table width="100%" style="width:100% !important;display:table !important;table-layout:fixed">
-<tr>
-<td width="100%" valign="top">
+<table width="100%" style="width:100%;border:0;border-collapse:collapse">
+<tr><td style="border:0;padding:0">
 
-<table width="100%" style="width:100% !important;display:table !important;table-layout:fixed">
-<tr><th width="22%"><strong>项</strong></th><th width="18%"><strong>版本</strong></th><th width="60%"><strong>说明</strong></th></tr>
-<tr><td width="22%">操作系统</td><td width="18%">Ubuntu 22.04，内核 <code>5.15.0-203-generic</code></td><td width="60%">X86_64 / ARM_64 双架构；上板验证环境为 X86_64，驱动 vermagic 须与 <code>uname -r</code> 一致</td></tr>
-<tr><td width="22%">主机架构</td><td width="18%">X86_64、ARM_64</td><td width="60%">驱动、provider、DPDK PMD 与工具链均在两种架构上提供构建路径</td></tr>
-<tr><td width="22%">RDMA 用户态</td><td width="18%">rdma-core v66（随本仓库编译，PABI 65）</td><td width="60%">provider 与 rdma-core 同源编译，无稳定外部 ABI，须随架构重编</td></tr>
-<tr><td width="22%">系统 RDMA 栈</td><td width="18%">DOCA 3.5.0</td><td width="60%">与本栈隔离共存，无需卸载</td></tr>
-<tr><td width="22%">DPDK</td><td width="18%">25.11.2</td><td width="60%">用户态收包路径，PMD 为 <code>net_mcdma</code>；meson + ninja 构建</td></tr>
-<tr><td width="22%">CUDA</td><td width="18%">12.4</td><td width="60%">仅 NCCL / GPUDirect RDMA 场景需要（T4 = sm_75，<code>NVCC_GENCODE=compute_75,sm_75</code>）</td></tr>
-<tr><td width="22%">NCCL</td><td width="18%">2.22.3</td><td width="60%">源码编译，与对标产品验证过的 2.19.3–2.22.3 区间对齐</td></tr>
-<tr><td width="22%">nccl-tests</td><td width="18%">v2.21.1</td><td width="60%">NCCL 2.21 / 2.22 API 对应的测试集，<code>all_reduce_perf</code> 双机</td></tr>
-<tr><td width="22%">仿真器</td><td width="18%">Verilator 5.032</td><td width="60%">需源码编译（apt 的 4.038 不支持 <code>--timing</code>），装到 <code>/opt/verilator</code> 并加入 <code>PATH</code></td></tr>
-<tr><td width="22%">仿真框架</td><td width="18%">cocotb 1.9.2 · cocotb-bus 0.3.0 · cocotbext-axi 0.1.28</td><td width="60%">台子按 cocotb 1.9 API 编写，不可随手升 2.x</td></tr>
-<tr><td width="22%">Python</td><td width="18%">3.10（Ubuntu 22.04 系统自带）</td><td width="60%">仿真台子与报文调试脚本</td></tr>
-<tr><td width="22%">编译器</td><td width="18%">gcc 11 / g++ 11</td><td width="60%">Ubuntu 22.04 默认版本，<code>5.15</code> 内核用它编译，<code>code/kernel</code> 直接 <code>make</code></td></tr>
-<tr><td width="22%">构建工具</td><td width="18%">cmake、meson、ninja、make、autoconf/flex/bison</td><td width="60%">provider 用 cmake，DPDK 用 meson + ninja</td></tr>
-<tr><td width="22%">FPGA 工具链</td><td width="18%">Quartus Prime Pro 26.1.1</td><td width="60%">仅出固件时需要</td></tr>
+<table width="100%" style="width:100%">
+<tr><th style="width:22%"><strong>项</strong></th><th style="width:18%"><strong>版本</strong></th><th style="width:60%"><strong>说明</strong></th></tr>
+<tr><td style="width:22%">操作系统</td><td style="width:18%">Ubuntu 22.04，内核 <code>5.15.0-203-generic</code></td><td style="width:60%">X86_64 / ARM_64 双架构；上板验证环境为 X86_64，驱动 vermagic 须与 <code>uname -r</code> 一致</td></tr>
+<tr><td style="width:22%">主机架构</td><td style="width:18%">X86_64、ARM_64</td><td style="width:60%">驱动、provider、DPDK PMD 与工具链均在两种架构上提供构建路径</td></tr>
+<tr><td style="width:22%">RDMA 用户态</td><td style="width:18%">rdma-core v66（随本仓库编译，PABI 65）</td><td style="width:60%">provider 与 rdma-core 同源编译，无稳定外部 ABI，须随架构重编</td></tr>
+<tr><td style="width:22%">系统 RDMA 栈</td><td style="width:18%">DOCA 3.5.0</td><td style="width:60%">与本栈隔离共存，无需卸载</td></tr>
+<tr><td style="width:22%">DPDK</td><td style="width:18%">25.11.2</td><td style="width:60%">用户态收包路径，PMD 为 <code>net_mcdma</code>；meson + ninja 构建</td></tr>
+<tr><td style="width:22%">CUDA</td><td style="width:18%">12.4</td><td style="width:60%">仅 NCCL / GPUDirect RDMA 场景需要（T4 = sm_75，<code>NVCC_GENCODE=compute_75,sm_75</code>）</td></tr>
+<tr><td style="width:22%">NCCL</td><td style="width:18%">2.22.3</td><td style="width:60%">源码编译，与对标产品验证过的 2.19.3–2.22.3 区间对齐</td></tr>
+<tr><td style="width:22%">nccl-tests</td><td style="width:18%">v2.21.1</td><td style="width:60%">NCCL 2.21 / 2.22 API 对应的测试集，<code>all_reduce_perf</code> 双机</td></tr>
+<tr><td style="width:22%">仿真器</td><td style="width:18%">Verilator 5.032</td><td style="width:60%">需源码编译（apt 的 4.038 不支持 <code>--timing</code>），装到 <code>/opt/verilator</code> 并加入 <code>PATH</code></td></tr>
+<tr><td style="width:22%">仿真框架</td><td style="width:18%">cocotb 1.9.2 · cocotb-bus 0.3.0 · cocotbext-axi 0.1.28</td><td style="width:60%">台子按 cocotb 1.9 API 编写，不可随手升 2.x</td></tr>
+<tr><td style="width:22%">Python</td><td style="width:18%">3.10（Ubuntu 22.04 系统自带）</td><td style="width:60%">仿真台子与报文调试脚本</td></tr>
+<tr><td style="width:22%">编译器</td><td style="width:18%">gcc 11 / g++ 11</td><td style="width:60%">Ubuntu 22.04 默认版本，<code>5.15</code> 内核用它编译，<code>code/kernel</code> 直接 <code>make</code></td></tr>
+<tr><td style="width:22%">构建工具</td><td style="width:18%">cmake、meson、ninja、make、autoconf/flex/bison</td><td style="width:60%">provider 用 cmake，DPDK 用 meson + ninja</td></tr>
+<tr><td style="width:22%">FPGA 工具链</td><td style="width:18%">Quartus Prime Pro 26.1.1</td><td style="width:60%">仅出固件时需要</td></tr>
 </table>
 
 </td></tr>
-</table>
+</table>>
 
 ## 9 快速开始
 
