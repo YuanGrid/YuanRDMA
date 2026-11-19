@@ -33,7 +33,7 @@ package roce_pkg;
     endfunction
     // S6：CQ 16 → 64。CQ_W 随 CQ_NUM 走（16 时 4、64 时 6）。**不要在任何地方再写死 4**：
     // CQ 编号 N 与 N&15 撞号是最可能的事故模式（与 S4 的 QP68/QP4 同型：高位静默截断，
-    // 编译与仿真都不报错，只是 CQE 写进了别的 CQ 的环）。定向台子 test/sim/roce_cq64 钉住这一点。
+    // 编译与仿真都不报错，只是 CQE 写进了别的 CQ 的环）。定向台子 roce_cq64 钉住这一点。
     localparam int CQ_NUM      = 64;
     localparam int CQ_W        = (CQ_NUM > 1) ? $clog2(CQ_NUM) : 1;
     // QPC dw0 里 scq/rcq 各占 6 bit（见下方 qpc_scq/qpc_rcq）。CQ_NUM 再改（≥128）必须先改位段
@@ -142,7 +142,7 @@ package roce_pkg;
     localparam int CNT_BAS_B         = 20;
     localparam int CNT_BAS_AR_HS     = 21;
     localparam int CNT_BAS_R_LAST    = 22;
-    // RX 固定开销分解：每 core_clk 累计（用来测量每包拍数分布，见 skill/rx-goback-n-analysis.md §2.5）
+    // RX 固定开销分解：每 core_clk 累计（用来测量每包拍数分布，见 RX 重传分析文档 §2.5）
     // 读法：cnt/RX_PKTS 即均值。**必须取前后快照做差**：32 位 × 100 MHz = 43 s 回绕，
     // 直接拿绝对值除 RX_PKTS 会得到荒谬的小数（B6389 实测踩到 0.76 拍/包）。
     localparam int CNT_RESP_CYCLES      = 23; // roce_resp main_state != IDLE 的拍数
@@ -289,7 +289,7 @@ package roce_pkg;
     // 跨 RTL / 内核 / provider / 台子的契约。改这里必须同步改：
     //   code/rdmasw/include/yuanrdma_hw.h（struct ynrdma_qpc 的 dw0 注释）
     //   code/kernel/yuanrdma/yuanrdma_verbs.c（create_qp 拼 dw0、modify_qp 掩码）
-    //   test/sim/common/roce_hw.py（pack_qpc）
+    //   仿真共享库 roce_hw.py（pack_qpc）
     // 内核与 provider 都不看 remote_write/remote_read 的这位（权限走 MPT），
     // RTL 也没有消费方（qpc_rwrite/qpc_rread 无引用）——它们只是记录，跟着上面两项一起挪即可。
     function automatic logic [31:0] qpc_dw(input logic [511:0] qp_context, input int dword);
@@ -309,7 +309,7 @@ package roce_pkg;
      * enable_ud 只在内核建 QP 时把关，运行期是敞开的；反过来 UD QP 发 RC WQE 也一样。
      * 取值只有 1 bit，不枚举 IBV_QPT_*：RTL 只需要区分「这个 QP 能不能发 UD」。
      * 跨层契约：yuanrdma_hw.h 的 ynrdma_qpc.dw0 注释、内核 create_qp 拼 dw0、
-     * test/sim/common/roce_hw.py 的 pack_qpc 三处必须同步。 */
+     * 仿真共享库 roce_hw.py 的 pack_qpc 三处必须同步。 */
     function automatic logic        qpc_is_ud  (input logic [511:0] qp_context); return qp_context[21];         endfunction
     function automatic logic [23:0] qpc_dqpn   (input logic [511:0] qp_context); return qp_context[1*32 +: 24]; endfunction
     function automatic logic [31:0] qpc_dip    (input logic [511:0] qp_context); return qp_context[2*32 +: 32]; endfunction
@@ -378,7 +378,7 @@ package roce_pkg;
         logic [19:0] csum_base;
         // 派生长度（B6439）：全部是 (opcode, payload_length) 的纯函数，由产生方算好随任务流过
         // 在途 FIFO，PREP 拍直接读寄存器，不再在 FIFO 出口做 4 项译码求和 + 两级加法 + 反相。
-        // 见 roce-optimization-log.md §68：B6438 最差 core 路径 (u_inflight → add_4/5/87/86/88 →
+        // 见调试记录 §68：B6438 最差 core 路径 (u_inflight → add_4/5/87/86/88 →
         // u_skip_align|out_data) 就是这条链，−0.301 ns。
         logic [6:0]  header_length;         // 54 + extension_length
         logic [6:0]  header_skip;           // 128 - header_length，直接喂 skip_align.meta_skip
@@ -389,10 +389,10 @@ package roce_pkg;
         // DETH 里只有 Q_Key 和源 QPN 需要另带（IBTA §9.8.5：DETH = Q_Key 4 B + src QP 3 B + 保留 1 B）。
         // roce_tx 在组头时把 deth_qkey 写 [432 +: 32]、deth_src_qp 写 [464 +: 24]、字节 61 保留 0。
         //
-        // 【同步义务，roce-optimization-log.md §76.5 的教训】加字段必须同时改这三处，漏一处必静默错位：
+        // 【同步义务，调试记录 §76.5 的教训】加字段必须同时改这三处，漏一处必静默错位：
         //   1) roce_engine.sv 的 CNP 全字段赋值（cnp_job 的 '{...} 是 assignment pattern，
         //      少一个字段直接编译报错；但要显式补 deth_qkey: 32'd0, deth_src_qp: 24'd0 才算写清）；
-        //   2) test/sim/common/roce_hw.py 的 TX_JOB_FIELDS（顺序 + 位宽，新字段追加在**末尾**）；
+        //   2) 仿真共享库 roce_hw.py 的 TX_JOB_FIELDS（顺序 + 位宽，新字段追加在**末尾**）；
         //   3) pack_tx_job() 的默认值（缺字段会被 pack_fields 当 0 填，但顺序错就是整条任务错位）。
         logic [31:0] deth_qkey;             // 主机序（组头时 swap32 成网络序）
         logic [23:0] deth_src_qp;           // 源 QPN，组头时 swap24

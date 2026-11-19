@@ -306,7 +306,7 @@ module roce_resp
     wire [7:0]  opcode       = header.opcode;
     // UD（0x64/0x65）：无 PSN 语义、无 ACK、无 RNR，一个包就是一条完整消息。
     // 单独一根线而不是并进 is_send_first：并进去会让下面 `is_send && !message_active` 的
-    // 「首包」判断和 RQ 取指逻辑对 UD 误触发（见 skill/ud-transport-plan.md §7.5）。
+    // 「首包」判断和 RQ 取指逻辑对 UD 误触发（见 UD 传输方案文档 §7.5）。
     wire        is_ud_send       = (opcode == OP_SEND_ONLY_UD) || (opcode == OP_SEND_ONLY_UD_IMM);
     wire        is_send_first    = (opcode == OP_SEND_FIRST) || (opcode == OP_SEND_ONLY) || (opcode == OP_SEND_ONLY_IMM) ||
                                    is_ud_send;
@@ -541,7 +541,7 @@ module roce_resp
             //   代价（§63.5 必须实测的那 1 拍）：头部**刚到达**的那一拍（上一拍总线上的 qp_index 还是
             //   别人）、或读那一沿正好有主机 QPC 写入时，多停一拍 MAIN_LOAD 重读。1024 B 包每包
             //   固定开销原先约 1 拍（≈6%），若每包都吃到这一拍会变成 2 拍。本改动上板/仿真实测见
-            //   roce-optimization-log.md §63.6：test_resp_profile 串行开销与改动前相同。
+            //   调试记录 §63.6：test_resp_profile 串行开销与改动前相同。
             // 原来的注释（保留作历史）：IDLE 与 LOAD 合并，省下的 1 拍在 1024 B 包上约占每包固定开销的 6%。
             MAIN_IDLE, MAIN_LOAD: if (rx_header_valid && !rx_header_ready && !qpc_hit) begin
                         main_state   <= MAIN_LOAD;         // 预读未命中：读口下一拍就是这个 QP

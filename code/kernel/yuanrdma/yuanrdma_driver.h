@@ -38,7 +38,7 @@
  *   的 UD 支持是两条独立的开发线。WQE 编码 5/6 在**老比特流**里根本没有 case，
  *   roce_req 的 tx_opcode_of() 对未知编码落到 default，行为是「组一个 RC 形态的包发出去」，
  *   对端按 RC 解析、不回任何东西——用户看到的是「发送成功、接收端永远收不到」，
- *   没有任何错误上报。这正是 skill/session-handoff.md §76.5 记的那类坑。
+ *   没有任何错误上报。这正是 开发记录 §76.5 记的那类坑。
  *
  *   驱动无法从 YNRDMA_REG_CAPS 判别 UD 是否就绪（没有对应位），所以只能由部署者显式声明：
  *   烧了带 UD TX 的比特流之后 insmod yuanrdma.ko enable_ud=1。未声明时 create_qp(UD)

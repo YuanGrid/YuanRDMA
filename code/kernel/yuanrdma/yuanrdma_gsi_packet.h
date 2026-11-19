@@ -5,7 +5,7 @@
  * QP1 不经过 RoCE 引擎：发方向由驱动组好整帧经 yuanmcdma 的 netdev 发出，收方向在
  * netdev 的 UDP 4791 上截获（引擎同时也会看到这些帧，见 yuanrdma_gsi.c 文件头）。
  * 这里只放纯函数、只操作字节缓冲，内核与用户态单测（test/sw/gsi_pkt）共用同一份，
- * 单测拿它和 test/sim/common/roce_pkt.py（已与 scapy 交叉验证）逐字节比对。
+ * 单测拿它和 仿真共享库 roce_pkt.py（已与 scapy 交叉验证）逐字节比对。
  *
  * 帧格式（IPv4、无 VLAN、无 IP 选项）：
  *   Eth 14 | IPv4 20 | UDP 8 (dport 4791, csum 0) | BTH 12 | DETH 8 | [ImmDt 4] |

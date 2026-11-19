@@ -169,7 +169,7 @@ struct ibv_qp *yuanrdma_create_qp(struct ibv_pd *pd, struct ibv_qp_init_attr *at
 	 * （code/kernel/yuanrdma/yuanrdma_verbs.c:521）目前仍只放 IB_QPT_RC，
 	 * 所以这一层放行不会让谁「建得起来但发不对」——真正的门在上游 ioctl。
 	 * 内核放行 UD 的前提是 roce_req 的 WQE_UD_SEND 与 roce_tx 的 DETH 段都已落地
-	 * （见 skill/ud-transport-plan.md §2.2/§4）。
+	 * （见 UD 传输方案文档 §2.2/§4）。
 	 * 注意：provider 不再单独判断 UD 的 max_sge，post_send 里按 wr->opcode 分派，
 	 * RC 路径一个字节都不受影响。 */
 	if ((attributes->qp_type != IBV_QPT_RC && attributes->qp_type != IBV_QPT_UD) || attributes->srq) {

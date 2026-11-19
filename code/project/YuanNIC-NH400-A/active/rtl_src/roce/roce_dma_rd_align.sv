@@ -12,7 +12,7 @@
 // B6414 及以前每个请求固定多 3 拍——c0 装 meta（meta_ready = !request_active，必须等上一请求
 // 完全结束）、c1 首拍只存不出（拼接要上一拍）、末尾单独一拍 finish 清 request_active。
 // 1 KB 对齐请求 11 拍只出 8 拍（占空 0.727），是 server read_bw 单 lane 的墙
-// （125 MHz 下 93.1 Gb/s，实测 89.81，见 skill/roce-optimization-log.md §39.6）。现在：
+// （125 MHz 下 93.1 Gb/s，实测 89.81，见调试记录 §39.6）。现在：
 //   1. 预取寄存器 next_*：meta_ready = !next_valid（纯寄存器，不吃 out_ready 那条长组合链），
 //      当前请求结束的同一拍（request_done）就把下一请求装进来，下一拍直接取它的首拍；
 //      空闲时 meta 直接旁路进当前请求，不多一拍延迟。

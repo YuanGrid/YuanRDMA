@@ -451,7 +451,7 @@ module roce_req
     reg  [LANE_QPS-1:0] tx_eligible_q;     // S4：lane 局部域（32 位）
     // PFC 准入（2026-11-09）：每个 QP 按 QPC 的 TOS[7:5] 选优先级，被 pause 的优先级不派发新 WQE。
     //   rx_pfc[8] 是 802.3x 全局 pause，挡住所有优先级；rx_pfc[7:0] 是 per-priority，
-    //   受控注入已证明 F-tile 逐帧产出（skill/pfc-dcqcn-congestion-control.md §12）。
+    //   受控注入已证明 F-tile 逐帧产出（见 PFC/DCQCN 文档 §12）。
     // 只挡「新 WQE 派发」：已开始的包（REQ_TX_*）发完，ACK/NAK/READ RESP 由 roce_resp 直接出，不受影响。
     // 优先级 = TOS[7:5] = DSCP[5:3]（与 QDMA 路径 pfc_parser 的 IPv4 分类同口径）。
     //   qpc_tos 在 dw7[23:16]，即 qpc[7*32+16 +: 8]（roce_pkg::qpc_tos），其 [7:5] 直接位选 qpc[7*32+16+5 +: 3]。
@@ -553,7 +553,7 @@ module roce_req
 
     // B6418：写回后那拍不再把 qp_index 挡掉，而是用「写回值本身」算出的资格位替换它。
     //   B6417 的挡法让单 QP 每包在 IDLE 白等 1 拍（每包 14.25 → 14.64 拍，client write −2.6%，
-    //   roce-optimization-log §44.3）；多 QP 时 round-robin 能选别的 QP 填上，所以只伤单 QP。
+    //   见调试记录 §44.3）；多 QP 时 round-robin 能选别的 QP 填上，所以只伤单 QP。
     //   REQ_WRITE_BACK 那拍状态机工作副本（tx_index / next_psn / unacked_psn / local_error / rnr_waiting）
     //   就是要写进 qp_* 的值（同一 always 块里写回排在 qp_state_change 之后，同拍写回优先），
     //   所以在那拍寄存 tx_self_eligible_q，下一拍 IDLE 用它代替 tx_eligible_q[qp_index]——

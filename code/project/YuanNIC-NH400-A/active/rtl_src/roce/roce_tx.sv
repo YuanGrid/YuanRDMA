@@ -75,7 +75,7 @@ module roce_tx
     // 上板用 0x0578[15:8] 采到未完成 AR 数 p50 = 9、p90 = 10、max = 11，说明每个响应包的
     // 1024 B DMA 读把槽位占满。加深后上限由组包侧的 9 拍/包给出（13.89 Mpps ≈ 113.8 Gb/s）。
     //
-    // B6457 改 32 的依据（roce-optimization-log.md §101，定向台子 test/sim/tx_inflight_rtt）：
+    // B6457 改 32 的依据（见调试记录 §101，定向台子 tx_inflight_rtt）：
     // MTU 1024 下单 QP 实测 143.86 Gb/s = 14.24 拍/包（core 250 MHz），比组包侧结构上限
     // 9 拍多出 6.24 拍。台子显式注入 PCIe 读延迟扫描，确认这 6.24 拍就是槽位不够：
     //   RTT 0/220/440 ns → 9.00 拍；RTT 860 ns（板上实测）→ 12.00 拍；1720 ns → 26.36 拍，
@@ -159,7 +159,7 @@ module roce_tx
     // B6439：extension_length / header_length / header_skip / ip_total_length / frame_length
     // 全部由产生方算好、随 tx_job 流过在途 FIFO，PREP 拍只读寄存器。
     // B6438 的 core −0.301 ns 最差路径正是「FIFO 出口 → 这四项译码求和 → add_4/5/87/86/88
-    // → skip_align 移位」，见 roce-optimization-log.md §68。
+    // → skip_align 移位」，见调试记录 §68。
     wire [1:0] job_pad_count   = tx_pad_count(build_job.payload_length);
     wire [15:0] computed_ip_total_length = build_job.ip_total_length;
 

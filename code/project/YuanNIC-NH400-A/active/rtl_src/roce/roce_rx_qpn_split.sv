@@ -1,7 +1,7 @@
 // roce_rx_qpn_split.sv
 // Phase 1 RX 分流（core_clk 域）：roce_rx_parse 的一条头/payload 流 → LANES 个 roce_engine。
 //
-// 归属：lane = qp_index[LANE_W-1:0]（QP 号按奇偶交错绑定 lane，见 roce-400g-scaling-plan §5）。
+// 归属：lane = qp_index[LANE_W-1:0]（QP 号按奇偶交错绑定 lane，见扩展方案文档 §5）。
 //       qp_valid=0 的包（QPN 不在本端范围）一律交给 lane 0，由它的 resp 计 RX_BAD_QP。
 // 头：  广播数据、只对目标 lane 拉 valid；目标 lane 的 disp 忙时自然反压（其 header_ready=0）。
 // payload：有 payload 的包（判据与 roce_rx_parse 完全一致：!bad && payload_length != 0）

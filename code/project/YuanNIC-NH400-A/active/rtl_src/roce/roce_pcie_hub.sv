@@ -74,7 +74,7 @@ module roce_pcie_hub #(
     wire bas_arready = bas_s2m[S2M_ARREADY];
 
     // B6418：AW 也改成 skid（与 AR 同构），W 顺序队列改为寄存器预取出队，R 加两级无使能流水。
-    // 目的是清掉 B6417 pld_clkout 里 RoCE 侧约 330 个违例端点（roce-optimization-log §44.7）：
+    // 目的是清掉 B6417 pld_clkout 里 RoCE 侧约 330 个违例端点（见调试记录 §44.7）：
     //   AW 233：MCDMA aw_skidbuf 的 AWREADY 组合扇出到 4 个 lane 的 u_aw_fifo 读使能 / RAM 地址；
     //   R 54：MCDMA aximm_r_resp_fifo 的 RAM 输出直接到 lane 的 u_r_fifo M20K（r_data_q 被并进 M20K
     //         输入寄存器，等于没有这一级），以及 r_data_q 的 1024 位使能扇出；

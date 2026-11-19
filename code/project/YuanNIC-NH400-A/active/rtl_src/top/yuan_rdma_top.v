@@ -1307,7 +1307,7 @@ axis_keep_pack #(
         // 必须与 clk200m.ip 的 outclk1 一致（250 MHz 分支 = 250.0，周期 4.000 ns；B6409–B6415 是 125 MHz）。
         // 这里漏改过一次：B6409 只改了 roce_top/engine/csr/req 的默认值，本行是显式传参，
         // 把默认值全盖掉，导致 REG_CORE_CLOCK 读 100、TICK_CYCLES 410 拍而非 512
-        // （RNR/重传定时器提前 25%），见 roce-optimization-log.md §37.5。
+        // （RNR/重传定时器提前 25%），见调试记录 §37.5。
         .CORE_CLOCK_MHZ                     (250                )
     )
     u99_roce_top

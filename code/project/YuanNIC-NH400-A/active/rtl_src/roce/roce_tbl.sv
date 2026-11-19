@@ -46,7 +46,7 @@ module roce_tbl
     output wire  [QP_NUM*3-1:0]     qp_state_o,
     output reg   [QP_NUM-1:0]       qp_state_change,
     input  wire  [QP_NUM-1:0]       qp_set_error,
-    // QPC[511:3] 的观测读口（寄存读 1 拍）：只给单元台子 test/sim/roce_tbl_mirror 直接看 RAM，
+    // QPC[511:3] 的观测读口（寄存读 1 拍）：只给单元台子 roce_tbl_mirror 直接看 RAM，
     // 引擎里不接（rd_en 接 0）。CSR 的 QPC 表读回走内部的 u_qpc_ram_csr，见下。
     input  wire                     qpc_rd_en,
     input  wire  [15:0]             qpc_rd_addr,
@@ -424,7 +424,7 @@ module roce_tbl
     //
     // 两者都**没有错误标志、没有计数**，数据直接写到错误的物理地址。这与 S4 的
     // 「QP68 别名到 QP4」（68 & 31 == 4）同构，而那次的代价是整轮功能不可用。
-    // 台子：test/sim/roce_mtt_bounds（对修复前的 RTL 是 1 PASS / 3 FAIL）。
+    // 台子：roce_mtt_bounds（对修复前的 RTL 是 1 PASS / 3 FAIL）。
     //
     // 三处检查各自独立，最终一起并进 stage3_ok。全部按 MTT_NUM 推导，改池深不用动这里。
 

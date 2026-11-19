@@ -131,7 +131,7 @@ module roce_rx_parse
         // 长度不自洽）的 payload 全部丢弃（has_payload=0），所以这里必须报 0。
         // 2026-11-12 修：原来只按 length_invalid 清零，opcode 不支持时仍报真实长度，
         // 下游 roce_resp 的 MAIN_DRAIN 等一个永远不来的 payload → 卡死并把后续帧吞掉
-        // （QP1/GSI 的 UD SEND 0x64 就踩这条，见 test/sim/roce_rx/test_qp1_stall.py）。
+        // （QP1/GSI 的 UD SEND 0x64 就踩这条，见 roce_rx 单元台）。
         next_header.payload_length   = (length_invalid || !opcode_supported) ? 13'd0
                                                                              : computed_payload_length[12:0];
         next_header.bad       = length_invalid || !opcode_supported;

@@ -99,7 +99,7 @@ module rx_mux_nto1 #(
                     s_axis_fifo_drop[i] <= 1'b0;
             end
 
-            // 2026-11-12 修复「满边沿 phantom」（skill/roce-optimization-log.md §66，台子 test/sim/rx_mux）：
+            // 2026-11-12 修复「满边沿 phantom」（见调试记录 §66，台子 rx_mux）：
             // s_axis_fifo_drop 在第 t 拍按 ready(t) = ~ram_full(t) 算出、随数据打一拍到 t+1 使用；
             // axis_fifo 却在第 t+1 拍按 ram_full(t+1) 决定写不写。ram_full 恰在帧尾那一拍升起时，
             // mux 往 drop FIFO 记「保留」而 FIFO 没提交这帧 → info FIFO 比数据 lane 多一条，

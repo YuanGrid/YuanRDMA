@@ -18,7 +18,7 @@ done
 unset _d
 if [ -z "${SRC_RDMACORE:-}" ]; then
     echo "错误：找不到 rdma-core 源码，已尝试：$ROOT/code/github/rdma-core、/opt/..." >&2
-    echo "  请设置 SRC_RDMACORE 环境变量，或按 private/docs/MIGRATION.md §4.1 clone 到 $ROOT/code/github/rdma-core" >&2
+    echo "  请设置 SRC_RDMACORE 环境变量，或 clone 到 $ROOT/code/github/rdma-core" >&2
     exit 1
 fi
 

@@ -15,7 +15,7 @@
 //  （lane_frame_index，按末拍计、所有帧都计），全局位置 = 2 × 本路序号 + 路号。
 //  旧合并在非 RoCE 帧被过滤、某一路连续出现两个 RoCE 帧、而下游又在反压时，会把 N+2 排到 N+1
 //  前面；两路 data_concat 各自存储转发，长帧后跟短帧时到达本模块的先后也会颠倒。
-//  上板现象：对端发的每个包都进了引擎，响应方却发序号错误 NAK（roce-optimization-log §44.6）。
+//  上板现象：对端发的每个包都进了引擎，响应方却发序号错误 NAK（见调试记录 §44.6）。
 //  - 令牌 FIFO：每路在 SOP 把**被接收**帧的本路序号压进去；判决 FIFO：提交进 frame FIFO 时压入好/坏
 //    （坏帧在 frame FIFO 里整帧丢弃，合并级靠判决知道跳过）。
 //  - 合并：两路都有令牌时比序号；只有一路有令牌时，等另一路把「排在它前面的那一帧」走完
@@ -336,7 +336,7 @@ module roce_rx_front #(
             end
 
             // 暂存占用峰值：只看本 lane 自己的 FIFO，过门限前能到多高是判断
-            // 「偶发尖峰 vs 稳态贴门限」的直接证据（见 skill/rx-goback-n-analysis.md）。
+            // 「偶发尖峰 vs 稳态贴门限」的直接证据（见 RX 重传分析文档）。
             reg [9:0] staging_peak;
             always @(posedge mac_clk) begin
                 if (mac_rst || mac_peak_clear) staging_peak <= 10'd0;

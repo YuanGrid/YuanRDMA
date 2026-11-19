@@ -117,7 +117,7 @@ static int yuanrdma_query_port(struct ib_device *ibdev, u32 port, struct ib_port
 	 * 为什么改：任务判据是「CM 真能跑通才留，跑不通就撤」。本轮只做到「代码路径齐、
 	 * 编译通过」，没有任何上板证据——没有任何一次 rping / ucmatose / rdma_server 成功，
 	 * 连 REQ 有没有走到驱动都只是靠 debugfs 计数器预期（还没有板子可跑）。在这种状态下
-	 * 报这一位，就是 skill/roce-cm-plan.md §5 点名的「假声明」。
+	 * 报这一位，就是 CM 方案文档 §5 点名的「假声明」。
 	 *
 	 * 撤掉的功能代价：零。已核过两条消费路径（code/github/rdma-core 与 6.8 的 ib_core）：
 	 *   - ib_cm/cma 是否挂到本设备看 get_port_immutable 的 core_cap_flags

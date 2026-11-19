@@ -47,7 +47,7 @@ module roce_bas_mon (
     // 计数器：B6418 起两级——第一级把总线上的原始 valid/ready/last 原样采下（无逻辑，可贴着 MCDMA 放），
     // 第二级算握手脉冲，再进计数器。B6417 只有一级（直接 valid && ready），Hyper-Retiming 把这级
     // 寄存器挪到 MCDMA 旁边（i22~C8_X217_Y179），计数器的进位链就挂在跨芯片的走线上，
-    // u_cnt_w 29 个端点 −0.117、b_hs −0.068（roce-optimization-log §44.7）。监视通路晚一拍无所谓。
+    // u_cnt_w 29 个端点 −0.117、b_hs −0.068（见调试记录 §44.7）。监视通路晚一拍无所谓。
     reg awvalid_q, awready_q, wvalid_q, wready_q, wlast_q, bvalid_q, bready_q;
     reg arvalid_q, arready_q, rvalid_q, rready_q, rlast_q;
     reg [1:0] bresp_q, rresp_q;

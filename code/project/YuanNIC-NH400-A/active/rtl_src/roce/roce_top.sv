@@ -27,7 +27,7 @@ module roce_top
     // AVMM 时钟（clk250m，与 avm_config 同域）
     input  wire                   clk,
     input  wire                   rst_n,
-    // 引擎 core 时钟（v1 用 clk100m：250 MHz 下时序不收敛，见 skill/roce-engine-impl.md）
+    // 引擎 core 时钟（v1 用 clk100m：250 MHz 下时序不收敛，见引擎实现文档）
     input  wire                   core_clk,
     // AVMM 上游（clk 域）
     input  wire  [27:0]           s_avm_addr,
@@ -311,7 +311,7 @@ module roce_top
     );
 
     // ------------------------------------------------------------ Phase 1：LANES 个引擎
-    // 结构见 roce_engine.sv 文件头与 skill/roce-400g-scaling-plan.md §5.1。
+    // 结构见 roce_engine.sv 文件头与扩展方案文档 §5.1。
     // QP 按 qp_index 低位绑定 lane（qp_index[LANE_W-1:0] == LANE_ID）；
     // 表/doorbell 广播（engine 内按归属过滤）；CQ、BAS、RX 前端、TX 汇合、调试、计数在这里共享。
     //

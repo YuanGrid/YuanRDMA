@@ -22,7 +22,7 @@
  *   4) QPC 布局（struct ynrdma_qpc 各 dw 的位段）↔ roce_pkg.sv 的 qpc_* 访问函数。
  *   5) CQE dw0 的 owner/has_imm/is_recv 位 ↔ roce_cq.sv 的 owner_bit 注入 ↔ provider poll_cq。
  *   6) 任何 yuanrdma_hw.h 里的结构体都必须保持下方注释标明的字节大小（编译期断言在文件末尾）。
- *   7) test/sim/common/roce_hw.py 的 TX_JOB_FIELDS / pack_qpc / 结构体打包必须与上述逐字段对齐。
+ *   7) 仿真共享库 roce_hw.py 的 TX_JOB_FIELDS / pack_qpc / 结构体打包必须与上述逐字段对齐。
  *   8) roce_pkg.sv 的 rx_hdr_t 加字段（如本轮 src_ip[31:0]）会让 roce_top 的 HDR_W 跟着变，
  *      接收头 FIFO 位宽随之变化——不改逻辑，但要重跑综合看 M20K 占用。
  *
@@ -236,7 +236,7 @@ struct ynrdma_sq_wqe {
  *    留着非零值会让重发/调试误判）；lkey 仍用于本端 payload 的 MTT 翻译，必须有效。
  *  - 为什么 remote_qpn 不塞 QPC 的 dest_qpn：同一个 UD QP 允许发往不同目的 QPN /
  *    Q_Key（AH 是 per-WR 的），塞进 QPC 不符合 IB 语义。
- *  - dw9/dw10 的落位与 skill/ud-transport-plan.md §4「remote_qpn/qkey 放 rsvd[0]/rsvd[1]」
+ *  - dw9/dw10 的落位与 UD 传输方案文档 §4「remote_qpn/qkey 放 rsvd[0]/rsvd[1]」
  *    一致：rsvd 从 dw9 起算，所以 rsvd[0] = dw9 = QPN、rsvd[1] = dw10 = QKey。
  */
 

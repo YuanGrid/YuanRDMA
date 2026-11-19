@@ -143,12 +143,12 @@ log "0. 前置检查"
 
 [ -d "$SRC_RDMACORE" ] || die "找不到 rdma-core 源码：$SRC_RDMACORE
     请 clone 到 $ROOT/code/github/rdma-core，或设置 SRC_RDMACORE 环境变量。
-    参考 private/docs/MIGRATION.md §4.1：
+    参考仓库 README 的构建说明：
       git clone https://github.com/linux-rdma/rdma-core.git $ROOT/code/github/rdma-core
       git -C $ROOT/code/github/rdma-core checkout b63b7bfe5d5b0adb97b973c71723adf2323afa2c"
 [ -d "$SRC_PERFTEST" ] || die "找不到 perftest 源码：$SRC_PERFTEST
     请 clone 到 $ROOT/code/github/perftest，或设置 SRC_PERFTEST 环境变量。
-    参考 private/docs/MIGRATION.md §4.1：
+    参考仓库 README 的构建说明：
       git clone https://github.com/linux-rdma/perftest.git $ROOT/code/github/perftest
       git -C $ROOT/code/github/perftest checkout 68fdb9f2359ce39865daca0c1bc66e381a43afa4"
 [ -d "$SRC_PROVIDER" ] || die "找不到 yuanrdma provider：$SRC_PROVIDER"

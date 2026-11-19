@@ -2,7 +2,7 @@
 # FPGA RoCE 网卡一版一测：加载驱动 + perftest 全套对比。
 #
 # 每个 RTL 优化版本（JTAG 烧 .sof 之后）跑一遍本脚本，把结果记到
-# private/skill/roce-optimization-log.md，形成可横向对比的性能序列。
+# 本机调试记录，形成可横向对比的性能序列。
 #
 # 两个方向各跑一遍（见记忆 perftest-benchmark-convention）：
 #   fpga-client  FPGA 当客户端、10.122 的 CX7 当服务端   ← 历史基线方向
@@ -81,11 +81,11 @@ else
     NIC="$HERE/YuanNIC_User_Package"              # 位置 1
 fi
 
-# 开发期记录到 private/skill/，客户环境里没有这个目录，就不写。
-# $HERE = build/user_tools，往上两级是仓库根，再进 private/skill。
+# 开发期记录到本机调试记录，客户环境里没有这个文件，就不写。
+# $HERE = build/user_tools，往上两级是仓库根，再进本机调试记录目录（该目录不随开源版发布）。
 # （早先注释写着改成 ../../../skill 但代码没跟着改，实际一直指向不存在的 build/skill，
-#   `[ -f ]` 判空后静默不写日志。2026-11-19 随 skill 搬进 private/ 一并修正。）
-LOG="$HERE/../../private/skill/roce-optimization-log.md"
+#   `[ -f ]` 判空后静默不写日志。2026-11-19 一并修正。）
+LOG="$HERE/../../private/skill/roce-optimization-log.md"  # 本机开发目录，开源版里不存在；不存在时脚本静默不写
 [ -f "$LOG" ] || LOG=""
 
 PEER_HOST=${PEER_HOST:-192.168.10.122}
@@ -303,7 +303,7 @@ printf '  方向   : %s  （client = FPGA 客户端，server = FPGA 服务端）
 
 [ -n "$PEER_PASS" ] || die "PEER_PASS 未设置：对端 root 密码必须显式给出，不再有内置默认值。
     用法：PEER_PASS=<密码> ./roce_perf_test.sh ...
-    开发机上可写进 private/pass.env 再 source（该目录永不外流）。"
+    开发机上可写进本机的环境文件再 source。"
 
 SSH="sshpass -p $PEER_PASS ssh -o StrictHostKeyChecking=no -o ConnectTimeout=8 root@$PEER_HOST"
 timeout 20 $SSH 'ls /sys/class/infiniband/mlx5_0 >/dev/null 2>&1' 2>/dev/null \
@@ -451,7 +451,7 @@ run_pair()
         # perftest 延迟结果行 9 列：
         #   #bytes #iter t_min t_max t_typical t_avg t_stdev 99% 99.9%
         # 历史上打印的「延迟」一直是 $(NF-1) = **99% 分位**（变量曾误名 tavg）。
-        # 2026-11-08 起照旧把 p99 放在第一列保持与 roce-optimization-log 历史数可比，
+        # 2026-11-08 起照旧把 p99 放在第一列保持与历史数据可比，
         # 后面补 typical（中位）/ avg / min——跨版本比 RTL 延迟看 typical，p99 受主机抖动影响大。
         # 延迟用例没有带宽数字，用"迭代次数为 0"当流量判据：一次都没完成说明帧没过去。
         iters=$(echo "$line" | awk '{print $2}')
@@ -519,7 +519,7 @@ run_diag()
     printf '\n'
     say "诊断结果：$out"
     printf '    全量调试寄存器：%s\n' "$DIAG_DIR/dbgall-${test}-${size}-${ts}.txt"
-    printf '    对照排查：private/skill/debug-playbook.md 第 7 节\n'
+    printf '    对照排查：本机调试手册第 7 节\n'
 }
 
 # ---------------------------------------------------------------- UD
