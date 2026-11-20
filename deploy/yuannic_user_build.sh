@@ -851,9 +851,12 @@ TGZ="$HERE/YuanNIC_User_Package.tgz"
 if [ "$BUILD_TGZ" = "1" ]; then
     log "10. 打包 $TGZ"
     rm -f "$TGZ"
-    # 在父目录里打，包内顶层目录名就是 YuanNIC_User_Package/
+    # 在产物目录的父目录里打，包内顶层目录名就是 YuanNIC_User_Package/。
+    # 注意必须是 $(dirname "$OUT") 而不是 $HERE：脚本本身在 deploy/，产物按设计出到
+    # build/user_tools/（消费方 flash_and_init.sh 与 roce_perf_test.sh 按同级目录找包），
+    # 两者不是同一个目录；写成 -C "$HERE" 会报 "tar: YuanNIC_User_Package: Cannot stat"。
     # 保留符号链接（lib/ 下的 .so.1 -> .so.1.19.66.0 必须成对），所以不用 -h。
-    tar czf "$TGZ" -C "$HERE" "$(basename "$OUT")" || die "打包失败"
+    tar czf "$TGZ" -C "$(dirname "$OUT")" "$(basename "$OUT")" || die "打包失败"
     chmod 644 "$TGZ"
     echo "  大小：$(du -h "$TGZ" | cut -f1)"
     echo "  md5 ：$(md5sum "$TGZ" | cut -d' ' -f1)"
