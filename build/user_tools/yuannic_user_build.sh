@@ -49,7 +49,7 @@ unset _d
 
 SRC_PROVIDER="$ROOT/code/rdmasw/rdma-core-provider/yuanrdma"
 SRC_HW_HEADER="$ROOT/code/rdmasw/include/yuanrdma_hw.h"
-SRC_ABI_HEADER="$ROOT/code/kernel/yuanrdma/yuanrdma-abi.h"
+SRC_ABI_HEADER="$ROOT/code/kernel/yuanrdma/yuanrdma_abi_defs.h"
 SRC_KERNEL="$ROOT/code/kernel"
 SRC_YNICTRL="$ROOT/code/ynictrl"
 
@@ -81,7 +81,7 @@ usage()
 
 做什么：
   1. 复制 code/github/rdma-core（v66）到 work/，注入 code/rdmasw/rdma-core-provider/yuanrdma，
-     注册 provider 与 yuanrdma-abi.h，用 cmake + ninja 编出完整 userspace 栈。
+     注册 provider 与 ABI 头（yuanrdma_abi_defs.h → rdma-core 内改名 yuanrdma-abi.h），用 cmake + ninja 编出完整 userspace 栈。
   2. 复制 code/github/perftest 到 work/，对着上面这套 rdma-core 编出 perftest 6.31。
   3. （未加 --no-ko 时）编 code/kernel 下的 yuanrdma.ko、yuanmcdma.ko、yuannic.ko。
   4. 编 code/ynictrl 下的 ynictrl（FPGA 网卡固件更新工具）。
@@ -143,12 +143,12 @@ log "0. 前置检查"
 
 [ -d "$SRC_RDMACORE" ] || die "找不到 rdma-core 源码：$SRC_RDMACORE
     请 clone 到 $ROOT/code/github/rdma-core，或设置 SRC_RDMACORE 环境变量。
-    参考仓库 README 的构建说明：
+    参考 private/docs/MIGRATION.md §4.1：
       git clone https://github.com/linux-rdma/rdma-core.git $ROOT/code/github/rdma-core
       git -C $ROOT/code/github/rdma-core checkout b63b7bfe5d5b0adb97b973c71723adf2323afa2c"
 [ -d "$SRC_PERFTEST" ] || die "找不到 perftest 源码：$SRC_PERFTEST
     请 clone 到 $ROOT/code/github/perftest，或设置 SRC_PERFTEST 环境变量。
-    参考仓库 README 的构建说明：
+    参考 private/docs/MIGRATION.md §4.1：
       git clone https://github.com/linux-rdma/perftest.git $ROOT/code/github/perftest
       git -C $ROOT/code/github/perftest checkout 68fdb9f2359ce39865daca0c1bc66e381a43afa4"
 [ -d "$SRC_PROVIDER" ] || die "找不到 yuanrdma provider：$SRC_PROVIDER"
