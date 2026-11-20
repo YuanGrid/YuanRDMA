@@ -23,7 +23,7 @@
 #   1. **缺少的软件直接用 apt 装**（用户明确要求），不手工下载源码包。
 #   2. 每一步都幂等：已装好的会跳过并说明「已存在」，重复执行安全。
 #   3. 非 root 时 apt 步骤用 sudo；没有 sudo 就报错退出，不静默降权。
-#   4. **不烧写、不改 BMC、不动厂商固件**（只准备环境，不碰硬件状态）。
+#   4. **不烧写、不改 BMC、不动厂商固件**（AGENTS.md 工作规则）。
 #      Quartus / CUDA 这类大件只做检测与提示，需要人工确认的会明确打出来。
 #   5. 失败不吞：每一步记录状态，末尾汇总；有失败则退出码 1。
 
@@ -361,7 +361,8 @@ elif [ "$DO_INSTALL" = 1 ]; then
 else
     printf '\n%s演练结束（--dry-run，未改动系统）。%s\n' "$C_YEL" "$C_RST"
 fi
-printf '  1. 编译用户态 ：cd build/user_tools && ./yuannic_user_build.sh\n'
-printf '  2. 编译固件   ：cd build/YuanNIC-NH400-A && ./yuannic_build.sh <VER> <BUILD> 1X400G all\n'
-printf '  3. 上板       ：cd build/user_tools && ./flash_and_init.sh\n'
+printf '  1. 编译前门禁 ：test/sim/rtl_prebuild_gate.sh\n'
+printf '  2. 编译用户态 ：cd deploy && ./yuannic_user_build.sh（产物仍出到 build/user_tools/YuanNIC_User_Package）\n'
+printf '  3. 编译固件   ：cd build/YuanNIC-NH400-A && ./yuannic_build.sh <VER> <BUILD> 1X400G all\n'
+printf '  4. 上板       ：./flash_and_init.sh\n'
 exit 0

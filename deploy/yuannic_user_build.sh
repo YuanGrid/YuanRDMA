@@ -32,7 +32,9 @@
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-ROOT=$(cd "$HERE/../.." && pwd)
+# 2026-11-20 从 build/user_tools/ 移到 deploy/：deploy 在仓库根下一层，
+# 所以根目录从「上两级」变成「上一级」。
+ROOT=$(cd "$HERE/.." && pwd)
 
 # rdma-core 和 perftest 源码已入库到本仓库 code/github/（commit 612d497，2026-11-11）。
 # 以下探测顺序支持多种部署场景：
@@ -54,7 +56,12 @@ SRC_KERNEL="$ROOT/code/kernel"
 SRC_YNICTRL="$ROOT/code/ynictrl"
 
 WORK="$HERE/work"
-OUT="$HERE/YuanNIC_User_Package"
+# 产物默认仍落在 build/user_tools/YuanNIC_User_Package（2026-11-20）：
+# 脚本本身挪到了 deploy/，但**消费方没挪**——build/user_tools/flash_and_init.sh
+# 与 roce_perf_test.sh 都按「同级目录下有 YuanNIC_User_Package/」来定位包，
+# 产物跟着挪会把上板流程直接打断。要改存放位置，用环境变量覆盖这行，
+# 并同步改那两个脚本，不要只改一处。
+OUT="${YUANNIC_PKG_OUT:-$ROOT/build/user_tools/YuanNIC_User_Package}"
 
 BUILD_KO=1
 BUILD_TGZ=1
@@ -143,12 +150,10 @@ log "0. 前置检查"
 
 [ -d "$SRC_RDMACORE" ] || die "找不到 rdma-core 源码：$SRC_RDMACORE
     请 clone 到 $ROOT/code/github/rdma-core，或设置 SRC_RDMACORE 环境变量。
-    参考 private/docs/MIGRATION.md §4.1：
       git clone https://github.com/linux-rdma/rdma-core.git $ROOT/code/github/rdma-core
       git -C $ROOT/code/github/rdma-core checkout b63b7bfe5d5b0adb97b973c71723adf2323afa2c"
 [ -d "$SRC_PERFTEST" ] || die "找不到 perftest 源码：$SRC_PERFTEST
     请 clone 到 $ROOT/code/github/perftest，或设置 SRC_PERFTEST 环境变量。
-    参考 private/docs/MIGRATION.md §4.1：
       git clone https://github.com/linux-rdma/perftest.git $ROOT/code/github/perftest
       git -C $ROOT/code/github/perftest checkout 68fdb9f2359ce39865daca0c1bc66e381a43afa4"
 [ -d "$SRC_PROVIDER" ] || die "找不到 yuanrdma provider：$SRC_PROVIDER"

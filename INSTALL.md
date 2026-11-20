@@ -7,10 +7,10 @@
 - **开发者**：要改 RTL / 驱动 / provider，需要完整的编译与仿真环境。
 - **用户**：只用已经发布好的固件与软件包，只需要驱动加载与测试环境。
 
-一键安装脚本：`tool/yuanrdma_install.sh`。它按本文第 2~6 节逐项安装，每步打印正在装什么、成功还是失败。先自检：
+一键安装脚本：`deploy/yuanrdma_install.sh`。它按本文第 2~6 节逐项安装，每步打印正在装什么、成功还是失败。先自检：
 
 ```bash
-./tool/yuanrdma_install.sh --check       # 只体检，不装任何东西
+./deploy/yuanrdma_install.sh --check       # 只体检，不装任何东西
 ```
 
 ---
@@ -38,7 +38,7 @@ lsb_release -d && uname -r && uname -m && df -h /
 编译链、Python、RDMA、DPDK、内核头文件、调试工具，共 44 个包。脚本只装缺的：
 
 ```bash
-sudo ./tool/yuanrdma_install.sh --only apt
+sudo ./deploy/yuanrdma_install.sh --only apt
 ```
 
 分组与用途：
@@ -92,7 +92,7 @@ python3 -c "import cocotb, cocotb_bus, cocotbext.axi; import importlib.metadata 
 **apt 的 Verilator 4.038 不能用**——本仓库全部 cocotb 台子都开了 `--timing`，4.x 不支持这个开关。必须源码编译 5.032。
 
 ```bash
-sudo ./tool/yuanrdma_install.sh --only verilator
+sudo ./deploy/yuanrdma_install.sh --only verilator
 ```
 
 手工等价命令：
@@ -242,7 +242,7 @@ export NCCL_IB_TIMEOUT=22
 ### 8.1 用户态软件包（rdma-core + provider + perftest + 内核模块）
 
 ```bash
-cd build/user_tools
+cd deploy
 ./yuannic_user_build.sh              # 全量：rdma-core v66 + provider + perftest + ko + 工具
 ./yuannic_user_build.sh --no-ko      # 只编用户态，不编内核模块
 ./yuannic_user_build.sh --clean      # 清理后重编
@@ -334,12 +334,12 @@ PEER_PASS=<对端密码> ./roce_perf_test.sh --label B6457
 ## 10. 一键安装与自检
 
 ```bash
-sudo ./tool/yuanrdma_install.sh                 # 装全部
-sudo ./tool/yuanrdma_install.sh --only apt      # 只装系统包
-sudo ./tool/yuanrdma_install.sh --skip-cuda     # 不做 NCCL 的机器
-./tool/yuanrdma_install.sh --check              # 只体检
-./tool/yuanrdma_install.sh --dry-run            # 只打印计划
-./tool/yuanrdma_install.sh -h                   # 完整用法
+sudo ./deploy/yuanrdma_install.sh                 # 装全部
+sudo ./deploy/yuanrdma_install.sh --only apt      # 只装系统包
+sudo ./deploy/yuanrdma_install.sh --skip-cuda     # 不做 NCCL 的机器
+./deploy/yuanrdma_install.sh --check              # 只体检
+./deploy/yuanrdma_install.sh --dry-run            # 只打印计划
+./deploy/yuanrdma_install.sh -h                   # 完整用法
 ```
 
 脚本行为：
@@ -371,4 +371,4 @@ sudo ./tool/yuanrdma_install.sh --skip-cuda     # 不做 NCCL 的机器
 | 文档 | 内容 |
 |---|---|
 | [README.md](README.md) | 项目总览、特性、架构 |
-| [tool/yuanrdma_install.sh](tool/yuanrdma_install.sh) | 一键安装脚本（第 10 节） |
+| [deploy/yuanrdma_install.sh](deploy/yuanrdma_install.sh) | 一键安装脚本（第 10 节） |
