@@ -1,0 +1,31 @@
+# EMACS temp files
+*~
+
+# Compiled source files
+*.o
+*.so
+*.pyc
+*.db
+*.swp
+*._*
+*.db
+*.log
+*.vho
+*.xml
+xvcSrv
+doxygen/
+ghdl-build/
+ruckus
+ruckus/
+build/
+sim_build/
+.coverage*
+
+# Local editor/agent state
+.vscode/
+.cursor/
+.claude/
+.planning/
+planning/
+CLAUDE.md
+.DS_Store

@@ -1,0 +1,13 @@
+/* Export symbols should be added below according to
+   Documentation/versioning.md document. */
+MANA_1.0 {
+	global:
+		manadv_set_context_attr;
+		manadv_init_obj;
+	local: *;
+};
+
+MANA_1.1 {
+	global:
+		manadv_alloc_pd;
+} MANA_1.0;
