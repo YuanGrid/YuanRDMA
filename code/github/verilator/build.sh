@@ -118,7 +118,7 @@ do_env() {
     say "写 $PROFILE_D"
     mkdir -p "$(dirname "$PROFILE_D")"
     cat > "$PROFILE_D" <<EOF
-# Verilator（由 code/github/verilator-5.032/build.sh 生成，勿手改）
+# Verilator（由 code/github/verilator/build.sh 生成，勿手改）
 export VERILATOR_ROOT=$PREFIX
 case ":\$PATH:" in
   *":$PREFIX/bin:"*) ;;

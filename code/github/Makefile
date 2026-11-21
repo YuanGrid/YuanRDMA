@@ -58,7 +58,7 @@ RDMACORE_SRC := $(GITHUB)/rdma-core
 PERFTEST_SRC := $(GITHUB)/perftest
 NCCL_SRC     := $(GITHUB)/nccl
 NCCLT_SRC    := $(GITHUB)/nccl-tests
-VERI_SRC     := $(GITHUB)/verilator-5.032
+VERI_SRC     := $(GITHUB)/verilator
 
 # provider 注入源（只在本仓库里，不存在时 WITH_PROVIDER=1 会报错退出）
 PROVIDER     := $(ROOT)/code/rdmasw/rdma-core-provider/yuanrdma
@@ -294,7 +294,7 @@ list:
 	@printf '%-12s %-11s %-29s %s\n' "perftest"   "6.31"     "code/github/perftest"       "$(PT_INST)/bin"
 	@printf '%-12s %-11s %-29s %s\n' "nccl"       "v2.22.3"  "code/github/nccl"           "$(NCCL_BDIR)/lib"
 	@printf '%-12s %-11s %-29s %s\n' "nccl-tests" "v2.21.1"  "code/github/nccl-tests"     "$(NCCLT_BIN)"
-	@printf '%-12s %-11s %-29s %s\n' "verilator"  "5.032"    "code/github/verilator-5.032" "$(VERI_OUT)/bin"
+	@printf '%-12s %-11s %-29s %s\n' "verilator"  "5.032"    "code/github/verilator" "$(VERI_OUT)/bin"
 	@echo
 	@echo "surf / blue-rdma 是 RTL 参考工程，无编译目标。"
 
