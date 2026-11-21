@@ -246,17 +246,15 @@ int yuanrdma_create_ah(struct ib_ah *ibah, struct rdma_ah_init_attr *init, struc
 	 * sport）正是 QPC 的 AV 需要的，provider 建 AH 时就让内核解析并校验一遍，
 	 * 用户态拿到的是「地址已经验证过」的句柄；真正的组装在 provider 与 RTL。
 	 *
-	 * 用户态 AH 与用户态 UD QP 用同一个开关（yuanrdma_enable_ud）：没有 UD 发送能力的
-	 * 比特流上若允许建 AH，用户会得到「AH 建成了、QP 建不起来」的半截状态，
-	 * 排查时比两边都拒绝更费事。内核 CM 的 AH（udata == NULL）不受开关影响。
+	 * 2026-11-21 起 UD 与 RC 同时支持，不再有 enable_ud 开关；AH 与 UD QP 都在
+	 * 同一批镜像上可用，不会出现「AH 建成了、QP 建不起来」的半截状态。
+	 * 内核 CM 的 AH（udata == NULL）走同一段解析。
 	 *
 	 * 注意：yuanrdma_ah 只存解析结果，没有 per-AH 的引用计数或硬件资源；
 	 * destroy_ah 是空实现（RoCE AH 本来就无硬件状态）。
 	 */
 	if (!init || !init->ah_attr)
 		return -EINVAL;
-	if (udata && !yuanrdma_enable_ud)
-		return -EOPNOTSUPP;
 	ret = yuanrdma_ah_from_attr(ah, init->ah_attr);
 	if (ret)
 		return ret;

@@ -89,7 +89,8 @@ static int yuanrdma_query_device(struct ib_device *ibdev, struct ib_device_attr 
 	 *   UD_AV_PORT_ENFORCE —— **本轮仍不加**。UD 的 QP/AH 代码已按 §76 实现，但 UD 发送侧 RTL
 	 *     与本次改动并行开发、没上板；启用它的效果是「UD WR 里的 ah->port_num 必须等于 QP 的端口」，
 	 *     本卡只有 1 个端口，加了等于给自己加一道无意义的闸门，而且会让「UD 通路已验证」变成
-	 *     一个更响的声明。等 UD SEND 双向跑通（含 yuanrdma.enable_ud=1）再加。
+	 *     一个更响的声明。UD SEND 双向已在 B6459 跑通，但本卡只有 1 个端口，
+	 *     这个闸门仍然没有意义，所以依旧不加。
 	 *   N_NOTIFY_CQ / RC_RNR_NAK_GEN —— req_notify_cq 尚未实现（见 provider 侧同一条注释）。
 	 * 现阶段能声明的只有 CURR_QP_STATE_MOD（modify_qp 支持 IB_QP_CUR_STATE）与
 	 * CHANGE_PHY_PORT（单端口，post_send 的 alt port 走默认）。两者都是 no-op 级，
@@ -136,7 +137,7 @@ static int yuanrdma_query_port(struct ib_device *ibdev, u32 port, struct ib_port
 	 * 2026-11-18 更新：这一位现在是 yuanrdma_enable_cm_sup 模块参数（默认 0，仍不声明）。
 	 * 加参数的原因：**不打开它就无法验证 CM**——rdma_create_ep() 在 cma_alloc_port 之前
 	 * 就按这一位判 EOPNOTSUPP，客户端连 REQ 都发不出去。真正的验证路径是
-	 * `insmod yuanrdma.ko enable_ud=1 enable_cm_sup=1` 跑通 rping/ucmatose，
+	 * `insmod yuanrdma.ko enable_cm_sup=1` 跑通 rping/ucmatose，
 	 * 再按上面的判据决定默认值改不改。默认值保持 0 = 「未验证前不声明」。
 	 */
 	attributes->port_cap_flags = yuanrdma_enable_cm_sup ? IB_PORT_CM_SUP : 0;
@@ -660,24 +661,17 @@ static int yuanrdma_create_qp(struct ib_qp *ibqp, struct ib_qp_init_attr *init, 
 		memset(&qp->context, 0, sizeof(qp->context));
 		return yuanrdma_gsi_create_qp(qp, init);
 	}
-	/* G2.1／UD：
-	 *   RC —— 一直支持。
-	 *   UD —— 代码侧已按 §76 的契约实现（WQE opcode 5/6、dw9 dw9=remote_qpn、dw10=remote_qkey、
-	 *         CQE dw4=src_qp/dw0[18]=has_grh），但**发送侧 RTL 与本次改动并行开发**，
-	 *         没上过板，也无法从寄存器判别比特流是否带 UD TX。因此由 enable_ud 显式放行：
-	 *         未声明时返回 -EOPNOTSUPP（provider 的 ibv_create_qp 直接失败），
-	 *         而不是给出一个「建得起来、发得出去、对端静默丢弃」的 QP。理由详见 yuanrdma_driver.h 里
-	 *         yuanrdma_enable_ud 的注释。
+	/* G2.1／UD：RC 与 UD 都支持，没有开关（2026-11-21 起）。
+	 *   UD —— 契约见 §76：WQE opcode 5/6、dw9=remote_qpn、dw10=remote_qkey、
+	 *         CQE dw4=src_qp / dw0[18]=has_grh。B6458/B6459 比特流已实测可用；
+	 *         更老的比特流里 WQE 5/6 没有 case，会静默组出 RC 形态的包，
+	 *         那种镜像上不要建 UD QP（见 yuanrdma_driver.h 顶部说明）。
 	 *   两者都不支持 SRQ / create_flags。
 	 */
 	if (init->srq || init->create_flags)
 		return -EOPNOTSUPP;
-	if (init->qp_type == IB_QPT_UD) {
-		if (!yuanrdma_enable_ud)
-			return -EOPNOTSUPP;
-	} else if (init->qp_type != IB_QPT_RC) {
+	if (init->qp_type != IB_QPT_RC && init->qp_type != IB_QPT_UD)
 		return -EOPNOTSUPP;
-	}
 	/*
 	 * max_recv_sge：UD 与 RC 都只给 1。
 	 * 任务书提到「UD 的 max_recv_sge 需要 2（payload + SGID）」，但 IB 语义里 UD 收到的

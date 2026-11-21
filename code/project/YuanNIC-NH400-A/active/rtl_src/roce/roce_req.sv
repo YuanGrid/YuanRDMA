@@ -773,7 +773,7 @@ module roce_req
                 if (local_error || qpc_state(qp_context) != QPS_RTS) begin
                     state <= REQ_WRITE_BACK;
                 /* QP 类型校验（G2.1）：WQE opcode 是 UD 就必须发在 UD QP 上，反之亦然。
-                 * 只看 WQE opcode 不够——enable_ud 只在内核 create_qp 时把关，运行期敞开：
+                 * 只看 WQE opcode 不够——驱动侧已没有 UD/RC 开关（2026-11-21 起），运行期全靠这一位：
                  * RC QP 里混一条 UD WQE 会直接发出 0x64（对端若按 RC 解释就是未知 opcode）；
                  * UD QP 里混 RC WQE 则会把 UD 的「无 ACK/无 PSN」语义带进 RC 的重传逻辑。
                  * 报 Local Operation Error 并置 QP error，与下面的长度闸同形。 */

@@ -31,22 +31,21 @@
 #define YUANRDMA_MTT_GROUP	8		/* MTT 一次写 8 项，按 8 对齐分配 */
 
 /*
- * UD 硬件 QP 的总开关（module 参数 yuanrdma.enable_ud，默认 0）。
+ * UD 与 RC 同时支持，没有开关（2026-11-21 起）。
  *
- * 为什么要有这个开关，而不是「代码写好了就放开」
- *   UD 的 RTL 发送侧（roce_req 的 WQE_UD_SEND 分支、roce_tx 的 DETH 组包）与本驱动
- *   的 UD 支持是两条独立的开发线。WQE 编码 5/6 在**老比特流**里根本没有 case，
- *   roce_req 的 tx_opcode_of() 对未知编码落到 default，行为是「组一个 RC 形态的包发出去」，
- *   对端按 RC 解析、不回任何东西——用户看到的是「发送成功、接收端永远收不到」，
- *   没有任何错误上报。这正是 开发记录 §76.5 记的那类坑。
+ * 原来有 module 参数 yuanrdma.enable_ud（默认 0）来放行用户态 UD QP，现在删掉了：
+ * B6458/B6459 起比特流的 UD TX（roce_req 的 WQE_UD_SEND=5/6、roce_tx 的 DETH 组包）
+ * 已实测可用，而驱动无法从 YNRDMA_REG_CAPS 判别 UD 是否就绪（没有对应位），
+ * 留一个默认关的开关只会让部署者多一步、且容易忘记。
  *
- *   驱动无法从 YNRDMA_REG_CAPS 判别 UD 是否就绪（没有对应位），所以只能由部署者显式声明：
- *   烧了带 UD TX 的比特流之后 insmod yuanrdma.ko enable_ud=1。未声明时 create_qp(UD)
- *   返回 -EOPNOTSUPP，provider 会在 ibv_create_qp 处直接失败——错在明处。
+ * **代价要知道**：比 B6458 更老的比特流（WQE 编码 5/6 没有 case）上，UD QP 现在
+ * 建得起来、发得出去，但 roce_req 的 tx_opcode_of() 会落到 default 组一个 RC 形态的包，
+ * 对端按 RC 解析、不回任何东西——「发送成功、接收端永远收不到」，且没有错误上报。
+ * 用老镜像时不要建 UD QP。
  *
- * 这个参数只影响用户态 UD QP；内核 GSI（IB_QPT_GSI，QP1）走软件路径，与它无关。
+ * UD 与 RC 的区分不靠驱动：QPC dw0[21] 记 qp_type，roce_req 用它校验「WQE opcode
+ * 是 UD」与「QP 本身是 UD」必须一致，不一致报 WCS_LOC_OP_ERR。
  */
-extern bool yuanrdma_enable_ud;
 
 /*
  * IB_PORT_CM_SUP 的声明开关（module 参数 enable_cm_sup，默认 0）。
@@ -56,7 +55,7 @@ extern bool yuanrdma_enable_ud;
  *
  * 为什么又要有这个开关：不声明它，rdma_create_ep() 在 cma_alloc_port 之前就返回
  * EOPNOTSUPP，**根本走不到发 REQ 那一步**，CM 就永远无法验证。验证时按
- *   insmod yuanrdma.ko enable_ud=1 enable_cm_sup=1
+ *   insmod yuanrdma.ko enable_cm_sup=1
  * 打开，跑通后按 §6.2 的判据决定默认值。
  */
 extern bool yuanrdma_enable_cm_sup;

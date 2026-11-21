@@ -37,7 +37,7 @@
 #   - **报文长度不能超过 active_mtu**，perftest 直接拒绝 "Max message size in
 #     UD cannot be greater than MTU"。所以 UD 的「1M」是 1 个 MTU，不是 1 MiB；
 #     默认取当前 active_mtu（本卡 1024）。要更大就先 tool/roce_mtu.sh set 4200。
-#   - 需要驱动以 enable_ud=1 加载：ENABLE_UD=1 ./flash_and_init.sh。
+#   - UD 与 RC 同时支持（2026-11-21 起驱动不再有 enable_ud 开关），不需要额外加载参数。
 #   - ud_send_bw 走 perftest（GID 选项 -x），ud_pingpong 走 rdma-core（选项 -g），
 #     写错报 "Invalid Command line"。
 #   - 基线口径：尺寸 = active_mtu、时长 30 s（同 DURATION）、机器空闲。
@@ -185,7 +185,7 @@ CLI_TIMEOUT=${CLI_TIMEOUT:-$(( DURATION + 120 ))}
 
 # ---- UD（Unreliable Datagram）----
 # UD 用例与 RC 的差别不只是 connection type：
-#   1) 要驱动以 yuanrdma.enable_ud=1 加载（默认 0，理由见 yuanrdma.h:34）；
+#   1) UD 与 RC 同时支持，驱动不再有 enable_ud 开关（2026-11-21 起）；
 #   2) **报文长度不能超过 active_mtu**，perftest 会直接拒绝：
 #      "Max message size in UD cannot be greater than MTU"。所以 UD 的 "1M" 是
 #      **1 个 MTU 大小**，不是 1 MiB——本卡 active_mtu=1024 时就是 1024 B。

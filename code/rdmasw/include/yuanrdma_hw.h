@@ -144,7 +144,7 @@ struct ynrdma_qpc {
 			     * [18]remote_write [19]remote_read [20]remote_atomic
 			     * [21]qp_type（1 = UD、0 = RC；G2.1）—— roce_req 用它校验
 			     *     「WQE opcode 是 UD」与「QP 本身是 UD」必须一致，不一致报
-			     *     WCS_LOC_OP_ERR。enable_ud 只在建 QP 时把关，运行期靠这一位。
+			     *     WCS_LOC_OP_ERR。驱动侧 UD/RC 不再有开关（2026-11-21），运行期靠这一位区分。
 			     * S6 改了布局：send_cq/recv_cq 从 4 bit 扩到 6 bit（CQ 16 → 64），
 			     * remote_write/read 从 [16]/[17] 挪到 [18]/[19]（让位给 recv_cq）。
 			     * 这是跨 RTL / 内核 / provider / 台子的契约，改这里必须同步改

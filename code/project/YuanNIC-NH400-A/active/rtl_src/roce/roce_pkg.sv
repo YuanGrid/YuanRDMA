@@ -306,7 +306,7 @@ package roce_pkg;
     function automatic logic        qpc_rread  (input logic [511:0] qp_context); return qp_context[19];         endfunction
     /* QP 类型（G2.1）：1 = UD、0 = RC。RTL 用它把「WQE opcode 是 UD」与「QP 本身是 UD」
      * 分开校验 —— 只看 WQE opcode 的话，RC QP 里混一条 UD WQE 就直接发出 0x64，而
-     * enable_ud 只在内核建 QP 时把关，运行期是敞开的；反过来 UD QP 发 RC WQE 也一样。
+     * 驱动侧没有 UD/RC 开关，运行期完全靠这一位；反过来 UD QP 发 RC WQE 也一样。
      * 取值只有 1 bit，不枚举 IBV_QPT_*：RTL 只需要区分「这个 QP 能不能发 UD」。
      * 跨层契约：yuanrdma_hw.h 的 ynrdma_qpc.dw0 注释、内核 create_qp 拼 dw0、
      * 仿真共享库 roce_hw.py 的 pack_qpc 三处必须同步。 */
