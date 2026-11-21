@@ -2,9 +2,10 @@
 # YuanNIC-NH400-A（AGIB027R29A1E2VB，AS x4）固件构建：
 # 从 code/project/YuanNIC-NH400-A/boot 和 .../active 拷贝工程到本脚本所在目录编译。
 # 编译目录固定在 build/YuanNIC-NH400-A，与从哪个目录调用无关。
-#   boot    ：只编 boot 工程，出 Boot 的 SOF/RPD
-#   active  ：只编 active 工程，出 Active 的 SOF/RPD
-#   all     ：两个工程都编，另用 fpga_gen_jic.pfg 合成含 Factory/Release 双镜像的 JIC
+#   boot    ：只编 boot 工程，出 Boot 的 SOF/RPD，并刷新 firmware/boot_images/<型号>/
+#   active  ：只编 active 工程；若找到 firmware/boot_images 里的预置 boot 镜像，
+#             再用它合成 All JIC，找不到就只出 Release 产物（原 active 逻辑）
+#   all     ：boot 与 active 都重编，用本次编出的 boot 合成 All JIC
 
 # 脚本所在目录（build/YuanNIC-NH400-A），也是编译目录
 FWB_SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -99,8 +100,10 @@ function build_usage
     echo ""
     echo "Usage: "
     echo "    $0 VERSION BUILD SPEED [TYPE]"
-    echo "    TYPE: all/boot/active, default active"
-    echo "    like: $0 26.12.07 6362 1X400G all"
+    echo "    TYPE: boot/active/all, default active"
+    echo "          boot   = 只重编 boot 并刷新 firmware/boot_images/<型号>/"
+    echo "          active = 只编 active；有预置 boot 镜像就同时出 All JIC"
+    echo "          all    = boot 与 active 都重编，并用本次 boot 出 All JIC"
     echo "    like: $0 26.12.07 6362 1X400G boot"
     echo "    like: $0 26.12.07 6362 1X400G active"
     echo ""
@@ -133,6 +136,11 @@ FPGA_NIC_NAME=${FPGA_NIC_NAME:-YN400GA7B027A}
 PRO_DIR_NAME=YuanNIC-NH400-A
 BASE_PRO_NAME=boot_yuanrdma_a_400g
 RELS_PRO_NAME=active_yuanrdma_a_400g
+# boot 工程已冻结（2026-11-21）：all 模式不再编译它，直接用这里预置的 Factory 镜像。
+# 型号段与 FPGA_NIC_NAME 一致——A/C 两块的器件和 flash loader 不同，镜像不能混用。
+BOOT_IMG_DIR=${BOOT_IMG_DIR:-${FWB_SCRIPT_DIR}/../../firmware/boot_images/${FPGA_NIC_NAME}}
+BOOT_IMG_SOF=${BOOT_IMG_SOF:-${BOOT_IMG_DIR}/YuanRDMA_boot.sof}
+BOOT_IMG_RPD=${BOOT_IMG_RPD:-${BOOT_IMG_DIR}/YuanRDMA_boot.rpd}
 
 QUARTUS_SH=${QUARTAS_PATH}/quartus/bin/quartus_sh
 QUARTUS_PFG=${QUARTAS_PATH}/quartus/bin/quartus_pfg
@@ -246,6 +254,18 @@ function compile_project
             echo "Warning: $PRO_LABEL has negative slack, see $FWB_PWD/${PRO_LABEL}_sta.summary"
         fi
     fi
+
+    # 全量时序报告一并留存：summary 只到 clock 级 slack，看不出违例端点是哪个模块。
+    # 2026-11-20 追 B6457 的 −0.114 时，只有 summary 归档，最后靠翻编译机上的临时
+    # 工作目录（/home/roce_build/qf）才把路径找回来——那个目录随时会被清掉。
+    if [ -e $OUTPUT_DIR/YuanRDMA.sta.rpt ]; then
+        cp $OUTPUT_DIR/YuanRDMA.sta.rpt $FWB_PWD/${PRO_LABEL}_sta.rpt
+        if grep -q "Slack : -" $OUTPUT_DIR/YuanRDMA.sta.summary 2>/dev/null; then
+            echo "  违例路径见 $FWB_PWD/${PRO_LABEL}_sta.rpt（VIOLATED 命中 $(grep -c VIOLATED $OUTPUT_DIR/YuanRDMA.sta.rpt) 处）"
+        fi
+    else
+        echo "Warning: $PRO_LABEL 没产出 YuanRDMA.sta.rpt，违例无法追到端点，请查 quartus_sh.log 里 STA 是否被跳过"
+    fi
 }
 
 # 拷贝并编译一个工程，SOF 放到 sof2rpd/YuanRDMA_<label>.sof
@@ -303,10 +323,30 @@ if [ "$FPGA_BIN_TYPE" = "active" ] || [ "$FPGA_BIN_TYPE" = "all" ]; then
     build_sof_file active $RELS_PRO_PATH $COPY_PRO_RELS
 fi
 
+# JIC 的 Factory 镜像来源：
+#   all    → 本次刚编出的 boot（sof2rpd/YuanRDMA_boot.sof）
+#   active → firmware/boot_images 里的预置镜像；没有就只出 Release 产物
+GEN_JIC=0
+if [ "$FPGA_BIN_TYPE" = "all" ]; then
+    GEN_JIC=1
+elif [ "$FPGA_BIN_TYPE" = "active" ]; then
+    if [ -f "$BOOT_IMG_SOF" ]; then
+        GEN_JIC=1
+        cp "$BOOT_IMG_SOF" $FWB_PWD/sof2rpd/YuanRDMA_boot.sof || exit 1
+        echo "Using prebuilt boot image: $BOOT_IMG_SOF"
+    else
+        echo ""
+        echo "Warning: 找不到预置 boot 镜像 $BOOT_IMG_SOF"
+        echo "         本次只出 Release 产物，不生成 All JIC。"
+        echo "         先跑一次 boot 模式生成并归档：$0 <VER> <BUILD> $FPGA_BIN_SPEED boot"
+        echo ""
+    fi
+fi
+
 cd $FWB_PWD/sof2rpd
 
-# 生成JIC（需要 boot+active 双 SOF，仅 all 模式）
-if [ "$FPGA_BIN_TYPE" = "all" ]; then
+# 生成JIC（预置 boot + 本次 active 双 SOF）
+if [ "$GEN_JIC" = "1" ]; then
     quartus_pfg -c ${FWB_SCRIPT_DIR}/fpga_gen_jic.pfg > $FWB_PWD/all_pfg.log 2>&1
     if [ ! -e output_file_all.jic ]; then
         cat $FWB_PWD/all_pfg.log
@@ -335,7 +375,7 @@ if [ "$FPGA_BIN_TYPE" = "active" ] || [ "$FPGA_BIN_TYPE" = "all" ]; then
 fi
 
 # 拷贝产物到build目录，同时按版本命名
-if [ "$FPGA_BIN_TYPE" = "all" ]; then
+if [ "$GEN_JIC" = "1" ]; then
     cp output_file_all.jic $FWB_PWD/$ALL_JIC_NAME
     cp output_file_all.jic $FWB_PWD/${ALL_IMG_PREF}.jic
 fi
@@ -345,6 +385,16 @@ if [ "$FPGA_BIN_TYPE" = "boot" ] || [ "$FPGA_BIN_TYPE" = "all" ]; then
     cp YuanRDMA_boot.rpd $FWB_PWD/$BASE_RPD_NAME
     cp YuanRDMA_boot.sof $FWB_PWD/${BASE_IMG_PREF}.sof
     cp YuanRDMA_boot.rpd $FWB_PWD/${BASE_IMG_PREF}.rpd
+    [ -e $FWB_PWD/boot_sta.rpt ] && cp $FWB_PWD/boot_sta.rpt $FWB_PWD/${BASE_IMG_PREF}.sta.rpt
+fi
+
+if [ "$FPGA_BIN_TYPE" = "boot" ]; then
+    mkdir -p "$BOOT_IMG_DIR"
+    cp $FWB_PWD/sof2rpd/YuanRDMA_boot.sof "$BOOT_IMG_DIR/YuanRDMA_boot.sof"
+    cp $FWB_PWD/sof2rpd/YuanRDMA_boot.rpd "$BOOT_IMG_DIR/YuanRDMA_boot.rpd"
+    echo ""
+    echo "Refreshed prebuilt boot image in $BOOT_IMG_DIR:"
+    md5sum "$BOOT_IMG_DIR"/YuanRDMA_boot.sof "$BOOT_IMG_DIR"/YuanRDMA_boot.rpd
 fi
 
 if [ "$FPGA_BIN_TYPE" = "active" ] || [ "$FPGA_BIN_TYPE" = "all" ]; then
@@ -352,6 +402,7 @@ if [ "$FPGA_BIN_TYPE" = "active" ] || [ "$FPGA_BIN_TYPE" = "all" ]; then
     cp YuanRDMA_active.rpd $FWB_PWD/$RELS_RPD_NAME
     cp YuanRDMA_active.sof $FWB_PWD/${RELS_IMG_PREF}.sof
     cp YuanRDMA_active.rpd $FWB_PWD/${RELS_IMG_PREF}.rpd
+    [ -e $FWB_PWD/active_sta.rpt ] && cp $FWB_PWD/active_sta.rpt $FWB_PWD/${RELS_IMG_PREF}.sta.rpt
 fi
 
 echo ""
@@ -370,8 +421,8 @@ IMG_ARCHIVE=${IMG_ARCHIVE:-$FWB_PWD/../../firmware}
 mkdir -p "$IMG_ARCHIVE"
 
 archived=""
-if [ "$FPGA_BIN_TYPE" = "all" ] || [ "$FPGA_BIN_TYPE" = "boot" ]; then
-    for f in ${BASE_IMG_PREF}.sof ${BASE_IMG_PREF}.rpd; do
+if [ "$FPGA_BIN_TYPE" = "boot" ] || [ "$FPGA_BIN_TYPE" = "all" ]; then
+    for f in ${BASE_IMG_PREF}.sof ${BASE_IMG_PREF}.rpd ${BASE_IMG_PREF}.sta.rpt; do
         if [ -e "$FWB_PWD/$f" ]; then
             cp -f "$FWB_PWD/$f" "$IMG_ARCHIVE/$f"
             archived="$archived $IMG_ARCHIVE/$f"
@@ -379,8 +430,8 @@ if [ "$FPGA_BIN_TYPE" = "all" ] || [ "$FPGA_BIN_TYPE" = "boot" ]; then
     done
 fi
 
-if [ "$FPGA_BIN_TYPE" = "all" ] || [ "$FPGA_BIN_TYPE" = "active" ]; then
-    for f in ${RELS_IMG_PREF}.sof ${RELS_IMG_PREF}.rpd; do
+if [ "$FPGA_BIN_TYPE" = "active" ] || [ "$FPGA_BIN_TYPE" = "all" ]; then
+    for f in ${RELS_IMG_PREF}.sof ${RELS_IMG_PREF}.rpd ${RELS_IMG_PREF}.sta.rpt; do
         if [ -e "$FWB_PWD/$f" ]; then
             cp -f "$FWB_PWD/$f" "$IMG_ARCHIVE/$f"
             archived="$archived $IMG_ARCHIVE/$f"
@@ -388,7 +439,7 @@ if [ "$FPGA_BIN_TYPE" = "all" ] || [ "$FPGA_BIN_TYPE" = "active" ]; then
     done
 fi
 
-if [ "$FPGA_BIN_TYPE" = "all" ]; then
+if [ "$GEN_JIC" = "1" ]; then
     if [ -e "$FWB_PWD/${ALL_IMG_PREF}.jic" ]; then
         cp -f "$FWB_PWD/${ALL_IMG_PREF}.jic" "$IMG_ARCHIVE/${ALL_IMG_PREF}.jic"
         archived="$archived $IMG_ARCHIVE/${ALL_IMG_PREF}.jic"
