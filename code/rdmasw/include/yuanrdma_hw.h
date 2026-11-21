@@ -329,7 +329,7 @@ struct ynrdma_cqe {
 #define   YNRDMA_DBG_CORE_TX_OFFSET   0x2Cu  /* 当前 WQE 内偏移 */
 
 /* ---------------- 拥塞控制寄存器（AVMM 0x0800..0x0BFC，需 full_pfc_func 镜像） ----------------
- * 三个窗口，各由一个模块独占（见 code/project/YuanNIC-NH400-A/active/rtl_src/roce/ 下对应 RTL）：
+ * 三个窗口，各由一个模块独占（见 code/quartus/YuanNIC-NH400-A/active/rtl_src/roce/ 下对应 RTL）：
  *   0x0800..0x09FC  PFC 控制器     roce_pfc.sv
  *   0x0A00..0x0AFC  ECN / CNP（NP） roce_cnp.sv
  *   0x0B00..0x0BFC  DCQCN（RP）     roce_dcqcn.sv

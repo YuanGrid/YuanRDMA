@@ -1,6 +1,6 @@
 #!/bin/bash
 # YuanNIC-NH400-A（AGIB027R29A1E2VB，AS x4）固件构建：
-# 从 code/project/YuanNIC-NH400-A/boot 和 .../active 拷贝工程到本脚本所在目录编译。
+# 从 code/quartus/YuanNIC-NH400-A/boot 和 .../active 拷贝工程到本脚本所在目录编译。
 # 编译目录固定在 build/YuanNIC-NH400-A，与从哪个目录调用无关。
 #   boot    ：只编 boot 工程，出 Boot 的 SOF/RPD，并刷新 firmware/boot_images/<型号>/
 #   active  ：只编 active 工程；若找到 firmware/boot_images 里的预置 boot 镜像，
@@ -132,7 +132,7 @@ fi
 
 FPGA_NIC_NAME=${FPGA_NIC_NAME:-YN400GA7B027A}
 
-# 工程目录名（code/project 下），拷贝到构建目录后换成带 boot_/active_ 前缀的目录名
+# 工程目录名（code/quartus 下），拷贝到构建目录后换成带 boot_/active_ 前缀的目录名
 PRO_DIR_NAME=YuanNIC-NH400-A
 BASE_PRO_NAME=boot_yuanrdma_a_400g
 RELS_PRO_NAME=active_yuanrdma_a_400g
@@ -144,8 +144,8 @@ BOOT_IMG_RPD=${BOOT_IMG_RPD:-${BOOT_IMG_DIR}/YuanRDMA_boot.rpd}
 
 QUARTUS_SH=${QUARTAS_PATH}/quartus/bin/quartus_sh
 QUARTUS_PFG=${QUARTAS_PATH}/quartus/bin/quartus_pfg
-# 工程源码目录（本仓库的 code/project），可用环境变量 FPGA_PRO_ROOT 覆盖
-FPGA_PRO_ROOT=${FPGA_PRO_ROOT:-$(cd "${FWB_SCRIPT_DIR}/../../code/project" && pwd)}
+# 工程源码目录（本仓库的 code/quartus），可用环境变量 FPGA_PRO_ROOT 覆盖
+FPGA_PRO_ROOT=${FPGA_PRO_ROOT:-$(cd "${FWB_SCRIPT_DIR}/../../code/quartus" && pwd)}
 
 BASE_PRO_PATH=${FPGA_PRO_ROOT}/${PRO_DIR_NAME}/boot
 RELS_PRO_PATH=${FPGA_PRO_ROOT}/${PRO_DIR_NAME}/active
