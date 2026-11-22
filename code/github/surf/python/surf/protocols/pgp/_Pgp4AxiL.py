@@ -1,0 +1,608 @@
+#-----------------------------------------------------------------------------
+# This file is part of 'SLAC Firmware Standard Library'.
+# It is subject to the license terms in the LICENSE.txt file found in the
+# top-level directory of this distribution and at:
+#    https://confluence.slac.stanford.edu/display/ppareg/LICENSE.html.
+# No part of 'SLAC Firmware Standard Library', including this file,
+# may be copied, modified, propagated, or distributed except according to
+# the terms contained in the LICENSE.txt file.
+#-----------------------------------------------------------------------------
+
+import pyrogue as pr
+
+import click
+import datetime
+
+class Pgp4AxiLCtrl(pr.Device):
+    def __init__(self,
+                 description = "Configuration of PGP 4 link",
+                 writeEn     = False,
+                 **kwargs):
+        super().__init__(description=description, **kwargs)
+
+        mode = 'RW' if writeEn else 'RO'
+
+        self.add(pr.RemoteCommand(
+            name        = 'CountReset',
+            description = "Status Counter Reset Command",
+            offset      = 0x000,
+            bitOffset   = 0,
+            bitSize     = 1,
+            function    = pr.BaseCommand.toggle,
+        ))
+
+        self.add(pr.RemoteVariable(
+            name        = 'WRITE_EN_G',
+            description = "Generic: firmware write-enable configuration",
+            offset      = 0x004,
+            bitOffset   = 0,
+            bitSize     = 1,
+            base        = pr.Bool,
+            mode        = 'RO',
+        ))
+
+        self.add(pr.RemoteVariable(
+            name        = 'PGP_FEC_ENABLE_G',
+            description = "Generic: FEC enable configuration",
+            offset      = 0x004,
+            bitOffset   = 1,
+            bitSize     = 1,
+            base        = pr.Bool,
+            mode        = 'RO',
+        ))
+
+        self.add(pr.RemoteVariable(
+            name        = 'NUM_VC_G',
+            description = "Generic: number of virtual channels configured",
+            offset      = 0x004,
+            bitOffset   = 8,
+            bitSize     = 8,
+            disp        = '{:d}',
+            mode        = 'RO',
+        ))
+
+        self.add(pr.RemoteVariable(
+            name        = 'STATUS_CNT_WIDTH_G',
+            description = "Generic: status counter width in bits",
+            offset      = 0x004,
+            bitOffset   = 16,
+            bitSize     = 8,
+            disp        = '{:d}',
+            mode        = 'RO',
+        ))
+
+        self.add(pr.RemoteVariable(
+            name        = 'ERROR_CNT_WIDTH_G',
+            description = "Generic: error counter width in bits",
+            offset      = 0x004,
+            bitOffset   = 24,
+            bitSize     = 8,
+            disp        = '{:d}',
+            mode        = 'RO',
+        ))
+
+        self.add(pr.RemoteVariable(
+            name        = 'SkipInterval',
+            description = "TX skip k-code interval",
+            offset      = 0x008,
+            mode        = mode,
+            disp        = '{:d}',
+        ))
+
+        self.add(pr.RemoteVariable(
+            name        = "Loopback",
+            description = "GT Loopback Mode",
+            offset      = 0x00C,
+            bitOffset   = 0,
+            bitSize     = 3,
+            mode        = mode,
+        ))
+
+        self.add(pr.RemoteVariable(
+            name        = 'FlowControlDisable',
+            description = "Disable PGP flow control",
+            offset      = 0x00C,
+            bitOffset   = 3,
+            bitSize     = 1,
+            base        = pr.Bool,
+            mode        = mode,
+        ))
+
+        self.add(pr.RemoteVariable(
+            name        = 'TxDisable',
+            description = "Disable PGP TX path",
+            offset      = 0x00C,
+            bitOffset   = 4,
+            bitSize     = 1,
+            base        = pr.Bool,
+            mode        = mode,
+        ))
+
+        self.add(pr.RemoteVariable(
+            name        = 'ResetTx',
+            description = "Reset the PGP TX path",
+            offset      = 0x00C,
+            bitOffset   = 5,
+            bitSize     = 1,
+            base        = pr.Bool,
+            mode        = mode,
+        ))
+
+        self.add(pr.RemoteVariable(
+            name        = 'ResetRx',
+            description = "Reset the PGP RX path",
+            offset      = 0x00C,
+            bitOffset   = 6,
+            bitSize     = 1,
+            base        = pr.Bool,
+            mode        = mode,
+        ))
+
+        self.add(pr.RemoteVariable(
+            name        = 'BypassFec',
+            description = "Bypass forward error correction",
+            offset      = 0x00C,
+            bitOffset   = 7,
+            bitSize     = 1,
+            base        = pr.Bool,
+            mode        = mode,
+        ))
+
+        self.add(pr.RemoteVariable(
+            name        = 'TxDiffCtrl',
+            description = "GT TX differential swing control",
+            mode        = mode,
+            offset      = 0x00C,
+            bitOffset   = 8,
+            bitSize     = 5,
+        ))
+
+        self.add(pr.RemoteVariable(
+            name        = 'TxPreCursor',
+            description = "GT TX pre-cursor emphasis control",
+            mode        = mode,
+            offset      = 0x00C,
+            bitOffset   = 16,
+            bitSize     = 5,
+        ))
+
+        self.add(pr.RemoteVariable(
+            name        = 'TxPostCursor',
+            description = "GT TX post-cursor emphasis control",
+            mode        = mode,
+            offset      = 0x00C,
+            bitOffset   = 24,
+            bitSize     = 5,
+        ))
+
+        self.add(pr.RemoteVariable(
+            name        = 'TxPolarity',
+            description = "Invert TX serial data polarity",
+            offset      = 0x00C,
+            bitOffset   = 30,
+            bitSize     = 1,
+            base        = pr.Bool,
+            mode        = mode,
+        ))
+
+        self.add(pr.RemoteVariable(
+            name        = 'RxPolarity',
+            description = "Invert RX serial data polarity",
+            offset      = 0x00C,
+            bitOffset   = 31,
+            bitSize     = 1,
+            base        = pr.Bool,
+            mode        = mode,
+        ))
+
+        if writeEn:
+            self.add(pr.RemoteCommand(
+                name        = 'FecInjectBitError',
+                description = "Inject a bit error into the FEC stream for testing",
+                offset      = 0x010,
+                bitSize     = 1,
+                bitOffset   = 0,
+                function    = lambda cmd: cmd.post(1),
+            ))
+
+        self.add(pr.RemoteVariable(
+            name         = 'UpTimeCnt',
+            description  = 'Number of seconds since last reset',
+            hidden       = True,
+            offset       = 0x014,
+            bitSize      = 32,
+            mode         = 'RO',
+            disp         = '{:d}',
+            units        = 'seconds',
+            pollInterval = 1,
+        ))
+
+        def parseUpTime(var,read):
+            seconds=var.dependencies[0].get(read=read)
+            if seconds == 0xFFFFFFFF:
+                click.secho(f'Invalid {var.path} detected', fg='red')
+                return 'Invalid'
+            else:
+                return str(datetime.timedelta(seconds=seconds))
+
+        self.add(pr.LinkVariable(
+            name        = 'UpTime',
+            description = 'Time since power up or last CountReset event',
+            mode        = 'RO',
+            disp        = '{}',
+            variable    = self.UpTimeCnt,
+            linkedGet   = parseUpTime,
+            units       = 'HH:MM:SS',
+        ))
+
+    def countReset(self):
+        self.CountReset()
+
+class Pgp4AxiLRxStatus(pr.Device):
+    def __init__(self,
+                 description     = "RX Status of PGP 4 link",
+                 numVc           = 4,
+                 statusCountBits = 16,
+                 errorCountBits  = 8,
+                 UpTimeCnt       = None,
+                 BypassFec       = None,
+                 **kwargs):
+        super().__init__(description=description, **kwargs)
+
+        # Pointer to Pgp4AxiLCtrl.UpTimeCnt/BypassFec
+        self.UpTimeCnt = UpTimeCnt
+        self.BypassFec = BypassFec
+
+        devOffset = 0x400
+
+        def addStatusCountVar(description='PGP RX status counter', **ecvkwargs):
+            self.add(pr.RemoteVariable(
+                description  = description,
+                bitSize      = statusCountBits,
+                mode         = 'RO',
+                disp         = '{:d}',
+                pollInterval = 1,
+                **ecvkwargs))
+
+        def addErrorCountVar(bitOffset=0, bitSize=errorCountBits,
+                             description='PGP RX error/status counter', **ecvkwargs):
+            self.add(pr.RemoteVariable(
+                description  = description,
+                bitSize      = bitSize,
+                mode         = 'RO',
+                disp         = '{:d}',
+                bitOffset    = bitOffset,
+                pollInterval = 1,
+                **ecvkwargs))
+
+        for i in range(numVc):
+            addStatusCountVar(
+                name   = f'RemPauseCnt[{i}]',
+                offset = (0x400+(4*i)-devOffset),
+            )
+
+        for i in range(numVc):
+            addErrorCountVar(
+                name   = f'RemOverflowCnt[{i}]',
+                offset = (0x440+(4*i)-devOffset),
+            )
+
+        addStatusCountVar(
+            name   = 'FrameCnt',
+            offset = (0x500-devOffset),
+        )
+
+        addStatusCountVar(
+            name   = 'OpCodeEnCnt',
+            offset = (0x504-devOffset),
+        )
+
+        statusList = [
+            ['PhyRxActive',True],
+            ['PhyRxInit',False],
+            ['GearboxAligned',True],
+            ['LinkReady',True],
+            ['RemRxLinkReady',True],
+            ['FrameError',False],
+            ['LinkDown',False],
+            ['LinkError',False],
+            ['EbOverflow',False],
+            ['CellError',False],
+            ['CellSofError',False],
+            ['CellSeqError',False],
+            ['CellVersionError',False],
+            ['CellCrcModeError',False],
+            ['CellCrcError',False],
+            ['CellEofeError',False],
+        ]
+
+        fecList = [
+            ['phyRxFecLock',True],
+            ['phyRxFecCorInc',False],
+            ['phyRxFecUnCorInc',False],
+        ]
+
+        for i in range(len(statusList)):
+            addErrorCountVar(
+                name   = (statusList[i][0]+'Cnt'),
+                offset = (0x600+(4*i)-devOffset),
+            )
+
+        for i in range(len(statusList)):
+            if statusList[i][1]:
+                self.add(pr.RemoteVariable(
+                    name         = statusList[i][0],
+                    description  = f"PGP RX status: {statusList[i][0]}",
+                    offset       = (0x710-devOffset),
+                    bitOffset    = i,
+                    bitSize      = 1,
+                    base         = pr.Bool,
+                    mode         = 'RO',
+                    pollInterval = 1,
+                ))
+
+        for i in range(len(fecList)):
+            addErrorCountVar(
+                name      = (fecList[i][0]+'Cnt'),
+                offset    = (0x600+(4*i)-devOffset),
+                bitOffset = 16,
+                bitSize   = 16,
+            )
+
+        for i in range(len(fecList)):
+            if fecList[i][1]:
+                self.add(pr.RemoteVariable(
+                    name         = fecList[i][0],
+                    description  = f"PGP RX FEC status: {fecList[i][0]}",
+                    offset       = (0x710-devOffset),
+                    bitOffset    = i+16,
+                    bitSize      = 1,
+                    base         = pr.Bool,
+                    mode         = 'RO',
+                    pollInterval = 1,
+                ))
+
+        self.add(pr.RemoteVariable(
+            name         = 'RemLinkData',
+            description  = "Sideband data received from remote PGP4 link",
+            offset       = (0x720-devOffset),
+            bitSize      = 48,
+            mode         = 'RO',
+            pollInterval = 1,
+        ))
+
+        self.add(pr.RemoteVariable(
+            name         = 'RemOpCodeData',
+            description  = "Last op-code data received from remote link",
+            offset       = (0x730-devOffset),
+            bitSize      = 48,
+            mode         = 'RO',
+            pollInterval = 1,
+        ))
+
+        self.add(pr.RemoteVariable(
+            name         = 'RemRxPause',
+            description  = "Remote RX pause status per virtual channel",
+            offset       = (0x740-devOffset),
+            bitSize      = numVc,
+            mode         = 'RO',
+            pollInterval = 1,
+        ))
+
+        self.add(pr.RemoteVariable(
+            name         = "RxClockFreqRaw",
+            description  = "Raw RX clock frequency in Hz",
+            offset       = (0x750-devOffset),
+            bitSize      = 32,
+            mode         = 'RO',
+            hidden       = True,
+            pollInterval = 1,
+        ))
+
+        self.add(pr.LinkVariable(
+            name         = "RxClockFrequency",
+            description  = "RX clock frequency in MHz",
+            units        = "MHz",
+            mode         = 'RO',
+            dependencies = [self.RxClockFreqRaw],
+            linkedGet    = lambda read: self.RxClockFreqRaw.get(read=read) * 1.0e-6,
+            disp         = '{:0.3f}',
+        ))
+
+        def getBitErrorRate(var,read):
+            # Get the variable values from hardware
+            try:
+                seconds     = var.dependencies[0].get(read=read)
+                numErrBits  = var.dependencies[1].get(read=read)
+                fecDisabled = var.dependencies[2].get(read=read)
+                rxClkFreq   = float(var.dependencies[3].get(read=read))
+            except (TypeError, ValueError):
+                return float('nan')
+
+            ###############################################################################
+            # Check for the following cases:
+            ###############################################################################
+            #   - seconds=0 (prevent divide by zero)
+            #   - max'd out error counter (BER calculation is corrupted)
+            #   - FEC disabled (phyRxFecCorIncCnt not valid)
+            #   - RX CLK not running yet
+            ###############################################################################
+            if (seconds<1) or (numErrBits == 0xFFFF) or (fecDisabled>0) or (rxClkFreq<1E6):
+                return float('nan')
+
+            # For zero observed errors, IBERT (and most BERT analyzers) estimate BER
+            # using a "3" to give 95% confidence that the true BER is lower than this value
+            if numErrBits<3:
+                numErrBits = 3 # Display the limit based on number of bits transmitted
+
+            # Calculate the number of bits transmitted
+            totalBits = float(seconds) * rxClkFreq * 66.0
+
+            # Return the bit error rate
+            return float(numErrBits)/totalBits
+
+        self.add(pr.LinkVariable(
+            name         = 'BitErrorRate',
+            description  = 'Assumes that incrementing FecCorrectedCodeWordCnt = 1 bit error event (which is not always the case because FEC will correct for up to 11 bits)',
+            mode         = 'RO',
+            disp         = '{:.3e}', # scientific notation with three decimal places
+            dependencies = [self.UpTimeCnt, self.phyRxFecCorIncCnt, self.BypassFec, self.RxClockFreqRaw],
+            linkedGet    = getBitErrorRate,
+        ))
+
+class Pgp4AxiLTxStatus(pr.Device):
+    def __init__(self,
+                 description     = "TX Status of PGP 4 link",
+                 numVc           = 4,
+                 statusCountBits = 16,
+                 errorCountBits  = 8,
+                 **kwargs):
+        super().__init__(description=description, **kwargs)
+
+        devOffset = 0x800
+
+        def addStatusCountVar(description='PGP TX status counter', **ecvkwargs):
+            self.add(pr.RemoteVariable(
+                description  = description,
+                bitSize      = statusCountBits,
+                mode         = 'RO',
+                disp         = '{:d}',
+                pollInterval = 1,
+                **ecvkwargs))
+
+        def addErrorCountVar(description='PGP TX error/status counter', **ecvkwargs):
+            self.add(pr.RemoteVariable(
+                description  = description,
+                bitSize      = errorCountBits,
+                mode         = 'RO',
+                disp         = '{:d}',
+                pollInterval = 1,
+                **ecvkwargs))
+
+        for i in range(numVc):
+            addStatusCountVar(
+                name   = f'LocPauseCnt[{i}]',
+                offset = (0x800+(4*i)-devOffset),
+            )
+
+        for i in range(numVc):
+            addErrorCountVar(
+                name   = f'LocOverflowCnt[{i}]',
+                offset = (0x840+(4*i)-devOffset),
+            )
+
+        addStatusCountVar(
+            name   = 'FrameCnt',
+            offset = (0x900-devOffset),
+        )
+
+        addStatusCountVar(
+            name   = 'OpCodeEnCnt',
+            offset = (0x904-devOffset),
+        )
+
+        statusList = [
+            ['phyTxActive',True],
+            ['LinkReady',True],
+            ['FrameError',False],
+        ]
+
+        for i in range(len(statusList)):
+            addErrorCountVar(
+                name   = (statusList[i][0]+'Cnt'),
+                offset = (0xA00+(4*i)-devOffset),
+            )
+
+        for i in range(len(statusList)):
+            if statusList[i][1]:
+                self.add(pr.RemoteVariable(
+                    name         = statusList[i][0],
+                    description  = f"PGP TX status: {statusList[i][0]}",
+                    offset       = (0xB10-devOffset),
+                    bitOffset    = i,
+                    bitSize      = 1,
+                    base         = pr.Bool,
+                    mode         = 'RO',
+                    pollInterval = 1,
+                ))
+
+        self.add(pr.RemoteVariable(
+            name         = 'LocLinkData',
+            description  = "Local sideband data transmitted on PGP4 link",
+            offset       = (0xB20-devOffset),
+            bitSize      = 48,
+            mode         = 'RO',
+            pollInterval = 1,
+        ))
+
+        self.add(pr.RemoteVariable(
+            name         = 'LocOpCodeData',
+            description  = "Last op-code data transmitted on local link",
+            offset       = (0xB30-devOffset),
+            bitSize      = 48,
+            mode         = 'RO',
+            pollInterval = 1,
+        ))
+
+        self.add(pr.RemoteVariable(
+            name         = 'LocTxPause',
+            description  = "Local TX pause status per virtual channel",
+            offset       = (0xB40-devOffset),
+            bitSize      = numVc,
+            mode         = 'RO',
+            pollInterval = 1,
+        ))
+
+        self.add(pr.RemoteVariable(
+            name         = "TxClockFreqRaw",
+            description  = "Raw TX clock frequency in Hz",
+            offset       = (0xB50-devOffset),
+            bitSize      = 32,
+            mode         = 'RO',
+            hidden       = True,
+            pollInterval = 1,
+        ))
+
+        self.add(pr.LinkVariable(
+            name         = "TxClockFrequency",
+            description  = "TX clock frequency in MHz",
+            units        = "MHz",
+            mode         = 'RO',
+            dependencies = [self.TxClockFreqRaw],
+            linkedGet    = lambda: self.TxClockFreqRaw.value() * 1.0e-6,
+            disp         = '{:0.3f}',
+        ))
+
+class Pgp4AxiL(pr.Device):
+    def __init__(self,
+                 description     = "Configuration and status a PGP 4 link",
+                 numVc           = 4,
+                 statusCountBits = 16,
+                 errorCountBits  = 8,
+                 writeEn         = False,
+                 **kwargs):
+        super().__init__(description=description, **kwargs)
+
+        self.add(Pgp4AxiLCtrl(
+            name    = 'Ctrl',
+            offset  = 0x000,
+            writeEn = writeEn,
+        ))
+
+        self.add(Pgp4AxiLRxStatus(
+            name            = 'RxStatus',
+            offset          = 0x400,
+            numVc           = numVc,
+            statusCountBits = statusCountBits,
+            errorCountBits  = errorCountBits,
+            UpTimeCnt       = self.Ctrl.UpTimeCnt,
+            BypassFec       = self.Ctrl.BypassFec,
+        ))
+
+        self.add(Pgp4AxiLTxStatus(
+            name            = 'TxStatus',
+            offset          = 0x800,
+            numVc           = numVc,
+            statusCountBits = statusCountBits,
+            errorCountBits  = errorCountBits,
+        ))

@@ -1,0 +1,48 @@
+# 编译生成物
+*.o
+*.ko
+*.mod
+*.mod.c
+*.cmd
+.*.cmd
+modules.order
+Module.symvers
+*.symvers
+
+# 内核/用户态构建目录
+code/kernel/output/
+code/sw/rdma-core-provider/build/
+code/sw/perftest-build/
+code/dpdk/build/
+code/dpdk/output/
+
+# Quartus 生成物
+*.sof
+*.rpd
+*.rbf
+*.jic
+*.pof
+*.sopcinfo
+output_files/
+incremental_db/
+qdb/
+dni/
+greybox_tmp/
+*.qws
+*.qpg
+*.ddb
+*.summary
+
+# Signal Tap 调试配置（体积大，属调试产物）
+*.stp
+
+# 工具产物
+code/nictrl/nictrl
+
+# 系统
+.DS_Store
+
+# 本地资料与测试产物
+private/
+test/
+skill/
