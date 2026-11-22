@@ -453,10 +453,26 @@ module roce_tbl
     wire        stage2_page1_ok     = !stage2_crosses_page ||
                                       (stage2_mtt_index_full < (MTT_IDX_W+1)'(MTT_NUM - 1));
 
+    // 2026-11-22：stage2b 把「base + page → bank 地址」这一步从 RAM 输出到 RAM 输入
+    // 的组合链里拿出来。B6462 STA 该路径是 RAM→RAM（uTco 1.368 + IC 1.907），
+    // 加这一级后两段都只剩 1 级逻辑；代价是翻译延迟 +1 拍。
+    reg           stage2b_valid, stage2b_ok;
+    reg  [CLIENT_W-1:0]  stage2b_client;
+    reg  [MTT_IDX_W-1:0] stage2b_mtt_index;
+    reg  [11:0]   stage2b_va_page_offset;
+    always @(posedge clk) begin
+        stage2b_valid          <= stage2_valid;
+        stage2b_client         <= stage2_client;
+        stage2b_ok             <= stage2_ok && stage2_range_ok &&
+                                  stage2_in_pool && stage2_mtt_ok && stage2_page1_ok;
+        stage2b_mtt_index      <= stage2_mtt_index;
+        stage2b_va_page_offset <= stage2_va_page_offset;
+    end
+
     // mi 偶：页 mi 在 e[mi/2]，页 mi+1 在 o[mi/2]；mi 奇：页 mi 在 o[mi/2]，页 mi+1 在 e[mi/2+1]
-    wire [MTT_ADDR_W-1:0] odd_bank_address  = stage2_mtt_index[MTT_IDX_W-1:1];
-    wire [MTT_ADDR_W-1:0] even_bank_address = stage2_mtt_index[MTT_IDX_W-1:1] +
-                                              MTT_ADDR_W'(stage2_mtt_index[0]);
+    wire [MTT_ADDR_W-1:0] odd_bank_address  = stage2b_mtt_index[MTT_IDX_W-1:1];
+    wire [MTT_ADDR_W-1:0] even_bank_address = stage2b_mtt_index[MTT_IDX_W-1:1] +
+                                              MTT_ADDR_W'(stage2b_mtt_index[0]);
 
     // S3：RAM 输出
     reg           stage3_valid, stage3_ok, stage3_index_odd;
@@ -464,12 +480,11 @@ module roce_tbl
     reg  [11:0]   stage3_va_page_offset;
     reg  [63:0]   even_bank_data, odd_bank_data;
     always @(posedge clk) begin
-        stage3_valid     <= stage2_valid;
-        stage3_client     <= stage2_client;
-        stage3_ok    <= stage2_ok && stage2_range_ok &&
-                        stage2_in_pool && stage2_mtt_ok && stage2_page1_ok;
-        stage3_index_odd   <= stage2_mtt_index[0];
-        stage3_va_page_offset <= stage2_va_page_offset;
+        stage3_valid     <= stage2b_valid;
+        stage3_client     <= stage2b_client;
+        stage3_ok    <= stage2b_ok;
+        stage3_index_odd   <= stage2b_mtt_index[0];
+        stage3_va_page_offset <= stage2b_va_page_offset;
         even_bank_data     <= mtt_even_bank[even_bank_address];
         odd_bank_data     <= mtt_odd_bank[odd_bank_address];
     end

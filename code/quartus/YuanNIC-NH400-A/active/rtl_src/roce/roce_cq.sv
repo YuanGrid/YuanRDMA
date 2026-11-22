@@ -46,6 +46,14 @@ module roce_cq
     assign dma_write_request_page1 = dma_write_request_address + 64'd4096;   // 32 B 对齐项不会跨页
     assign dma_write_request_length   = 13'd32;
 
+    // 输入级（2026-11-22）：每个客户端一级 1 深缓冲。
+    // B6462 STA 里 lane0 的 cqe_valid 跨到 lane3 再折回 u_cq，走线占该路径 84%；
+    // 缓冲后仲裁只看本模块内的寄存器，lane 侧只到本地寄存器。
+    reg  [CLIENTS-1:0]      in_valid_q;
+    reg  [CLIENTS*160-1:0]  in_data_q;
+    reg  [CLIENTS*CQ_W-1:0] in_cq_q;
+    integer in_i;
+
     reg  [CLIENT_W-1:0] round_robin, picked_client;
     reg           any_request;
     integer client;
@@ -53,7 +61,7 @@ module roce_cq
         any_request  = 1'b0;
         picked_client = round_robin;
         for (client = CLIENTS - 1; client >= 0; client = client - 1)
-            if (cqe_valid[(round_robin + client) % CLIENTS]) begin
+            if (in_valid_q[(round_robin + client) % CLIENTS]) begin
                 any_request  = 1'b1;
                 picked_client = CLIENT_W'((round_robin + client) % CLIENTS);
             end
@@ -62,15 +70,36 @@ module roce_cq
     localparam [1:0] S_IDLE = 2'd0, S_REQUEST = 2'd1, S_DATA = 2'd2;
     reg  [1:0] state;
     wire       take_cqe = (state == S_IDLE) && any_request;
-    assign cqe_ready = take_cqe ? (CLIENTS'(1) << picked_client) : '0;
+    // 被取走的客户端同一拍可直接补入下一个 CQE，避免背靠背 CQE 之间空一拍
+    wire [CLIENTS-1:0] in_ready = ~in_valid_q |
+                                  (take_cqe ? (CLIENTS'(1) << picked_client) : '0);
+    assign cqe_ready = in_ready;
 
-    wire [CQ_W-1:0] cq          = cqe_cq_index[picked_client*CQ_W +: CQ_W];
-    wire [159:0] cqe_entry    = cqe_data[picked_client*160 +: 160];
+    wire [CQ_W-1:0] cq        = in_cq_q[picked_client*CQ_W +: CQ_W];
+    wire [159:0]  cqe_entry   = in_data_q[picked_client*160 +: 160];
     wire [15:0]  producer    = producer_index[cq];
     wire [3:0]   log2_depth   = cqc[cq].log2_depth;
     wire [15:0]  index_mask = (16'd1 << log2_depth) - 16'd1;
     wire         owner_bit  = ~producer[log2_depth];
     wire         ring_full = ((producer - consumer_index[cq]) > index_mask);
+
+    // 输入缓冲：producer 保持 valid/data 直到 ready（roce_resp / roce_req 的握手），
+    // 这里只做 1 深寄存；take 与 refill 同拍时 refill 优先（后赋值覆盖）。
+    always @(posedge clk) begin
+        if (rst) begin
+            in_valid_q <= '0;
+        end else begin
+            for (in_i = 0; in_i < CLIENTS; in_i = in_i + 1) begin
+                if (take_cqe && (picked_client == CLIENT_W'(in_i)))
+                    in_valid_q[in_i] <= 1'b0;
+                if (cqe_valid[in_i] && in_ready[in_i]) begin
+                    in_valid_q[in_i] <= 1'b1;
+                    in_data_q[in_i*160 +: 160] <= cqe_data[in_i*160 +: 160];
+                    in_cq_q[in_i*CQ_W +: CQ_W] <= cqe_cq_index[in_i*CQ_W +: CQ_W];
+                end
+            end
+        end
+    end
 
     integer entry;
     always @(posedge clk) begin

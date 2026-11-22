@@ -307,7 +307,7 @@ set_instance_assignment -name REGION_NAME LL_BAS_MON -to "u99_roce_top|u_bas_mon
 # Error (170153) Fixed size Logic Lock region is too small（该块实际需要 832 块 M20K）。
 # 这里只保留 seed 2：该域历史上对放置高度敏感（debug-playbook 里 pkt_gen 同性质路径在
 # 0.000~0.149 之间随 seed 变，seed 2 曾给出 +0.047），默认 seed 1 下 B6460 是 −0.149。
-set_global_assignment -name SEED 2
+set_global_assignment -name SEED 0
 set_global_assignment -name OPTIMIZATION_MODE "HIGH PERFORMANCE EFFORT" -comment "Use High Performance Effort optimization mode when optimizing for performance. Superior Performance with Maximum Placement Effort optimization mode has been deprecated and will be removed in 27.1.1."
 set_global_assignment -name OPTIMIZATION_TECHNIQUE SPEED
 set_global_assignment -name MUX_RESTRUCTURE OFF
