@@ -106,7 +106,7 @@ YuanRDMA 以开源方式推进，也希望以共建方式生长。科研院所�
 - **协议栈原生**：RoCEv2 RC / UD 在 RTL 中实现，组包与解析在网卡内完成，数据面不过主机软件栈。
 - **RC 语义**：Write / Write with Immediate / Read / Send / Send with Immediate；PSN、ACK / NAK、Go-back-N 重传与超时、ICRC 全部硬件完成。
 - **UD 语义**：Send / Send with Immediate（带 DETH），CQE 回报源 QPN。
-- **多 QP 并行**：单 QP 受组包开销限制在线速 36%，4 QP 达 88%（352.1 Gb/s）；`QP_NUM` 默认 128，可扩至 4096。
+- **多 QP 并行**：单 QP 受组包开销限制在线速约 49.5%，4 QP 达 88%（352.1 Gb/s）；`QP_NUM` 默认 128，可扩至 4096。
 - **建链两种**：RoCE CM（QP1 / GSI 交换 CM MAD，标准 `rdma_cm` 路径），或 TCP 交互建链信息（NCCL、perftest 经 verbs 自行交换，不依赖 CM）。
 - **QPN 窗口**：QPN 落在基址对齐的连续窗口内，`FORCE_MAX_QP` / `FORCE_QPN_BASE` 软硬件同步。
 - **PFC 无损**：IEEE 802.1Qbb 按优先级发送准入，PFC 帧由 F-tile 硬核 MAC 收发。
@@ -184,24 +184,24 @@ YuanSec 以 FPGA 并行计算加 DPDK 转发为数据面，把检测与密码运
 
 ## 6 性能
 
-测试条件：YuanNIC-NH400-A，对端 NVIDIA ConnectX-7，400GbE 直连，原版 perftest。带宽用例消息 1 MiB、每项 30 s；延迟用例消息 2 B、每项 30 s，表中取 perftest 的典型值（typical，中位）。数据取自镜像 `R26.12.17-B6462-20261121-1X400G`。
+测试条件：YuanNIC-NH400-A，对端 NVIDIA ConnectX-7，400GbE 直连，原版 perftest。带宽用例消息 1 MiB、每项 30 s；延迟用例消息 2 B、每项 30 s，表中取 perftest 的典型值（typical，中位）。数据取自镜像 `R26.12.17-B6464-20261123-1X400G`。
 
 <table width="100%" style="width:100%;border:0;border-collapse:collapse">
 <tr><td style="border:0;padding:0">
 
 <table width="100%" style="width:100%">
 <tr><th style="width:26%">用例</th><th style="width:37%">YuanNIC 作客户端</th><th style="width:37%">YuanNIC 作服务端</th></tr>
-<tr><td style="width:26%"><code>ib_write_bw</code>（1 QP）</td><td style="width:37%"><strong>219.3 Gb/s（54.8%）</strong></td><td style="width:37%">100.0 Gb/s（25.0%）</td></tr>
-<tr><td style="width:26%"><code>ib_read_bw</code>（1 QP）</td><td style="width:37%">77.2 Gb/s（19.3%）</td><td style="width:37%">89.8 Gb/s（22.5%）</td></tr>
-<tr><td style="width:26%"><code>ib_send_bw</code>（1 QP）</td><td style="width:37%"><strong>219.3 Gb/s（54.8%）</strong></td><td style="width:37%">97.7 Gb/s（24.4%）</td></tr>
-<tr><td style="width:26%"><code>ib_write_bw</code>（4 QP）</td><td style="width:37%"><strong>351.9 Gb/s（88.0%）</strong></td><td style="width:37%">96.9 Gb/s（24.2%）</td></tr>
-<tr><td style="width:26%"><code>ib_read_bw</code>（4 QP）</td><td style="width:37%">99.6 Gb/s（24.9%）</td><td style="width:37%"><strong>328.2 Gb/s（82.1%）</strong></td></tr>
+<tr><td style="width:26%"><code>ib_write_bw</code>（1 QP）</td><td style="width:37%"><strong>198.0 Gb/s（49.5%）</strong></td><td style="width:37%">99.9 Gb/s（25.0%）</td></tr>
+<tr><td style="width:26%"><code>ib_read_bw</code>（1 QP）</td><td style="width:37%">74.4 Gb/s（18.6%）</td><td style="width:37%">89.7 Gb/s（22.4%）</td></tr>
+<tr><td style="width:26%"><code>ib_send_bw</code>（1 QP）</td><td style="width:37%"><strong>198.1 Gb/s（49.5%）</strong></td><td style="width:37%">97.2 Gb/s（24.3%）</td></tr>
+<tr><td style="width:26%"><code>ib_write_bw</code>（4 QP）</td><td style="width:37%"><strong>352.1 Gb/s（88.0%）</strong></td><td style="width:37%">96.6 Gb/s（24.1%）</td></tr>
+<tr><td style="width:26%"><code>ib_read_bw</code>（4 QP）</td><td style="width:37%">99.3 Gb/s（24.8%）</td><td style="width:37%"><strong>328.2 Gb/s（82.1%）</strong></td></tr>
 </table>
 
 </td></tr>
 </table>
 
-括号内为占 400 Gb/s 线速的比例。多 QP 并发时发送方向达 88%、接收方向 82%；单 QP 发送已达 54.8%（B6462 起，此前 35.7%），多 QP 仍用于进一步逼近线速。
+括号内为占 400 Gb/s 线速的比例。多 QP 并发时发送方向达 88%、接收方向 82%；单 QP 发送达 49.5%，多 QP 仍用于进一步逼近线速。
 
 时延（2 B 消息，单向，typical / p99）：
 
@@ -210,15 +210,15 @@ YuanSec 以 FPGA 并行计算加 DPDK 转发为数据面，把检测与密码运
 
 <table width="100%" style="width:100%">
 <tr><th style="width:26%">用例</th><th style="width:37%">YuanNIC 作客户端</th><th style="width:37%">YuanNIC 作服务端</th></tr>
-<tr><td style="width:26%"><code>ib_write_lat</code></td><td style="width:37%"><strong>2.44 / 2.67 µs</strong></td><td style="width:37%"><strong>2.40 / 2.58 µs</strong></td></tr>
-<tr><td style="width:26%"><code>ib_read_lat</code></td><td style="width:37%">4.23 / 4.61 µs</td><td style="width:37%">2.85 / 3.19 µs</td></tr>
-<tr><td style="width:26%"><code>ib_send_lat</code></td><td style="width:37%">2.75 / 2.92 µs</td><td style="width:37%">2.44 / 2.59 µs</td></tr>
+<tr><td style="width:26%"><code>ib_write_lat</code></td><td style="width:37%"><strong>2.46 / 2.69 µs</strong></td><td style="width:37%"><strong>2.44 / 2.66 µs</strong></td></tr>
+<tr><td style="width:26%"><code>ib_read_lat</code></td><td style="width:37%">3.68 / 3.97 µs</td><td style="width:37%">2.87 / 3.14 µs</td></tr>
+<tr><td style="width:26%"><code>ib_send_lat</code></td><td style="width:37%">2.38 / 2.54 µs</td><td style="width:37%">2.65 / 2.87 µs</td></tr>
 </table>
 
 </td></tr>
 </table>
 
-写时延两端都在 2.4 µs 附近，与消息长度基本无关；读时延在客户端方向上偏高到 4.2 µs，是响应数据在接收侧串行搬运的代价。p99 与 typical 相差 0.1–0.4 µs，主要来自主机侧中断与调度抖动，评估跨版本回归时以 typical 为准。
+写时延两端都在 2.4 µs 附近，与消息长度基本无关；读时延在客户端方向上偏高到 3.7 µs，是响应数据在接收侧串行搬运的代价。p99 与 typical 相差 0.1–0.3 µs，主要来自主机侧中断与调度抖动，评估跨版本回归时以 typical 为准。
 
 ## 7 支持的硬件
 
@@ -327,7 +327,7 @@ ibv_devinfo -d yuanrdma0                   # 应看到 PORT_ACTIVE
 
 ### 10.1 400G 性能优化与集合通信库
 
-单 QP 受每包组包开销限制只跑到线速的 36%，多 QP 并发目前 88%。下一步是优化组包与流控路径向线速逼近，并把多 QP 下发的调度、拥塞反馈与重传收敛成可复用的通信原语，在其上构建面向集合通信（AllReduce / AllGather / ReduceScatter）的通信库，让上层无需自己管理 QP 并行度。
+单 QP 受每包组包开销限制只跑到线速的 49.5%，多 QP 并发目前 88%。下一步是优化组包与流控路径向线速逼近，并把多 QP 下发的调度、拥塞反馈与重传收敛成可复用的通信原语，在其上构建面向集合通信（AllReduce / AllGather / ReduceScatter）的通信库，让上层无需自己管理 QP 并行度。
 
 ### 10.2 扩大适配场景
 

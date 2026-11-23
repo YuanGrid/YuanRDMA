@@ -106,7 +106,7 @@ The full path of one RDMA operation, from application submission to usable data 
 - **Native stack**: RoCEv2 RC / UD in RTL; assembly and parsing happen on the card, off the host software stack.
 - **RC semantics**: Write / Write with Immediate / Read / Send / Send with Immediate; PSN, ACK / NAK, Go-back-N retransmission and timeouts, and ICRC all in hardware.
 - **UD semantics**: Send / Send with Immediate (with DETH); the CQE reports the source QPN.
-- **Multi-QP**: one QP is capped near 36% of line rate by per-packet assembly; 4 QPs reach 88% (352.1 Gb/s). `QP_NUM` defaults to 128, scalable to 4096.
+- **Multi-QP**: one QP is capped near 49.5% of line rate by per-packet assembly; 4 QPs reach 88% (352.1 Gb/s). `QP_NUM` defaults to 128, scalable to 4096.
 - **Two connection setups**: RoCE CM (CM MADs over QP1 / GSI, the standard `rdma_cm` route), or TCP-based exchange (NCCL and perftest trade QP information over verbs, no CM needed).
 - **QPN window**: QPNs sit in a base-aligned contiguous window; `FORCE_MAX_QP` / `FORCE_QPN_BASE` stay in sync between software and RTL.
 - **PFC lossless**: per-priority transmit admission per IEEE 802.1Qbb, PFC frames handled by the F-tile hard MAC.
@@ -184,24 +184,24 @@ Queues, tables and memory translation are consolidated below; the figures follow
 
 ## 6 Performance
 
-Setup: YuanNIC-NH400-A, peer NVIDIA ConnectX-7, 400GbE direct link, upstream perftest. Bandwidth cases use 1 MiB messages, 30 s each; latency cases use 2 B messages, 30 s each, and the tables list perftest's typical (median) values. Figures from image `R26.12.17-B6462-20261121-1X400G`.
+Setup: YuanNIC-NH400-A, peer NVIDIA ConnectX-7, 400GbE direct link, upstream perftest. Bandwidth cases use 1 MiB messages, 30 s each; latency cases use 2 B messages, 30 s each, and the tables list perftest's typical (median) values. Figures from image `R26.12.17-B6464-20261123-1X400G`.
 
 <table width="100%" style="width:100%;border:0;border-collapse:collapse">
 <tr><td style="border:0;padding:0">
 
 <table width="100%" style="width:100%">
 <tr><th style="width:26%">Test</th><th style="width:37%">YuanNIC as client</th><th style="width:37%">YuanNIC as server</th></tr>
-<tr><td style="width:26%"><code>ib_write_bw</code> (1 QP)</td><td style="width:37%"><strong>219.3 Gb/s (54.8%)</strong></td><td style="width:37%">100.0 Gb/s (25.0%)</td></tr>
-<tr><td style="width:26%"><code>ib_read_bw</code> (1 QP)</td><td style="width:37%">77.2 Gb/s (19.3%)</td><td style="width:37%">89.8 Gb/s (22.5%)</td></tr>
-<tr><td style="width:26%"><code>ib_send_bw</code> (1 QP)</td><td style="width:37%"><strong>219.3 Gb/s (54.8%)</strong></td><td style="width:37%">97.7 Gb/s (24.4%)</td></tr>
-<tr><td style="width:26%"><code>ib_write_bw</code> (4 QP)</td><td style="width:37%"><strong>351.9 Gb/s (88.0%)</strong></td><td style="width:37%">96.9 Gb/s (24.2%)</td></tr>
-<tr><td style="width:26%"><code>ib_read_bw</code> (4 QP)</td><td style="width:37%">99.6 Gb/s (24.9%)</td><td style="width:37%"><strong>328.2 Gb/s (82.1%)</strong></td></tr>
+<tr><td style="width:26%"><code>ib_write_bw</code> (1 QP)</td><td style="width:37%"><strong>198.0 Gb/s (49.5%)</strong></td><td style="width:37%">99.9 Gb/s (25.0%)</td></tr>
+<tr><td style="width:26%"><code>ib_read_bw</code> (1 QP)</td><td style="width:37%">74.4 Gb/s (18.6%)</td><td style="width:37%">89.7 Gb/s (22.4%)</td></tr>
+<tr><td style="width:26%"><code>ib_send_bw</code> (1 QP)</td><td style="width:37%"><strong>198.1 Gb/s (49.5%)</strong></td><td style="width:37%">97.2 Gb/s (24.3%)</td></tr>
+<tr><td style="width:26%"><code>ib_write_bw</code> (4 QP)</td><td style="width:37%"><strong>352.1 Gb/s (88.0%)</strong></td><td style="width:37%">96.6 Gb/s (24.1%)</td></tr>
+<tr><td style="width:26%"><code>ib_read_bw</code> (4 QP)</td><td style="width:37%">99.3 Gb/s (24.8%)</td><td style="width:37%"><strong>328.2 Gb/s (82.1%)</strong></td></tr>
 </table>
 
 </td></tr>
 </table>
 
-Percentages are of the 400 Gb/s line rate. With 4 QPs the transmit direction reaches 88% of line rate and the receive direction 82%; a single QP is limited to about 36% by per-packet assembly overhead, which is the main reason to run multiple QPs in parallel.
+Percentages are of the 400 Gb/s line rate. With 4 QPs the transmit direction reaches 88% of line rate and the receive direction 82%; a single QP is limited to about 49.5% by per-packet assembly overhead, which is the main reason to run multiple QPs in parallel.
 
 Latency (2 B messages, one-way, typical / p99):
 
@@ -210,15 +210,15 @@ Latency (2 B messages, one-way, typical / p99):
 
 <table width="100%" style="width:100%">
 <tr><th style="width:26%">Test</th><th style="width:37%">YuanNIC as client</th><th style="width:37%">YuanNIC as server</th></tr>
-<tr><td style="width:26%"><code>ib_write_lat</code></td><td style="width:37%"><strong>2.44 / 2.67 µs</strong></td><td style="width:37%"><strong>2.40 / 2.58 µs</strong></td></tr>
-<tr><td style="width:26%"><code>ib_read_lat</code></td><td style="width:37%">4.23 / 4.61 µs</td><td style="width:37%">2.85 / 3.19 µs</td></tr>
-<tr><td style="width:26%"><code>ib_send_lat</code></td><td style="width:37%">2.75 / 2.92 µs</td><td style="width:37%">2.44 / 2.59 µs</td></tr>
+<tr><td style="width:26%"><code>ib_write_lat</code></td><td style="width:37%"><strong>2.46 / 2.69 µs</strong></td><td style="width:37%"><strong>2.44 / 2.66 µs</strong></td></tr>
+<tr><td style="width:26%"><code>ib_read_lat</code></td><td style="width:37%">3.68 / 3.97 µs</td><td style="width:37%">2.87 / 3.14 µs</td></tr>
+<tr><td style="width:26%"><code>ib_send_lat</code></td><td style="width:37%">2.38 / 2.54 µs</td><td style="width:37%">2.65 / 2.87 µs</td></tr>
 </table>
 
 </td></tr>
 </table>
 
-Write latency sits near 2.2 µs on both ends and barely moves with message size. Read latency is higher — 3.7 µs in the client direction — the cost of the responding data being copied serially on the receive side. p99 runs 0.1–1.0 µs above typical, most of it host-side interrupt and scheduling jitter; use typical when judging regressions across versions.
+Write latency sits near 2.4 µs on both ends and barely moves with message size. Read latency is higher — 3.7 µs in the client direction — the cost of the responding data being copied serially on the receive side. p99 runs 0.1–0.3 µs above typical, most of it host-side interrupt and scheduling jitter; use typical when judging regressions across versions.
 
 ## 7 Supported Hardware
 
@@ -327,7 +327,7 @@ In progress and beyond, along three tracks:
 
 ### 10.1 400G performance work and a collective communication library
 
-A single QP reaches only 36% of line rate, limited by per-packet assembly overhead; multi-QP concurrency currently reaches 88%. The next step is to push the assembly and flow-control path toward line rate, and to consolidate multi-QP dispatch, congestion feedback and retransmission into reusable communication primitives. A collective communication library (AllReduce / AllGather / ReduceScatter) is built on top, so upper layers no longer manage QP parallelism themselves.
+A single QP reaches only 49.5% of line rate, limited by per-packet assembly overhead; multi-QP concurrency currently reaches 88%. The next step is to push the assembly and flow-control path toward line rate, and to consolidate multi-QP dispatch, congestion feedback and retransmission into reusable communication primitives. A collective communication library (AllReduce / AllGather / ReduceScatter) is built on top, so upper layers no longer manage QP parallelism themselves.
 
 ### 10.2 Broader workload coverage
 
