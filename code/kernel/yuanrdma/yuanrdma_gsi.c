@@ -34,6 +34,7 @@
 #include <linux/iommu.h>
 #include <linux/ip.h>
 #include <linux/netdevice.h>
+#include <linux/rtnetlink.h>
 #include <linux/skbuff.h>
 #include <linux/udp.h>
 #include <linux/workqueue.h>
@@ -901,7 +902,11 @@ int yuanrdma_gsi_init(struct yuanrdma_dev *dev)
 	dev->gsi_wq = alloc_ordered_workqueue("yuanrdma_gsi", WQ_MEM_RECLAIM);
 	if (!dev->gsi_wq)
 		return -ENOMEM;
+	/* rx_handler 改的是 netdev 的收包钩子，按 net/core/dev.c 的约定要在 RTNL 下改。
+	 * register 在 5.15 里不 ASSERT_RTNL，但 unregister 会（见下），成对加锁免得两边不一致。 */
+	rtnl_lock();
 	ret = netdev_rx_handler_register(dev->netdev, yuanrdma_gsi_rx, dev);
+	rtnl_unlock();
 	if (ret) {
 		dev_err(&dev->pdev->dev, "gsi: eth0 上挂 rx_handler 失败 %d（已被 bridge/bond 占用？）\n", ret);
 		goto destroy_wq;
@@ -924,7 +929,12 @@ void yuanrdma_gsi_cleanup(struct yuanrdma_dev *dev)
 		debugfs_remove(dev->debugfs);
 	dev->debugfs = NULL;
 	if (dev->gsi_rx_registered) {
+		/* netdev_rx_handler_unregister 里有 ASSERT_RTNL()：不持 RTNL 调用会
+		 * "RTNL: assertion failed at net/core/dev.c" 警告，且钩子实际不会被可靠摘除
+		 * （2026-11-22 卸载时踩到）。 */
+		rtnl_lock();
 		netdev_rx_handler_unregister(dev->netdev);
+		rtnl_unlock();
 		dev->gsi_rx_registered = false;
 	}
 	if (dev->gsi_wq) {
