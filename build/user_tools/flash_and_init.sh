@@ -54,8 +54,9 @@
 #   BUILD_ROOT    镜像根目录，默认 $HERE/..（即 build），测试时指向假的目录树
 #   KO_SRC        驱动来源：build（默认，从 code/kernel 编译产物同步进包）/ package（直接用包里现有 ko）/
 #                 <目录>（从该目录拷 yuanmcdma/yuannic/yuanrdma.ko）。换镜像和换驱动要分开验证时用
-#   ENABLE_CM_SUP 1 = 以 yuanrdma.enable_cm_sup=1 加载（声明 IB_PORT_CM_SUP），默认 0。
-#                 UD 与 RC 自 2026-11-21 起同时支持，不再有 ENABLE_UD 开关。
+#                 UD 与 RC 自 2026-11-21 起同时支持，不再有 ENABLE_UD / ENABLE_CM_SUP 开关。
+#                 CM 不上报：本卡没有 CQ 完成中断，req_notify_cq 无法投递事件，
+#                 rping/ucmatose 会在 ibv_create_comp_channel 失败（见 yuanrdma_verbs.c 的 query_port）。
 #                 只有烧了带 UD TX 的比特流（S7 之后）才该打开；老比特流上 WQE 5/6 无 case，
 #                 会组 RC 形态的包发出去、对端静默不回——所以默认关，见 yuanrdma.h:34。
 
@@ -588,19 +589,11 @@ if [ "$DO_RELOAD" = 1 ]; then
     sleep 2
     insmod "$NIC/ko/yuannic.ko"  || warn "insmod yuannic.ko 失败（仅 ynictrl 不可用，perftest 不受影响）"
     sleep 1
-    # UD/RC 同时支持，不再传 enable_ud。只剩 CM 的声明开关：
-    # ENABLE_CM_SUP=1 额外声明 IB_PORT_CM_SUP——不声明时 rdma_create_ep() 直接
-    # EOPNOTSUPP，rping/ucmatose/rdma_client 一个 REQ 都发不出去，CM 无从验证。
-    # 验证通过前默认关（roce-cm-plan.md §6.2 的判据）。
-    params=""
-    [ "${ENABLE_CM_SUP:-0}" = "1" ] && params="enable_cm_sup=1"
-    # shellcheck disable=SC2086  # params 需要按空格分词成多个 insmod 参数
-    if [ -n "$params" ]; then
-        insmod "$NIC/ko/yuanrdma.ko" $params || die "insmod yuanrdma.ko$params 失败"
-        ok "yuanrdma.ko 已加载：$params"
-    else
-        insmod "$NIC/ko/yuanrdma.ko" || die "insmod yuanrdma.ko 失败"
-    fi
+    # UD/RC 同时支持，不再传 enable_ud；CM 不上报，也不再传 enable_cm_sup。
+    # 本卡没有 CQ 完成中断，req_notify_cq 投递不了事件，rping/ucmatose 会在
+    # ibv_create_comp_channel 失败（见 yuanrdma_verbs.c 的 query_port 注释）。
+    insmod "$NIC/ko/yuanrdma.ko" || die "insmod yuanrdma.ko 失败"
+
     sleep 3
     ok "驱动已加载"
 else
