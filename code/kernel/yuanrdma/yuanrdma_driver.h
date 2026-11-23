@@ -48,17 +48,19 @@
  */
 
 /*
- * IB_PORT_CM_SUP 的声明开关（module 参数 enable_cm_sup，默认 0）。
+ * IB_PORT_CM_SUP 不上报。
  *
- * 为什么默认不声明：这一位是「端口支持 RDMA CM」对外汇报的能力，只有在 rping /
- * ucmatose 真的跑通之后才不算假声明（roce-cm-plan.md §6.2）。
- *
- * 为什么又要有这个开关：不声明它，rdma_create_ep() 在 cma_alloc_port 之前就返回
- * EOPNOTSUPP，**根本走不到发 REQ 那一步**，CM 就永远无法验证。验证时按
- *   insmod yuanrdma.ko enable_cm_sup=1
- * 打开，跑通后按 §6.2 的判据决定默认值。
+ * 这一位是「端口支持 RDMA CM」的对外能力位，报出去就必须能被 rdma_cm 真正消费。
+ * 实测（B6462，2026-11-22）rping 在 `ibv_create_comp_channel` 就失败：
+ *   - librdmacm 的 ucma_create_cqs() 只要 CQ 有 send/recv 深度就无条件建 comp channel；
+ *   - comp channel 本身是 ib_uverbs 的通用命令，但本驱动没有在 uverbs_cmd_mask 里开放
+ *     IB_USER_VERBS_CMD_CREATE_COMP_CHANNEL，5.15 的 uverbs_uapi 因此把它标成 disabled；
+ *   - 更根本的是**没有完成事件通路**：CQ 环在主机内存里、由硬件直接写 CQE，
+ *     内核既看不见 producer 也无法产生 MSI，req_notify_cq 只能返回 EOPNOTSUPP。
+ * 结论：CM 的 QP1 数据通路（GP1 MAD 收发，见 yuanrdma_gsi.c）已就绪，缺的是
+ * 完成事件的中断通路——这是硬件能力缺口，不是开关问题。所以不做模块参数，
+ * 也不留一个「打开就能用」的假入口。
  */
-extern bool yuanrdma_enable_cm_sup;
 
 /*
  * 软件 GSI（QP1）：内核 MAD/CM 用，收发都在驱动里完成，不占硬件 QP/CQ（见 yuanrdma_gsi.c）。

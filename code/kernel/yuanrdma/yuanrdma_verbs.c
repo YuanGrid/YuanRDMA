@@ -82,21 +82,28 @@ static int yuanrdma_query_device(struct ib_device *ibdev, struct ib_device_attr 
 	attributes->atomic_cap = IB_ATOMIC_NONE;
 	attributes->local_ca_ack_delay = 16;
 	attributes->max_pkeys = 1;
-	/* device_cap_flags 原来一次都没赋值（恒 0），本身合法但会让用户态无法区分「不支持」
-	 * 与「没声明」。这里只声明**确实实现了**的项，别为了好看加：
-	 *   RESIZE_MAX_WR    —— create_qp 的 cap 是协商出来的（provider 回填实际深度），不支持 resize，不加。
-	 *   BAD_PKEY_CNTR / BAD_QKEY_CNTR —— port_attr 里 bad_pkey_cntr/qkey_viol_cntr 恒 0（硬件无 P_Key 校验）。
-	 *   UD_AV_PORT_ENFORCE —— **本轮仍不加**。UD 的 QP/AH 代码已按 §76 实现，但 UD 发送侧 RTL
-	 *     与本次改动并行开发、没上板；启用它的效果是「UD WR 里的 ah->port_num 必须等于 QP 的端口」，
-	 *     本卡只有 1 个端口，加了等于给自己加一道无意义的闸门，而且会让「UD 通路已验证」变成
-	 *     一个更响的声明。UD SEND 双向已在 B6459 跑通，但本卡只有 1 个端口，
-	 *     这个闸门仍然没有意义，所以依旧不加。
-	 *   N_NOTIFY_CQ / RC_RNR_NAK_GEN —— req_notify_cq 尚未实现（见 provider 侧同一条注释）。
-	 * 现阶段能声明的只有 CURR_QP_STATE_MOD（modify_qp 支持 IB_QP_CUR_STATE）与
-	 * CHANGE_PHY_PORT（单端口，post_send 的 alt port 走默认）。两者都是 no-op 级，
-	 * 且必须与 provider 的 query_device 对齐：那边由 ibv_cmd_query_device_any 原样带回。
+	/*
+	 * device_cap_flags：只声明**在代码里找得到落点**的项。这一位是 ULP 用来区分
+	 * 「不支持」与「驱动忘了填」的唯一依据（NCCL、rdma_cm 与各家 perftest 都读它），
+	 * 恒 0 会让它们全部走最保守的路径，`ibv_devinfo -v` 也看不出设备能做什么。
+	 *
+	 * 声明：
+	 *   CURR_QP_STATE_MOD —— modify_qp 读 IB_QP_CUR_STATE（下面 mask 里的 cur_qp_state），
+	 *     以调用方给的当前状态做状态转换校验，而不是一律假定 qp->state。
+	 *   RC_RNR_NAK_GEN —— 响应侧硬件真的会生成 RNR NAK：RQ 空时回 AETH_RNR_NAK 并把
+	 *     QPC 的 min_rnr_timer 编进 syndrome（roce_resp 的 ACK 分支）；请求侧按
+	 *     rnr_retry / min_rnr_timer 起 RNR 定时器重发（roce_req）。两侧都在，不是空声明。
+	 *
+	 * 不声明（每条都能指出缺什么）：
+	 *   RESIZE_MAX_WR —— 队列深度是 create_qp 时协商后回填的，没有 resize 通路。
+	 *   BAD_PKEY_CNTR / BAD_QKEY_CNTR —— port_attr 的 bad_pkey_cntr / qkey_viol_cntr 恒 0，
+	 *     硬件不做 P_Key / Q_Key 校验，没有计数器可报。
+	 *   UD_AV_PORT_ENFORCE —— 只有 1 个端口，这道闸门没有可判的内容。
+	 *   N_NOTIFY_CQ —— req_notify_cq 没有可用的完成事件通路：CQ 环在主机内存里，
+	 *     内核看不见 producer，硬件也不产生 MSI。见 provider 侧同一条注释。
+	 *   SHUTDOWN_PORT / MEM_MGT_EXTENSIONS —— 无对应实现（无 SHUTDOWN 端口操作、无 MW/FRMR）。
 	 */
-	attributes->device_cap_flags = 0;
+	attributes->device_cap_flags = IB_DEVICE_CURR_QP_STATE_MOD | IB_DEVICE_RC_RNR_NAK_GEN;
 	return 0;
 }
 
@@ -113,34 +120,36 @@ static int yuanrdma_query_port(struct ib_device *ibdev, u32 port, struct ib_port
 	attributes->gid_tbl_len = 16;
 	attributes->pkey_tbl_len = 1;
 	/*
-	 * IB_PORT_CM_SUP：**本轮去掉**（原来是保留的）。
+	 * IB_PORT_CM_SUP 不上报。
 	 *
-	 * 为什么改：任务判据是「CM 真能跑通才留，跑不通就撤」。本轮只做到「代码路径齐、
-	 * 编译通过」，没有任何上板证据——没有任何一次 rping / ucmatose / rdma_server 成功，
-	 * 连 REQ 有没有走到驱动都只是靠 debugfs 计数器预期（还没有板子可跑）。在这种状态下
-	 * 报这一位，就是典型的「假声明」。
+	 * 这一位是「端口支持 RDMA CM」的对外能力位。上报它，rdma_cm 的客户端才会走到
+	 * cma_alloc_port 之后；不上报，rdma_create_ep() 直接 EOPNOTSUPP。所以它不是可有
+	 * 可无的装饰，而是「CM 能用」的承诺。
 	 *
-	 * 撤掉的功能代价：零。已核过两条消费路径（code/github/rdma-core 与 6.8 的 ib_core）：
-	 *   - ib_cm/cma 是否挂到本设备看 get_port_immutable 的 core_cap_flags
-	 *     （RDMA_CORE_PORT_IBA_ROCE 已含 RDMA_CORE_CAP_IB_CM），与本位无关；
-	 *   - rdma-core 里 IBV_PORT_CM_SUP 只在 verbs.h 定义，没有任何 .c 读它做判断。
-	 *   所以它纯粹是对上汇报的「端口能力」，撤掉只影响 `ibv_devinfo -v` 里一行文字。
+	 * 2026-11-22 B6462 上板实测（enable_cm_sup 打开后）：rping 客户端在
+	 * `ibv_create_comp_channel` 失败。三条链路各自独立，缺一条就走不通：
+	 *   1) librdmacm 的 ucma_create_cqs() 只要 CQ 有 send/recv 深度就无条件
+	 *      ibv_create_comp_channel()——rping、ucmatose、rdma_server/client 全都走这条；
+	 *   2) comp channel 是 ib_uverbs 的通用命令，但本驱动的 uverbs_cmd_mask 没有开放
+	 *      IB_USER_VERBS_CMD_CREATE_COMP_CHANNEL，5.15 的 uverbs_uapi 把它标成 disabled
+	 *      并返回 EOPNOTSUPP（放开这一位只解决第 1 步）；
+	 *   3) 真正的缺口是**没有完成事件通路**：CQ 环在主机内存里、硬件直接写 CQE，内核
+	 *      看不见 producer，硬件也不产生 MSI，所以 req_notify_cq 只能返回 EOPNOTSUPP，
+	 *      即使建出 channel 也永远收不到事件（rdma_get_recv_comp 会卡在
+	 *      read(channel->fd)）。
 	 *
-	 * 恢复条件（写清楚，别靠记忆）：QPN=1 的帧能在 eth0 上收发（需 tool/roce_rx_filter.sh
-	 * 的 322 B 豁免生效，见该脚本 §QP1 豁免），且 rping 与 ucmatose 各成功一次。
-	 * 届时把这一行改回 IB_PORT_CM_SUP 并附上板日期与镜像版本。
+	 * 第 3 条是硬件能力缺口，不是开关能补的。因此不做模块参数、不留「打开就能用」的
+	 * 假入口：`ibv_devinfo -v` 的 port_cap_flags 里不会有这一位，ULP 会按「无 CM」处理，
+	 * 这正是当前的真实状态。
 	 *
-	 * 驱动侧 QP1 传输本身是就绪的（建 QP/软件 CQ/收发帧/交付 40 B GRH 全有，
-	 * yuanrdma_gsi_init() 失败会让 probe 直接退出），缺的是**验证**，不是代码——
-	 * 这也是为什么撤位不能写「不支持 CM」这种更强的结论。
+	 * QP1 的 CM MAD 数据通路本身是就绪的（软件 GSI 收发整帧、交付 40 B GRH，
+	 * 见 yuanrdma_gsi.c），缺的是完成事件，不涉及 CM 报文语义。
 	 *
-	 * 2026-11-18 更新：这一位现在是 yuanrdma_enable_cm_sup 模块参数（默认 0，仍不声明）。
-	 * 加参数的原因：**不打开它就无法验证 CM**——rdma_create_ep() 在 cma_alloc_port 之前
-	 * 就按这一位判 EOPNOTSUPP，客户端连 REQ 都发不出去。真正的验证路径是
-	 * `insmod yuanrdma.ko enable_cm_sup=1` 跑通 rping/ucmatose，
-	 * 再按上面的判据决定默认值改不改。默认值保持 0 = 「未验证前不声明」。
+	 * 恢位条件（写清楚，别靠记忆）：硬件提供 CQ 完成中断（或内核侧能拿到 per-CQ
+	 * producer 计数），req_notify_cq 真正投递事件，且 rping、ucmatose 各成功一次。
+	 * 届时把这一行改成 IB_PORT_CM_SUP 并附上板日期与镜像版本。
 	 */
-	attributes->port_cap_flags = yuanrdma_enable_cm_sup ? IB_PORT_CM_SUP : 0;
+	attributes->port_cap_flags = 0;
 	attributes->max_msg_sz = 0x80000000;
 	attributes->bad_pkey_cntr = 0;
 	attributes->qkey_viol_cntr = 0;

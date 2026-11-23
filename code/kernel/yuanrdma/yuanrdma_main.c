@@ -19,12 +19,6 @@ static ushort pci_device_id = 0x0000;
 module_param(pci_device_id, ushort, 0444);
 MODULE_PARM_DESC(pci_device_id, "PCI device id of the YuanNIC-NH400-B function (vendor 0x1172)");
 
-/* IB_PORT_CM_SUP 的声明开关，理由见 yuanrdma_driver.h 里 yuanrdma_enable_cm_sup 的注释。 */
-bool yuanrdma_enable_cm_sup;
-module_param_named(enable_cm_sup, yuanrdma_enable_cm_sup, bool, 0444);
-MODULE_PARM_DESC(enable_cm_sup,
-		 "Advertise IB_PORT_CM_SUP so rdma_cm clients can run (default 0 = not verified yet)");
-
 static struct yuanrdma_dev *yuanrdma_device;
 
 u32 yuanrdma_read(struct yuanrdma_dev *dev, u32 offset)
