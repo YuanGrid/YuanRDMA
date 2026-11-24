@@ -125,6 +125,7 @@ int altera_flash_erase(u32 address, u32 len);
 int altera_flash_write(u32 address, u32 len, u8 *wbuf);
 int altera_flash_read(u32 address, u32 len, u8 *res);
 int altera_flash_verify(u32 address, u32 len, u8 *src);
+void altera_flash_set_quiet(int quiet);
 int altera_update_act(void);
 int test_altera_highaddr(void);
 int altera_is_pcie5(void);

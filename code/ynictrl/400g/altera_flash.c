@@ -20,6 +20,40 @@ typedef struct {
 static altera_adapter_mode_t altera_adapter_modes[MAX_PORT_PER_ADP];
 static int altera_current_adapter = -1;
 static int altera_flash_passthrough = 0;
+static int altera_progress_quiet = 0;
+
+/*
+ * 进度显示：每次刷新都用 \r 重写整行（含阶段名），阶段结束时补一行 "xxx: 100%" 并换行。
+ * 这样即使中途终端里多出换行（回车回显、内核消息），最后留在屏幕上的也是每个阶段
+ * 完整的 100%，不会残留半截百分比让人误以为擦写没做完。
+ */
+void altera_flash_set_quiet(int quiet)
+{
+	altera_progress_quiet = quiet;
+}
+
+static void altera_progress(const char *stage, unsigned int pct)
+{
+	if (altera_progress_quiet)
+		return;
+	printf("\r%-8s %3u%%", stage, pct);
+	fflush(stdout);
+}
+
+static void altera_progress_done(const char *stage)
+{
+	if (altera_progress_quiet)
+		return;
+	printf("\r%-8s %3u%%\n", stage, 100U);
+	fflush(stdout);
+}
+
+/* 进度行还没换行时先另起一行，错误信息不和进度挤在一起 */
+static void altera_progress_break(void)
+{
+	if (!altera_progress_quiet)
+		printf("\n");
+}
 
 static inline int altera_read_pcie_mode_from_current_device(void)
 {
@@ -501,30 +535,23 @@ int altera_flash_erase(u32 address, u32 len)
 		((addr + (sector * ALTERA_FLASH_SECTOR_64K)) & ALTERA_FLASH_SECTOR_64K_MASK)) {
 		sector++;
 	}
-	printf("erase: ");
-	printf("%3d%%", prorate);
-	fflush(stdout);
+	altera_progress("erase:", prorate);
 	for (int i = 0; i < sector; i++) {
 		prorate = i * 100 / sector;
 		if (prev_prorate != prorate) {
-			printf("\033[4D");
-			printf("%3d%%", prorate);
-			fflush(stdout);
+			altera_progress("erase:", prorate);
 			prev_prorate = prorate;
 		}
 		status = qspi_erase(addr, 2);
 		if (status != XST_SUCCESS) {
-			printf("%s erase addr 0x%08x faild!\n", __func__, addr);
+			altera_progress_break();
+			printf("%s erase addr 0x%08x failed!\n", __func__, addr);
 			altera_flash_passthrough = prev_passthrough;
 			return XST_FAILURE;
 		}
 		addr += (ALTERA_FLASH_SECTOR_64K * 2);
 	}
-	printf("\033[4D");
-	printf("%3d%%", 100);
-	printf("\033[2K");
-	printf("\r");
-	fflush(stdout);
+	altera_progress_done("erase:");
 	if (verbose)
 		printf("erase success.\n");
 	altera_flash_passthrough = prev_passthrough;
@@ -547,20 +574,17 @@ int altera_flash_write(u32 address, u32 len, u8 *wbuf)
 	count = len / ALTERA_BUF_DATA_SIZE;
 	if (remain != 0)
 		memcpy(lastbuf, &(wbuf[len - remain]), remain);
-	printf("program: ");
-	printf("%3d%%", prorate);
-	fflush(stdout);
+	altera_progress("program:", prorate);
 	for (int i = 0; i < count; i++) {
 		prorate = i * 100 / count;
 		if (prev_prorate != prorate) {
-			printf("\033[4D");
-			printf("%3d%%", prorate);
-			fflush(stdout);
+			altera_progress("program:", prorate);
 			prev_prorate = prorate;
 		}
 		status = qspi_write(addr, ALTERA_BUF_DATA_LEN, ptr);
 		if (status != XST_SUCCESS) {
-			printf("%s write addr 0x%08x faild!\n", __func__, addr);
+			altera_progress_break();
+			printf("%s write addr 0x%08x failed!\n", __func__, addr);
 			altera_flash_passthrough = prev_passthrough;
 			return XST_FAILURE;
 		}
@@ -571,16 +595,13 @@ int altera_flash_write(u32 address, u32 len, u8 *wbuf)
 		ptr = (u32 *)lastbuf;
 		status = qspi_write(addr, ALTERA_BUF_DATA_LEN, ptr);
 		if (status != XST_SUCCESS) {
-			printf("%s write addr 0x%08x faild!\n", __func__, addr);
+			altera_progress_break();
+			printf("%s write addr 0x%08x failed!\n", __func__, addr);
 			altera_flash_passthrough = prev_passthrough;
 			return XST_FAILURE;
 		}
 	}
-	printf("\033[4D");
-	printf("%3d%%", 100);
-	printf("\033[2K");
-	printf("\r");
-	fflush(stdout);
+	altera_progress_done("program:");
 	if (verbose)
 		printf("write success.\n");
 	altera_flash_passthrough = prev_passthrough;
@@ -639,26 +660,26 @@ int altera_flash_verify(u32 address, u32 len, u8 *src)
 	altera_flash_passthrough = altera_flash_base_passthrough(address);
 	remain = len % ALTERA_BUF_DATA_SIZE;
 	count = len / ALTERA_BUF_DATA_SIZE;
-	printf("verify: ");
-	printf("%3d%%", prorate);
-	fflush(stdout);
+	altera_progress("verify:", prorate);
 	for (u32 i = 0; i < count; i++) {
 		prorate = i * 100 / count;
 		if (prev_prorate != prorate) {
-			printf("\033[4D");
-			printf("%3d%%", prorate);
-			fflush(stdout);
+			altera_progress("verify:", prorate);
 			prev_prorate = prorate;
 		}
 		status = qspi_read(addr, ALTERA_BUF_DATA_LEN, (u32 *)tdata);
 		if (status == (-XST_FAILURE)) {
-			printf("%s read addr 0x%08x faild!\n", __func__, addr);
+			altera_progress_break();
+			printf("%s read addr 0x%08x failed!\n", __func__, addr);
 			altera_flash_passthrough = prev_passthrough;
 			return XST_FAILURE;
 		}
 		for (int j = 0; j < ALTERA_BUF_DATA_SIZE; j++) {
 			if (tdata[j] != ptr[j]) {
-				printf("verify error pos %d, read data=0x%02x,origin data=0x%02x\n", j, tdata[j], ptr[j]);
+				if (err_cnt == 0)
+					altera_progress_break();
+				printf("verify error addr 0x%08x, read data=0x%02x,origin data=0x%02x\n",
+					addr + j, tdata[j], ptr[j]);
 				err_cnt++;
 				if (err_cnt == 16) {
 					altera_flash_passthrough = prev_passthrough;
@@ -672,13 +693,17 @@ int altera_flash_verify(u32 address, u32 len, u8 *src)
 	if (remain != 0) {
 		status = qspi_read(addr, ALTERA_BUF_DATA_LEN, (u32 *)tdata);
 		if (status == (-XST_FAILURE)) {
-			printf("%s read addr 0x%08x faild!\n", __func__, addr);
+			altera_progress_break();
+			printf("%s read addr 0x%08x failed!\n", __func__, addr);
 			altera_flash_passthrough = prev_passthrough;
 			return XST_FAILURE;
 		}
 		for (u32 j = 0; j < remain; j++) {
 			if (tdata[j] != ptr[j]) {
-				printf("verify error pos %d, read data=0x%02x,origin data=0x%02x\n", j, tdata[j], ptr[j]);
+				if (err_cnt == 0)
+					altera_progress_break();
+				printf("verify error addr 0x%08x, read data=0x%02x,origin data=0x%02x\n",
+					addr + j, tdata[j], ptr[j]);
 				err_cnt++;
 				if (err_cnt == 16) {
 					altera_flash_passthrough = prev_passthrough;
@@ -687,14 +712,16 @@ int altera_flash_verify(u32 address, u32 len, u8 *src)
 			}
 		}
 	}
-	printf("\033[4D");
-	printf("%3d%%", 100);
-	printf("\033[2K");
-	printf("\r");
-	fflush(stdout);
+	altera_flash_passthrough = prev_passthrough;
+	/* 有不一致就是失败：原来不足 16 处时仍返回成功，写坏了也会报 update success */
+	if (err_cnt > 0) {
+		altera_progress_break();
+		printf("verify failed: %d byte(s) mismatch\n", err_cnt);
+		return XST_FAILURE;
+	}
+	altera_progress_done("verify:");
 	if (verbose)
 		printf("verify success.\n");
-	altera_flash_passthrough = prev_passthrough;
 	return XST_SUCCESS;
 }
 
