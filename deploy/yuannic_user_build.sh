@@ -639,9 +639,18 @@ show_gids        # 或：for i in $(seq 0 31); do
 
 ```bash
 sudo ./bin/ynictrl -c YN400GA7B027A -a 0 -q      # 查询当前版本
+sudo ./bin/ynictrl -c YN400GA7B027A -a 0 -p firmware/<镜像>-R<版本>.rpd                     # 升级，序列号保持不变
+sudo ./bin/ynictrl -c YN400GA7B027A -a 0 -p firmware/<镜像>-R<版本>.rpd -n MD400G260713002  # 升级并同时写序列号
+sudo ./bin/ynictrl -c YN400GA7B027A -a 0 -n MD400G260713002                                # 只改序列号
 ```
 
 固件更新需要 `yuannic.ko` 已加载。
+
+- `-q` 的 `BANK` 是当前运行的镜像：`Active`（升级区）或 `Boot`（出厂回退镜像）；`TYPE` 是产品型号。
+- `-p` 依次显示 `erase` / `program` / `verify` 三行，每行都到 `100%` 才算完成；随后打印写入的
+  `firmware info` 与 `serial number`，最后提示 `update success`，重启后生效。任何一步失败都会报错并以非 0 退出，
+  不会切换镜像。
+- 序列号以 `MD` 开头、只含字母数字、最多 15 位；不带 `-n` 时保留 flash 里原有的序列号。
 
 ## 6.1 环境初始化脚本 flash_and_init.sh
 

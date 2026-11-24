@@ -33,6 +33,7 @@
 #define CARD_ADAPTER_FLAG		0xAD00
 #define CARD_INTERFACE_ID		-1
 #define CARD_SN_PREFIX			"MD"
+#define CARD_MODEL_YN400G		"YN400GA7B027"	/* -q 的 TYPE：国产 400G 板统一型号 */
 #define CARD_VERSION_PREFIX		"ba"
 /*
  * 4 lane 引擎后 rpd 约 37MB，超过原来的 32MB；flash 是 2Gb(256MB)。
@@ -119,7 +120,7 @@ uint8_t hw_firmware = 1; //默认为第1个release
 int neti_erase_flash(int model, const char *name);
 int neti_param_valid(char *param);
 int neti_model_code(const char *model);
-int neti_program_update(int model, char cmd, const char *name, u32 addr);
+int neti_program_update(int model, char cmd, const char *name, u32 addr, const char *sn);
 int neti_write_mac(int model, u32 addr, u32 len, int if_id, char *buf);
 int neti_get_sys_info(int ifport);
 int neti_read_mac(int model, u32 addr, int if_id, struct neti_card *card);
@@ -127,7 +128,9 @@ int neti_erase_sector(u32 addr, u32 len, char *netname);
 int neti_write_sernum(int model, u32 addr, u32 len, char *buf);
 int neti_read_sernum(int model, u32 addr, char *buf, int len);
 int neti_sernum_convert(u8 *src, int len);
-int neti_write_fwinfo(int model, u32 addr, u32 len, char *buf);
+int neti_write_fwinfo(int model, u32 addr, const char *name, const char *sn);
+int neti_sernum_valid(const char *sn);
+int neti_altera_info_update(u32 addr, const char *fwinfo, const char *sn, char *old_sn);
 int neti_write_bootinfo(int model, u32 jump_addr, u32 img_addr, u8 num);
 int neti_read_bootinfo(int model, u32 img_addr, u8 *num);
 int neti_read_fwinfo(int model, u32 img_addr, char *buf, u8 num);
@@ -145,12 +148,13 @@ void usage(void)
 	printf("                                  MD2X025GF27LA/MD4X010GF27LA\n");
 	printf("  -a, --adapter <num>             Select the Adapter to be operated,Use with -p/-s/-r\n");
 	printf("  -i, --interface <num>           Select the Interface to be operated,Use with -s/-r\n");
-	printf("  -p, --program <file>            Upargde/downgrade an adapter\n");
+	printf("  -p, --program <file>            Upargde/downgrade an adapter; add -n <SN> to also set the\n");
+	printf("                                  serial number, otherwise the serial number in flash is kept\n");
 	printf("  -b, --backup <file>             Upargde/downgrade an backup adapter\n");
 	printf("  -s, --set <address>             Set an adapter mac address\n");
 	printf("  -r, --read                      Read an adapter mac address\n");
 	printf("  -e, --erase <file>              Erase image!\n");
-	printf("  -n, --serial <SN>               Set an adapter serial number\n");
+	printf("  -n, --serial <SN>               Set an adapter serial number (MD..., at most %d chars)\n", NF_SERNUM_LEN);
 	//printf("  -j, --jump <num>                Select the boot image, num range is 1-3\n");
 	printf("  -y, --sync                      Synchronize all MD card clocks\n");
 	printf("  -f, --fec enable/disable        Set Adapter fec enable/disable,only support 400G/100G\n");
@@ -169,6 +173,8 @@ void usage(void)
 	printf("    ynictrl -c YN400GA7B027A -a 0 -r\n");
 	printf("  read the mac address of a port of the adapter\n");
 	printf("    ynictrl -c YN400GA7B027A -a 0 -i 0 -r\n");
+	printf("  update program and set the serial number in the same flash update\n");
+	printf("    ynictrl -c YN400GA7B027A -a 0 -p YN400GA7B027A-R26.12.16-B6456-20261119-1X400G-a0db90d2.rpd -n MD400G260713002\n");
 	printf("  write the serial number of the adapter\n");
 	printf("    ynictrl -c YN400GA7B027A -a 0 -n MD010G250217001\n");
 	//printf("  select the boot image 2\n");
@@ -598,7 +604,7 @@ int neti_get_mac(char *base_mac, char *new_mac, int num) {
 	return ret;
 }
 
-int neti_program_update(int model, char cmd, const char *name, u32 addr)
+int neti_program_update(int model, char cmd, const char *name, u32 addr, const char *sn)
 {
 	int Status;
 	int file_fd = -1;
@@ -776,9 +782,10 @@ int neti_program_update(int model, char cmd, const char *name, u32 addr)
 		fwaddr = IMG_SECTOR_10G;
 	}
 
-	ret = neti_write_fwinfo(model, fwaddr, strlen(name), (char *)name);
+	/* 版本串（以及 -n 给的序列号）必须在 RSU 切换之前写进 info 扇区：切换会重配 FPGA，之后 BAR 不可用 */
+	ret = neti_write_fwinfo(model, fwaddr, name, sn);
 	if(ret != XST_SUCCESS) {
-		printf("firmware write error!\n");
+		printf("firmware info write error!\n");
 		ret = XST_FAILURE;
 		goto neti_quit;
 	}
@@ -1096,11 +1103,12 @@ int neti_get_sys_info(int ifport)
 					tif = (u_nfadpt->model[i] >> 6) & 0x3;
 					tbrd = (u_nfadpt->model[i] >> 4) & 0x3;
 					thw = u_nfadpt->model[i] & 0xf;
+					/* 当前运行的镜像：Boot 镜像的版本寄存器最高字节固定为 0xba，其余为 Active 镜像 */
 					printf("   BANK        : ");
 					if(((u_nfadpt->version[i] >> 24) & 0xff) == 0xba) {
-						printf("%s\n", "Base");
+						printf("%s\n", "Boot");
 					} else {
-						printf("%s\n", "Release");
+						printf("%s\n", "Active");
 					}
 					printf("   MODE        : ");
 					if((u_nfadpt->speed[i] > MD_LINK_SPEED_UNKNOWN) &&
@@ -1116,7 +1124,10 @@ int neti_get_sys_info(int ifport)
 						printf("unknown\n");
 					}
 					printf("   TYPE        : ");
-					if((tspd >= 0) && (tspd <= 4) && (tif >= 0) && (tif <= 2)
+					if(tspd == 4) {
+						/* 400G 板（YN400GA7B027A/B/C）统一显示产品型号 */
+						printf("%s\n", CARD_MODEL_YN400G);
+					} else if((tspd >= 0) && (tspd <= 4) && (tif >= 0) && (tif <= 2)
 							&& (tbrd >= 0) && (tbrd <= 1) && (thw >= 0) && (thw <= 2)) {
 						snprintf(hw_info, sizeof(hw_info), "%s%dX%s%s%s%s",
 							card[0], tport, speed[tspd], iftype[tif], brdtype[tbrd], hw_ver[thw]);
@@ -1580,37 +1591,14 @@ int neti_write_sernum(int model, u32 addr, u32 len, char *buf)
 #endif
 	} else if(model == MODEL_400G) {
 
-		//先读出数据再擦除
-		fs_buf = malloc(sizeof(u8) * NF_WRITE_SIZE);
-		if(!fs_buf) {
-			printf("failed to malloc memory read flash\n");
-			ret = XST_FAILURE;
+		char old_sn[NF_SERNUM_LEN_RU];
+
+		ret = neti_altera_info_update(addr, NULL, buf, old_sn);
+		if(ret != XST_SUCCESS)
 			goto neti_quit;
-		}
-		memset(fs_buf, 0, sizeof(u8) * NF_WRITE_SIZE);
-		altera_flash_read(addr, NF_WRITE_SIZE, fs_buf);
-		offset += NF_SERNUM_ADDR;
-		memcpy((fs_buf + offset), buf, strlen(buf));
-#if 0
-		for(int j = 0; j < 128; j++) {
-			if((j % 16) == 0) {
-				printf("\n");
-			}
-			printf("0x%02x ", fs_buf[j]);
-		}
-		printf("\n");
-#endif
-
-		altera_flash_erase(addr, NF_WRITE_SIZE);
-		altera_flash_write(addr , NF_WRITE_SIZE, fs_buf);
-		altera_flash_verify(addr , NF_WRITE_SIZE, fs_buf);
-
-		memset(fs_buf, 0, sizeof(u8) * NF_WRITE_SIZE);
-		Status = altera_flash_read(addr, NF_WRITE_SIZE, fs_buf);
-		if (Status != XST_SUCCESS) {
-			xil_printf("Altera Flash Read Failed\r\n");
-			return XST_FAILURE;
-		}
+		printf("set success,");
+		printf("Serial number : %s (was %s)\n", buf, old_sn[0] ? old_sn : "empty");
+		goto neti_quit;
 
 	} else {
 		Status = SpiFlashInit(&SpiInstance, SPI_DEVICE_ID);
@@ -1770,9 +1758,117 @@ int neti_sernum_convert(u8 *src, int len)
 }
 
 /*
- * 写入软件版本号version
+ * 从升级件文件名取版本串：YN400GA7B027C-R26.12.02-B0116-20261123-1X400G-4203a24c.rpd
+ * → R26.12.02-B0116-20261123-1X400G-4203a24c（型号后第一个 '-' 到扩展名之前）。
+ * 只看文件名本身，不看目录（目录里带 '-' 时会截错位置），不改写调用者的字符串。
+ * 返回 1 = 取到版本串；0 = 不是 Release/All 升级件（如 Boot 镜像），不写版本串；-1 = 格式错。
  */
-int neti_write_fwinfo(int model, u32 addr, u32 len, char *buf)
+static int neti_fwinfo_from_name(const char *name, char *out, size_t outlen)
+{
+	const char *base = strrchr(name, '/');
+	const char *start;
+	const char *dot;
+	size_t n;
+
+	base = base ? base + 1 : name;
+	start = strchr(base, '-');
+	if(!start || start[1] == '\0')
+		return -1;
+	start++;
+	if(start[0] != 'R' && start[0] != 'A')
+		return 0;
+	dot = strrchr(start, '.');
+	n = dot ? (size_t)(dot - start) : strlen(start);
+	if(n == 0 || n >= outlen)
+		return -1;
+	memcpy(out, start, n);
+	out[n] = '\0';
+	return 1;
+}
+
+/*
+ * 序列号：CARD_SN_PREFIX 开头、只含字母数字、不超过 NF_SERNUM_LEN 个字符。
+ * -q 只显示带 CARD_SN_PREFIX 的序列号；超长会写进后面的版本串区域。
+ */
+int neti_sernum_valid(const char *sn)
+{
+	size_t n;
+
+	if(!sn)
+		return XST_FAILURE;
+	n = strlen(sn);
+	if(n == 0 || n > NF_SERNUM_LEN || strncmp(sn, CARD_SN_PREFIX, strlen(CARD_SN_PREFIX)) != 0)
+		return XST_FAILURE;
+	for(size_t i = 0; i < n; i++) {
+		if(!isalnum((unsigned char)sn[i]))
+			return XST_FAILURE;
+	}
+	return XST_SUCCESS;
+}
+
+/*
+ * 400G 板 info 扇区（MAC / 序列号 / 版本串，共 NF_WRITE_SIZE 字节）的读改写。
+ * fwinfo / sn 为 NULL 的字段保持 flash 原值不动。几百字节的小块不打进度条，
+ * 每一步失败都返回失败（原来擦/写/校验的返回值都被忽略）。
+ * old_sn 非空时带回改写前的序列号（NF_SERNUM_LEN_RU 字节，不是序列号时为空串）。
+ */
+int neti_altera_info_update(u32 addr, const char *fwinfo, const char *sn, char *old_sn)
+{
+	int ret = XST_SUCCESS;
+	u8 *fs_buf = NULL;
+	u8 *slot;
+	char prev_sn[NF_SERNUM_LEN_RU];
+
+	fs_buf = malloc(NF_WRITE_SIZE);
+	if(!fs_buf) {
+		printf("failed to malloc memory read flash\n");
+		return XST_FAILURE;
+	}
+	altera_flash_set_quiet(1);
+	memset(fs_buf, 0, NF_WRITE_SIZE);
+	if(altera_flash_read(addr, NF_WRITE_SIZE, fs_buf) != XST_SUCCESS) {
+		printf("info sector read failed\n");
+		ret = XST_FAILURE;
+		goto out;
+	}
+	memcpy(prev_sn, fs_buf + NF_SERNUM_ADDR, NF_SERNUM_LEN);
+	prev_sn[NF_SERNUM_LEN] = '\0';
+	if(!strstr(prev_sn, CARD_SN_PREFIX))
+		prev_sn[0] = '\0';
+	if(old_sn)
+		memcpy(old_sn, prev_sn, NF_SERNUM_LEN_RU);
+
+	if(fwinfo) {
+		slot = fs_buf + NF_FIRMWARE_ADDR + (NF_FIRMWARE_LEN * (hw_firmware - 1));
+		memset(slot, 0xff, NF_FIRMWARE_LEN);
+		memcpy(slot, fwinfo, strlen(fwinfo) + 1);
+	}
+	if(sn) {
+		slot = fs_buf + NF_SERNUM_ADDR;
+		memset(slot, 0xff, NF_SERNUM_LEN_RU);
+		memcpy(slot, sn, strlen(sn));
+		slot[strlen(sn)] = '\0';
+	}
+
+	if(altera_flash_erase(addr, NF_WRITE_SIZE) != XST_SUCCESS ||
+	   altera_flash_write(addr, NF_WRITE_SIZE, fs_buf) != XST_SUCCESS ||
+	   altera_flash_verify(addr, NF_WRITE_SIZE, fs_buf) != XST_SUCCESS) {
+		printf("info sector update failed\n");
+		ret = XST_FAILURE;
+		goto out;
+	}
+
+out:
+	altera_flash_set_quiet(0);
+	free(fs_buf);
+	return ret;
+}
+
+/*
+ * 写入软件版本号 version（升级后 -q 的 VERSION / CHIPVERSION 读的就是它）；
+ * sn 非空时同一次读改写里一起更新序列号，为空则序列号保持 flash 原值。
+ */
+int neti_write_fwinfo(int model, u32 addr, const char *name, const char *sn)
 {
 	//int Status;
 	int ret = XST_SUCCESS;
@@ -1780,9 +1876,10 @@ int neti_write_fwinfo(int model, u32 addr, u32 len, char *buf)
 	//u8 port = 0;
 	u16 offset = 0;
 	u8 *fs_buf = NULL;
-	char *newbuf = NULL;
-	char *str = "-R";
-	char *str1 = "-A";
+	char fwinfo[NF_FIRMWARE_LEN];
+	char *newbuf = fwinfo;
+	int has_fw;
+	u32 len;
 
 	if((model > MODEL_MIN) &&  (model < MODEL_MAX)) {
 		/*do nothing*/
@@ -1791,17 +1888,34 @@ int neti_write_fwinfo(int model, u32 addr, u32 len, char *buf)
 		return XST_FAILURE;
 	}
 
-	if((!strstr(buf,str)) && (!strstr(buf,str1))) {
-		goto neti_quit;
+	has_fw = neti_fwinfo_from_name(name, fwinfo, sizeof(fwinfo));
+	if(has_fw < 0) {
+		printf("can not get firmware version from file name %s\n", name);
+		return XST_FAILURE;
 	}
 
-	newbuf = strchr(buf,'-');
-	if(!newbuf) {
-		printf("failed to malloc memory read flash\n");
-		ret = XST_FAILURE;
+	if(model == MODEL_400G) {
+		char old_sn[NF_SERNUM_LEN_RU];
+
+		if(has_fw == 0 && !sn)
+			return XST_SUCCESS;
+		ret = neti_altera_info_update(addr, has_fw ? fwinfo : NULL, sn, old_sn);
+		if(ret != XST_SUCCESS)
+			return ret;
+		if(has_fw)
+			printf("firmware info : %s\n", fwinfo);
+		if(sn)
+			printf("serial number : %s (updated, was %s)\n", sn, old_sn[0] ? old_sn : "empty");
+		else
+			printf("serial number : %s (unchanged)\n", old_sn[0] ? old_sn : "empty");
+		return XST_SUCCESS;
 	}
-	newbuf += 1;
-	newbuf[strlen(newbuf)-4] = '\0';
+
+	if(has_fw == 0) {
+		goto neti_quit;
+	}
+	len = strlen(fwinfo);
+	(void)len;
 
 	if(model == MODEL_100G || model == MODEL_25GB) {
 #ifdef QSPI_FLASH
@@ -1855,22 +1969,6 @@ int neti_write_fwinfo(int model, u32 addr, u32 len, char *buf)
 		xfast_flash_write_high(addr, NF_WRITE_SIZE, fs_buf);
 		xfast_flash_verify_high(addr, NF_WRITE_SIZE, fs_buf);
 #endif
-
-	} else if(model == MODEL_400G) {
-		//先读出数据再擦除
-		fs_buf = malloc(sizeof(u8) * NF_WRITE_SIZE);
-		if(!fs_buf) {
-			printf("failed to malloc memory read flash\n");
-			ret = XST_FAILURE;
-			goto neti_quit;
-		}
-		memset(fs_buf, 0, sizeof(u8) * NF_WRITE_SIZE);
-		altera_flash_read(addr, NF_WRITE_SIZE, fs_buf);
-		offset += (NF_FIRMWARE_ADDR + (NF_FIRMWARE_LEN * (hw_firmware - 1)));
-		memcpy((fs_buf + offset), newbuf, strlen(newbuf)+1);
-		altera_flash_erase(addr, NF_WRITE_SIZE);
-		altera_flash_write(addr, NF_WRITE_SIZE, fs_buf);
-		altera_flash_verify(addr, NF_WRITE_SIZE, fs_buf);
 
 	} else {
 #if 0
@@ -2634,6 +2732,13 @@ int main(int argc, char *argv[])
 	uint32_t fec;
 	uint32_t uflag;
 	char *pname;
+	/*
+	 * -p / -n 在全部参数解析完之后才执行：-p 带 -n 时序列号要和版本串在同一次 info 扇区
+	 * 更新里写进去（RSU 切换之后 BAR 不可用，不能再单独写），且 -n 写在 -p 前后都行。
+	 */
+	const char *prog_name = NULL;
+	u32 prog_addr = 0;
+	const char *sn_arg = NULL;
 
 
 	if (argc < 2) {
@@ -2810,9 +2915,11 @@ int main(int argc, char *argv[])
 				pname = pname ? pname + 1 : optarg;
 				if(strstr(pname, CARD_SN_PREFIX) || neti_model_code(pname) != MODEL_MIN ||
 				   strchr(pname, '.')) {
-					neti_program_update(flag, 'p', optarg, addr);
+					prog_name = optarg;
+					prog_addr = addr;
 				} else if(argv[optind] != NULL) {
-					neti_program_update(flag, 'p', argv[optind], addr);
+					prog_name = argv[optind];
+					prog_addr = addr;
 				} else {
 					printf("Parameter -p Invalid,missing upgrade file\n");
 					ret = XST_FAILURE;
@@ -2831,7 +2938,11 @@ int main(int argc, char *argv[])
 				} else {
 					addr = SLAVE_ADDRESS;
 				}
-				neti_program_update(flag, 'b', optarg, addr);
+				ret = neti_program_update(flag, 'b', optarg, addr, NULL);
+				if(ret != XST_SUCCESS) {
+					ret = XST_FAILURE;
+					goto quit_pro;
+				}
 				break;
 			case 'e':
 				if(argv[optind] != NULL) {
@@ -2878,11 +2989,13 @@ int main(int argc, char *argv[])
 				} else {
 					addr = IMG_SECTOR_10G;
 				}
-				ret = neti_write_sernum(flag, addr, MAC_ADDR_LENGTH, optarg);
-				if(ret != XST_SUCCESS) {
+				if(neti_sernum_valid(optarg) != XST_SUCCESS) {
+					printf("Parameter -n %s Invalid! should start with %s, letters/digits only, at most %d chars\n",
+						optarg, CARD_SN_PREFIX, NF_SERNUM_LEN);
 					ret = XST_FAILURE;
 					goto quit_pro;
 				}
+				sn_arg = optarg;
 				break;
 			case 'j':
 				ret = neti_param_valid(optarg);
@@ -2992,6 +3105,36 @@ int main(int argc, char *argv[])
 		printf("no option input\n");
 		ret = XST_FAILURE;
 		goto quit_pro;
+	}
+
+	if(prog_name) {
+		/* 400G：序列号并进 -p 的 info 扇区更新；旧型号保持原来的先升级、再单独写序列号 */
+		ret = neti_program_update(flag, 'p', prog_name, prog_addr,
+					  (flag == MODEL_400G) ? sn_arg : NULL);
+		if(ret != XST_SUCCESS) {
+			ret = XST_FAILURE;
+			goto quit_pro;
+		}
+		if(flag == MODEL_400G)
+			sn_arg = NULL;
+	}
+	if(sn_arg) {
+		if(flag == MODEL_100G || flag == MODEL_25GB) {
+#ifdef QSPI_FLASH
+			addr = IMG_SECTOR_100G;
+#else
+			addr = XFAST_IMG_SECTOR_ADDR;
+#endif
+		} else if(flag == MODEL_400G) {
+			addr = ALTERA_IMG_SECTOR_ADDR;
+		} else {
+			addr = IMG_SECTOR_10G;
+		}
+		ret = neti_write_sernum(flag, addr, MAC_ADDR_LENGTH, (char *)sn_arg);
+		if(ret != XST_SUCCESS) {
+			ret = XST_FAILURE;
+			goto quit_pro;
+		}
 	}
 
 quit_pro:
