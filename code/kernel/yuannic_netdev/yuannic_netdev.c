@@ -76,40 +76,10 @@
 #define YNIC_DBG_IOCTL       BIT(2)  /* ioctl 命令 */
 #define YNIC_DBG_WATCH       BIT(3)  /* 配置空间/链路状态变化 */
 #define YNIC_DBG_MMIO_HEART  BIT(4)  /* MMIO 心跳（每 watch_ms 读一次 bar[0]） */
-#define YNIC_DBG_TEMP        BIT(5)  /* FPGA 温度采样（每 watch_ms 读一次 0x1200038） */
 
-static int dbg = 0x3F;
+static int dbg = 0x1F;
 module_param(dbg, int, 0644);
-MODULE_PARM_DESC(dbg, "debug bitmask: 1=life 2=mmio 4=ioctl 8=watch 16=mmio-heartbeat 32=temperature");
-
-/*
- * 温度监控（2026-10-22）
- *
- * 假设：卡在机箱内运行一段时间后静默掉出总线（UESta SDES+，配置空间全 1），
- * 根因可能是 FPGA 结温/进风口温度持续上升越过某个阈值。实测两轮掉线分别在
- * insmod 后 ~190s，且探针全程 CESta=0、链路维持 32GT/s x16 到最后一拍，
- * 排除了软件写坏和链路劣化，于是把温度做成时间序列，和掉线时刻对齐。
- *
- * 数据源：system_config_register.v 的 REG_FPGA_TEMPER（偏移 0x038，
- * FPGA_SYS_BASE_ALTERA + 0x038，PCIe5 下地址再 <<1）。值单位 ℃，10 bit。
- *
- * 注意：当前 RTL（A/C 型板 YuanRDMA.v）把 fpga_temp 端口接成了常量 0，
- * 因此本镜像里该寄存器恒读 0。代码照常采样，并在连续读到 0 时给出一次性提示，
- * 用来区分"温度真的是 0"和"RTL 没接温度源"。
- */
-static int temp_log_s = 30;
-module_param(temp_log_s, int, 0644);
-MODULE_PARM_DESC(temp_log_s, "periodic temperature log interval in seconds (0=only on change)");
-
-/*
- * 温度告警阈值（℃）。超过阈值时立即打印一行 ERROR，便于在掉线前的日志里
- * 直接看到"什么时候越过了多少度"。0 = 关闭阈值告警。
- * C 型板 CPLD 侧的告警阈值参考：FPGA 告警温度 100℃（0x34），
- * nCATTRIP 核心 120℃ 强制下电，CPLD 95℃ 红灯。这里默认 95℃。
- */
-static int temp_alarm_c = 95;
-module_param(temp_alarm_c, int, 0644);
-MODULE_PARM_DESC(temp_alarm_c, "temperature alarm threshold in degC (0=off)");
+MODULE_PARM_DESC(dbg, "debug bitmask: 1=life 2=mmio 4=ioctl 8=watch 16=mmio-heartbeat");
 
 static int dbg_mmio_max = 64;
 module_param(dbg_mmio_max, int, 0644);
@@ -622,18 +592,6 @@ struct ynic_watch_dev {
     u32 last_beat;
     bool last_present;
     bool primed;
-
-    /* ---- 温度采样（温度假设排查用）---- */
-    u8   pcie_mode;           /* PCIe4/PCIe5 寄存器访问模式，决定 0x38 的地址换算 */
-    bool temp_valid;          /* 曾成功读到过非全 1 的温度 */
-    u32  last_temp;           /* 上次打印的温度值（℃） */
-    u32  temp_min;            /* 本次会话最低结温 */
-    u32  temp_max;            /* 本次会话最高结温 */
-    u32  temp_n;              /* 有效采样次数 */
-    u32  temp_last_ms;        /* 上次打印温度的时间戳 */
-    u32  temp_zero_cnt;       /* 连续读到 0 的次数（判定 fpga_temp 未接线） */
-    bool temp_zero_warned;
-    bool temp_alarm;          /* 当前是否处于阈值告警状态（滞回用） */
 };
 
 static struct ynic_watch_dev ynic_watch[YNIC_WATCH_MAX_DEVS];
@@ -641,7 +599,7 @@ static int ynic_watch_n;
 static struct delayed_work ynic_watch_work;
 static int ynic_watch_started;
 
-static void ynic_watch_add(struct pci_dev *dev, void __iomem *bar, u8 pcie_mode);
+static void ynic_watch_add(struct pci_dev *dev, void __iomem *bar);
 static void ynic_watch_start(void);
 static void ynic_watch_stop(void);
 
@@ -7523,7 +7481,7 @@ static int ynic_init_hardware(void)
             }
             YNIC_LOG(YNIC_DBG_LIFE, "BAR2 mapped at %px\n", bar);
             pcie_mode = ynic_detect_pcie_mode(bar);
-            ynic_watch_add(dev, bar, pcie_mode);
+            ynic_watch_add(dev, bar);
 
             //网卡的网口处理
             func_id = PCI_FUNC(dev->devfn);
@@ -7688,13 +7646,6 @@ static void ynic_watch_tick(struct work_struct *work)
                          cfg, lnksta, ue_sta, ce_sta, sec_sts,
                          w->last_cfg, w->last_lnksta,
                          w->last_ue_sta, w->last_ce_sta, w->last_sec_sts);
-                if (dbg & YNIC_DBG_TEMP) {
-                    YNIC_ERRL(YNIC_DBG_TEMP,
-                             "WATCH %04x:%02x:%02x.%x GONE temp summary: last=%uC min=%uC max=%uC n=%u\n",
-                             pci_domain_nr(w->dev->bus), w->dev->bus->number,
-                             PCI_SLOT(w->dev->devfn), PCI_FUNC(w->dev->devfn),
-                             w->last_temp, w->temp_min, w->temp_max, w->temp_n);
-                }
             } else {
                 YNIC_LOG(YNIC_DBG_WATCH,
                         "WATCH %04x:%02x:%02x.%x BACK: cfg=0x%08x sts=0x%08x lnksta=0x%04x "
@@ -7746,82 +7697,13 @@ static void ynic_watch_tick(struct work_struct *work)
             beat = now;
         }
         (void)beat;
-
-        /*
-         * 温度采样：只在卡还活着时读 0x38。寄存器是 32 位，低 10 位为 ℃，
-         * 高 21 位保留（当前 RTL 恒为 0，见文件头注释）。
-         * 用裸 ioread32 而不是 ynic_hw_read32_mode()，避免每次采样都去刷 MMIO 日志。
-         */
-        if ((dbg & YNIC_DBG_TEMP) && w->bar) {
-            u64 adj = ynic_adjust_reg_offset(w->pcie_mode,
-                                            FPGA_SYS_BASE_ALTERA + FPGA_TEMPERATURE_REG);
-            u32 raw = ioread32(w->bar + adj);
-            u32 t;
-
-            if (raw != 0xffffffffU) {
-                t = raw & 0x3ff;
-                w->temp_n++;
-                if (t < w->temp_min)
-                    w->temp_min = t;
-                if (t > w->temp_max)
-                    w->temp_max = t;
-
-                if (t == 0) {
-                    w->temp_zero_cnt++;
-                    if (w->temp_zero_cnt >= 10 && !w->temp_zero_warned) {
-                        w->temp_zero_warned = true;
-                        YNIC_ERRL(YNIC_DBG_TEMP,
-                                 "TEMP %04x:%02x:%02x.%x reads 0 for %u consecutive samples "
-                                 "(raw=0x%08x) — fpga_temp 很可能在顶层被接成了常量 0，"
-                                 "当前镜像的温度采样无效\n",
-                                 pci_domain_nr(w->dev->bus), w->dev->bus->number,
-                                 PCI_SLOT(w->dev->devfn), PCI_FUNC(w->dev->devfn),
-                                 w->temp_zero_cnt, raw);
-                    }
-                } else {
-                    w->temp_zero_cnt = 0;
-                    w->temp_valid = true;
-                }
-
-                if (!w->last_temp ||
-                    (t > w->last_temp ? t - w->last_temp : w->last_temp - t) >= 1 ||
-                    (temp_log_s > 0 &&
-                     (u32)ynic_dbg_ms() - w->temp_last_ms >= (u32)temp_log_s * 1000U)) {
-                    YNIC_LOG(YNIC_DBG_TEMP,
-                            "TEMP %04x:%02x:%02x.%x %uC (min=%uC max=%uC n=%u raw=0x%08x)\n",
-                            pci_domain_nr(w->dev->bus), w->dev->bus->number,
-                            PCI_SLOT(w->dev->devfn), PCI_FUNC(w->dev->devfn),
-                            t, w->temp_min, w->temp_max, w->temp_n, raw);
-                    w->last_temp = t;
-                    w->temp_last_ms = (u32)ynic_dbg_ms();
-                }
-
-                /*
-                 * 阈值告警：只在"越过阈值"的那一刻打一次，不刷屏。
-                 * 置位后如果温度降回阈值以下 3℃，才允许再次告警（滞回），
-                 * 避免在阈值附近抖动时反复打印。
-                 */
-                if (temp_alarm_c > 0 && t >= (u32)temp_alarm_c && !w->temp_alarm) {
-                    w->temp_alarm = true;
-                    YNIC_ERRL(YNIC_DBG_TEMP,
-                             "TEMP ALARM %04x:%02x:%02x.%x %uC >= %dC (min=%uC max=%uC n=%u) "
-                             "— 结温越过告警阈值\n",
-                             pci_domain_nr(w->dev->bus), w->dev->bus->number,
-                             PCI_SLOT(w->dev->devfn), PCI_FUNC(w->dev->devfn),
-                             t, temp_alarm_c, w->temp_min, w->temp_max, w->temp_n);
-                } else if (w->temp_alarm && temp_alarm_c > 0 &&
-                           t + 3 < (u32)temp_alarm_c) {
-                    w->temp_alarm = false;
-                }
-            }
-        }
     }
 
     if (watch_ms > 0)
         schedule_delayed_work(&ynic_watch_work, msecs_to_jiffies(watch_ms));
 }
 
-static void ynic_watch_add(struct pci_dev *dev, void __iomem *bar, u8 pcie_mode)
+static void ynic_watch_add(struct pci_dev *dev, void __iomem *bar)
 {
     struct ynic_watch_dev *w;
     struct pci_dev *bridge;
@@ -7836,7 +7718,6 @@ static void ynic_watch_add(struct pci_dev *dev, void __iomem *bar, u8 pcie_mode)
     bridge = pci_upstream_bridge(dev);
     w->bridge = bridge ? pci_dev_get(bridge) : NULL;
     w->bar = bar;
-    w->pcie_mode = pcie_mode;
 
     /* 找根端口 AER 扩展能力偏移，用于后续读 UESta/CESta */
     if (w->bridge)
