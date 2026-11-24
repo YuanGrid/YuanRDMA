@@ -41,8 +41,9 @@
 #   CABLE         JTAG 线，默认取 `jtagconfig` 列出的第一根（USB 口号重启后会变，
 #                 写死 [1-1] 会报 213013 cable not detected）
 #   DEVICE_INDEX  器件索引（只对 --sram 烧 .sof 有意义），默认 1
-#   CFG_DEVICE    配置器件名（只对 --flash 烧 .jic 有意义），默认 MT25QU02G，
-#                 与 fpga_gen_jic.pfg 里的 flash_device 一致。**尚未在实卡上核对**，
+#   CFG_DEVICE    配置器件名（只对 --flash 烧 .jic 有意义），默认按镜像认板：
+#                 C 卡（YN400GA7B027C-*）= MX66U2G，其余 = MT25QU02G，与各板 JIC 里记录的
+#                 flash 器件一致。**尚未在实卡上核对**，
 #                 如果 quartus_pgm 报器件名不认识，用 `quartus_pgm --list` 或
 #                 Programmer GUI 的 Auto Detect 看实际型号后覆盖本变量
 #   QUARTUS_BIN   quartus_pgm 所在目录，默认 /home/quartus/program/quartus/bin
@@ -84,17 +85,22 @@ fi
 KERNEL_OUT="$HERE/../../code/kernel"
 # 镜像归档目录在仓库根 firmware/（2026-11-19 从 firmware/ 上移）。
 # BUILD_ROOT 保留给测试指向假的目录树：给了就以它为准，否则用 $HERE/../..
+BUILD_ROOT_SET=${BUILD_ROOT:+1}
 BUILD_ROOT=${BUILD_ROOT:-$HERE/../..}
 FW_BACKUP="$BUILD_ROOT/firmware"
+# 在交付包里（tools/）时镜像就在包内 firmware/，不往包外找；显式给了 BUILD_ROOT 仍以它为准
+if [ "$IN_PACKAGE" = 1 ] && [ -z "${BUILD_ROOT_SET:-}" ] && [ -d "$NIC/firmware" ]; then
+    FW_BACKUP="$NIC/firmware"
+fi
 BDF=${BDF:-0000:6f:00.0}
 
 CABLE=${CABLE:-}
 DEVICE_INDEX=${DEVICE_INDEX:-1}
 # 配置器件名，只用于 --flash 烧 .jic 的 `pvi;<cfg_dev>;<file>` 形式。
-# 取值依据：build/YuanNIC-NH400-A/fpga_gen_jic.pfg 的 <flash_device type="MT25QU02G">，
-# 生成的 JIC 里记录的配置器件也是它。注意 YuanNIC-NH400-A 交付件 ma_a3-20241012_jic.map 的分区只到
+# 取值依据：各板 fpga_gen_jic.pfg 的 <flash_device>——A 卡 MT25QU02G，C 卡板载 flash 为 MX66U2G。
+# 留空则在烧写前按镜像认板选。注意 YuanNIC-NH400-A 交付件 ma_a3-20241012_jic.map 的分区只到
 # 0x08505FFF（约 134 MB），不足以反证 flash 就是 2 Gb —— 这个值**没有在实卡上核对过**。
-CFG_DEVICE=${CFG_DEVICE:-MT25QU02G}
+CFG_DEVICE=${CFG_DEVICE:-}
 QUARTUS_BIN=${QUARTUS_BIN:-/home/quartus/program/quartus/bin}
 NIC_IP=${NIC_IP:-192.168.50.1}
 NIC_PREFIX=${NIC_PREFIX:-24}
@@ -122,11 +128,12 @@ ok()   { printf '   \033[32mOK\033[0m   %s\n' "$*"; }
 warn() { printf '   \033[33mWARN\033[0m %s\n' "$*"; }
 die()  { printf '   \033[31mFAIL\033[0m %s\n' "$*" >&2; exit 1; }
 
-# 镜像型号段 -> 板卡名。LA = YuanNIC-NH400-A，LC = YuanNIC-NH400-C，LD = YuanNIC-NH400-B。
+# 板卡标识（img_model 的输出：A / C / LD）-> 板卡名。A = YuanNIC-NH400-A，C = YuanNIC-NH400-C，
+# LD = YuanNIC-NH400-B。LA/LC 是旧镜像名的写法，一并接受。
 board_name() {
     case "$1" in
-        LA) echo "YuanNIC-NH400-A" ;;
-        LC) echo "YuanNIC-NH400-C" ;;
+        A|LA) echo "YuanNIC-NH400-A" ;;
+        C|LC) echo "YuanNIC-NH400-C" ;;
         LD) echo "YuanNIC-NH400-B" ;;
         *)  echo "未知板卡" ;;
     esac
@@ -346,6 +353,12 @@ if [ "$FLASH_MODE" != 0 ]; then
     # jic 的配置器件名由 CFG_DEVICE 决定（见文件头环境变量说明）；烧 jic 不需要 device index，
     # 器件在 JTAG 链上的位置由 SFL/load 决定。
     if [ "$FLASH_MODE" = 1 ]; then
+        if [ -z "$CFG_DEVICE" ]; then
+            case "$IMG_MODEL" in
+                C|LC) CFG_DEVICE=MX66U2G ;;
+                *)  CFG_DEVICE=MT25QU02G ;;
+            esac
+        fi
         PGM_OP="pvi;$CFG_DEVICE;$IMG"
         PGM_TIMEOUT=$FLASH_TIMEOUT
         printf '   配置器件: %s（可用 CFG_DEVICE 覆盖）\n' "$CFG_DEVICE"

@@ -257,8 +257,13 @@ YuanNIC_User_Package/
 ├── include/    头文件
 ├── ko/         yuanrdma.ko / yuanmcdma.ko / yuannic.ko
 ├── env.sh      运行前 source，切换库与程序路径
-└── tools/      flash_and_init.sh / roce_perf_test.sh
+├── tools/      flash_and_init.sh / roce_perf_test.sh
+└── firmware/   每块板最新一版固件：.jic（整片 flash）/ .rpd（在线升级）/ .sof（JTAG 临时加载）+ SHA256SUMS
 ```
+
+`firmware/` 取自仓库根 `firmware/`（可用 `YUANNIC_FW_DIR` 指定），每块板按「日期，再按 Build 号」各选最新一版；
+只要某块板时用 `YUANNIC_FW_BOARDS=C ./yuannic_user_build.sh`。包内 `tools/flash_and_init.sh --flash <镜像名>`
+直接在包内 `firmware/` 里找镜像，并按型号段选 flash 器件（C 卡 MX66U2G，其余 MT25QU02G）。
 
 每次使用前：
 

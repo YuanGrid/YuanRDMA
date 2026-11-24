@@ -10,7 +10,7 @@
 #   YuanNIC_User_Package/ko/        内核模块：yuanrdma.ko / yuanmcdma.ko / yuannic.ko
 #   YuanNIC_User_Package/doc/       用户手册
 #   YuanNIC_User_Package/tools/     运维脚本（flash_and_init.sh / roce_perf_test.sh）
-#   YuanNIC_User_Package/firmware/  最新一版烧写镜像（.sof + 同名 .rpd），取自 firmware/
+#   YuanNIC_User_Package/firmware/  每块板最新一版烧写镜像（.jic + .rpd + .sof），取自 firmware/
 #   YuanNIC_User_Package.tgz        整个目录的打包，可直接交给最终用户
 #
 # 关键点：系统里装了 doca-host 3.5.0（OFED 26.07），它的 libibverbs 是 PABI 64，
@@ -88,6 +88,8 @@ usage()
   JOBS           并行度，默认 nproc。
   CC_KERN        编内核模块用的编译器，默认自动找 gcc-12，找不到则用 gcc。
                  必须与编译当前内核的编译器一致（Ubuntu 22.04 HWE 6.8 是 gcc-12）。
+  YUANNIC_FW_DIR    固件镜像目录，默认仓库根 firmware/。
+  YUANNIC_FW_BOARDS 只带指定板卡的镜像，如 "C"；默认每块板各带最新一版。
 
 做什么：
   1. 复制 code/github/rdma-core（v66）到 work/，注入 code/rdmasw/rdma-core-provider/yuanrdma，
@@ -107,6 +109,7 @@ usage()
   YuanNIC_User_Package/ko/         yuanrdma.ko / yuanmcdma.ko / yuannic.ko
   YuanNIC_User_Package/etc/libibverbs.d/  空目录，libibverbs 启动时 opendir 用（消除 Warning）
   YuanNIC_User_Package/doc/        用户手册
+  YuanNIC_User_Package/firmware/   每块板最新一版烧写镜像（.jic / .rpd / .sof + SHA256SUMS）
   YuanNIC_User_Package.tgz         可直接交付的压缩包
 
 与系统 DOCA/OFED 的隔离：
@@ -500,6 +503,8 @@ YuanNIC_User_Package/
 ├── include/           头文件（自己编写基于本栈的程序时需要）
 ├── ko/                yuanrdma.ko / yuanmcdma.ko / yuannic.ko
 ├── etc/libibverbs.d/  provider 配置目录（libibverbs 启动时要读）
+├── tools/             flash_and_init.sh（烧写 + 环境初始化）/ roce_perf_test.sh
+├── firmware/          每块板最新一版固件（.jic / .rpd / .sof，见 firmware/README.md）
 └── doc/
     ├── user-guide.md      完整使用手册
     └── perftest-guide.md  perftest 测试指南
@@ -801,52 +806,90 @@ for t in flash_and_init.sh roce_perf_test.sh; do
 done
 
 # ---------------------------------------------------------------------------
-# 9. 固件镜像：把 firmware/ 里最新一版 .sof/.rpd 带进交付包
+# 9. 固件镜像：每块板各取最新一版，把 .jic / .rpd / .sof 带进交付包
 # ---------------------------------------------------------------------------
 # 交付包里带上烧写镜像，客户拿到包就能自己把卡烧到与本文档栈配套的 RTL 版本，
-# 不用再回开发机取固件。选「最新」按文件名里的 Build 号（B6371 > B6370），
-# 不用 mtime——重新烧写/拷贝会刷新 mtime，而 Build 号是单调递增的版本事实。
+# 不用再回开发机取固件。镜像名形如
+#   <型号>-<类型><版本>-B<build>-<YYYYMMDD>-<速率>-<githash>.<后缀>
+#   类型 A = All（.jic，boot + active 双镜像，烧整片 flash）
+#        R = Release / active（.rpd 供 ynictrl 在线升级，.sof 供 JTAG 临时加载）
+#        B = Boot / Factory（.rpd）
+# 「最新」按「日期，再按 Build 号」比：Build 号换版本序列时会重新起数，单看它会把
+# 旧序列排在前面；也不用 mtime——拷贝/重新归档会刷新 mtime。
+# 每块板（型号段 A / C …）各选各的，互不比较。
+#   YUANNIC_FW_DIR     镜像目录，默认仓库根 firmware/
+#   YUANNIC_FW_BOARDS  只带指定板卡，空格分隔的型号或末位字母（如 "C" 或 "YN400GA7B027C"）；默认全部
 log "9. 收集固件镜像"
 
-FW_SRC="$ROOT/firmware"
-mkdir -p "$OUT/firmware"
+FW_SRC="${YUANNIC_FW_DIR:-$ROOT/firmware}"
+FW_OUT="$OUT/firmware"
+rm -rf "$FW_OUT"
+mkdir -p "$FW_OUT"
+fw_count=0
 if [ -d "$FW_SRC" ]; then
-    # 只看带版本号的正规镜像（YN400GA7B027?-[RB]<ver>-B<build>-<date>-<speed>-<hash>.sof），
-    # 固定名的 *_Release.sof 之类是编译目录里的临时产物，不进交付包。
-    latest_sof=""
-    latest_build=-1
-    for f in "$FW_SRC"/YN400GA7B027?-*-B*-*-*-*.sof; do
-        [ -e "$f" ] || continue
-        b=$(basename "$f")
-        # 取 -B 后面到下一个 - 之间的数字；取不到就当 0，排在所有版本之前
-        num=$(printf '%s\n' "$b" | sed -n 's/.*-B\([0-9][0-9]*\)-[0-9].*/\1/p')
-        [ -n "$num" ] || num=0
-        # 十位补齐后按字符串比，避免 shell 整数比较在去掉前导 0 后判错
-        if [ "$((10#$num))" -gt "$latest_build" ] 2>/dev/null; then
-            latest_build=$((10#$num))
-            latest_sof="$f"
-        fi
+    # 找出目录里出现过的型号（只认带版本号的正规镜像，固定名的 *_Release.sof 之类不算）
+    models=$(ls "$FW_SRC" 2>/dev/null \
+        | sed -n 's/^\(YN400GA7B027[A-Z]\)-[ABR][0-9][0-9.]*-B[0-9][0-9]*-[0-9]\{8\}-.*\.\(jic\|rpd\|sof\)$/\1/p' | sort -u)
+    if [ -n "${YUANNIC_FW_BOARDS:-}" ]; then
+        wanted=""
+        for w in $YUANNIC_FW_BOARDS; do
+            case "$w" in YN400GA7B027?) wanted="$wanted $w" ;; ?) wanted="$wanted YN400GA7B027$w" ;; *) die "YUANNIC_FW_BOARDS 里的 $w 不是型号也不是板卡字母" ;; esac
+        done
+        models=$(for m in $models; do case " $wanted " in *" $m "*) echo "$m" ;; esac; done)
+    fi
+    for model in $models; do
+        # 版本键 = 类型字母之后的全部（<版本>-B<build>-<日期>-<速率>-<githash>），A/B/R 三类共用
+        best_key=""; best_rank=""
+        for f in "$FW_SRC/$model"-[ABR]*-B*-*-*-*.*; do
+            [ -f "$f" ] || continue
+            key=$(basename "$f" | sed -n "s/^$model-[ABR]\(.*\)\.\(jic\|rpd\|sof\)\$/\1/p")
+            [ -n "$key" ] || continue
+            date=$(printf '%s\n' "$key" | sed -n 's/^[0-9.]*-B[0-9]*-\([0-9]\{8\}\)-.*/\1/p')
+            build=$(printf '%s\n' "$key" | sed -n 's/^[0-9.]*-B\([0-9]*\)-.*/\1/p')
+            [ -n "$date" ] && [ -n "$build" ] || continue
+            rank=$(printf '%s%08d' "$date" "$((10#$build))")
+            if [ -z "$best_rank" ] || [ "$rank" \> "$best_rank" ]; then
+                best_rank=$rank; best_key=$key
+            fi
+        done
+        [ -n "$best_key" ] || continue
+        echo "  $model  最新一版：$best_key"
+        got=0
+        for want in "A:jic" "R:rpd" "B:rpd" "R:sof"; do
+            f="$FW_SRC/$model-${want%%:*}$best_key.${want##*:}"
+            if [ -f "$f" ]; then
+                cp "$f" "$FW_OUT/" || die "拷贝 $f 失败"
+                echo "    $(basename "$f")  ($(du -h "$f" | cut -f1))"
+                got=$((got + 1)); fw_count=$((fw_count + 1))
+            fi
+        done
+        # .jic 只有 boot + active 一起编（或有预置 boot 镜像）时才会出；缺了只能在线升级 active，提示一下
+        [ -f "$FW_SRC/$model-A$best_key.jic" ] || echo "    [警告] 这一版没有 .jic（没法离线烧整片 flash，只能用 .rpd 在线升级 active）"
+        [ -f "$FW_SRC/$model-R$best_key.rpd" ] || echo "    [警告] 这一版没有 Release .rpd（ynictrl 在线升级用不了）"
     done
+    if [ "$fw_count" -gt 0 ]; then
+        ( cd "$FW_OUT" && sha256sum -- *.* > SHA256SUMS )
+        cat > "$FW_OUT/README.md" <<'FWEOF'
+# 固件镜像
 
-    if [ -n "$latest_sof" ]; then
-        latest_rpd="${latest_sof%.sof}.rpd"
-        cp "$latest_sof" "$OUT/firmware/" || die "拷贝 $latest_sof 失败"
-        echo "  $(basename "$latest_sof")  ($(du -h "$latest_sof" | cut -f1))"
-        # rpd 是 flash 烧写件（Active Serial x4），sof 是 JTAG 调试件，两者必须同一 Build
-        if [ -f "$latest_rpd" ]; then
-            cp "$latest_rpd" "$OUT/firmware/" || die "拷贝 $latest_rpd 失败"
-            echo "  $(basename "$latest_rpd")  ($(du -h "$latest_rpd" | cut -f1))"
-        else
-            # .rpd 由 yuannic_build.sh 生成；缺了不影响 JTAG 烧写，但要提示，
-            # 否则客户以为包里能离线烧 flash
-            echo "  [警告] 没有 $(basename "$latest_rpd")，包里只有 .sof（只能 JTAG 烧，不能烧 flash）"
-        fi
-        echo "  版本  : B$latest_build（最新一版）"
+每块板一组，文件名里的型号段区分板卡（`YN400GA7B027A` = NH400-A，`YN400GA7B027C` = NH400-C），
+`B<build>-<日期>` 是版本，与 `ynictrl -q` 读回的 VERSION 对应。烧之前先核对 `SHA256SUMS`。
+
+| 文件 | 用途 | 怎么烧 |
+|---|---|---|
+| `<型号>-A….jic` | 整片 flash 镜像（Factory boot + active） | JTAG：`tools/flash_and_init.sh --flash <文件名>`（掉电保持，配置器件按型号自动选） |
+| `<型号>-R….rpd` | active 镜像 | 在线升级：`bin/ynictrl -c <型号> -a 0 -p <文件>`（`-a` 是网卡序号；只写 active 区，Factory 区不动） |
+| `<型号>-B….rpd` | Factory boot 镜像 | 一般不需要单独烧（`ynictrl -b` 写备份区）；整片恢复用 `.jic` |
+| `<型号>-R….sof` | active 镜像（易失） | JTAG 临时加载：`tools/flash_and_init.sh --sram <文件名>`，掉电恢复 flash 里的版本 |
+
+型号必须与板卡一致，`flash_and_init.sh` 会按文件名里的型号段认板、拒绝烧错卡。
+FWEOF
+        echo "  共 $fw_count 个镜像，校验和写入 firmware/SHA256SUMS"
     else
-        echo "  [警告] $FW_SRC 下没有带版本号的 .sof 镜像，跳过（先跑 yuannic_build.sh）"
+        echo "  [警告] $FW_SRC 下没有符合条件的带版本号镜像，跳过（先跑板卡的 yuannic_build.sh）"
     fi
 else
-    echo "  [警告] 没有 $FW_SRC 目录（客户环境正常现象），跳过"
+    echo "  [警告] 没有 $FW_SRC 目录（客户环境正常现象；可用 YUANNIC_FW_DIR 指定），跳过"
 fi
 
 # ---------------------------------------------------------------------------
@@ -886,3 +929,5 @@ echo "--- doc/ ---"
 ls -la "$OUT/doc"
 echo "--- ko/ ---"
 ls -la "$OUT/ko"
+echo "--- firmware/ ---"
+ls -la "$OUT/firmware"
