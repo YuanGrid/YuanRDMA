@@ -42,11 +42,11 @@ code/nictrl/nictrl
 # 用户包构建产物（deploy/yuannic_user_build.sh）：目录与 .tgz 里带编译好的库、ko 和固件，不入库
 /build/user_tools/work/
 /build/user_tools/YuanNIC_User_Package/
-/build/user_tools/YuanNIC_User_Package.tgz
+/build/user_tools/YuanNIC_User_Package*.tgz
 /build/user_tools/.gid_local
 /deploy/work/
 /deploy/YuanNIC_User_Package/
-/deploy/YuanNIC_User_Package.tgz
+/deploy/YuanNIC_User_Package*.tgz
 # 打包脚本读取的本地固件目录（镜像由板卡构建脚本产出，不入库）
 /firmware/
 
