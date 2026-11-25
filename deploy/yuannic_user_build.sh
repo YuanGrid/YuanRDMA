@@ -590,9 +590,9 @@ tar xzf @PKG_NAME@.tgz && cd YuanNIC_User_Package
 sudo insmod ko/yuanmcdma.ko     # 它做 pci_enable_device，打开 MemSpace+BusMaster
 sudo insmod ko/yuannic.ko     # 可选，ynictrl 需要
 sudo insmod ko/yuanrdma.ko
-dmesg | tail -3              # 期望 "yuanrdma: engine version ..."
+dmesg | grep 'engine version'   # 期望 "yuanrdma: engine version 00010000 caps …, netdev eth0"
 
-# 2) 配网口
+# 2) 配网口（<netdev> 就是上一行末尾的 netdev，也可以用 rdma link show 查）
 sudo ip link set <netdev> up
 sudo ip addr add 192.168.50.1/24 dev <netdev>
 
@@ -649,8 +649,8 @@ sudo insmod ko/yuanrdma.ko
 加载成功的标志：
 
 ```bash
-dmesg | grep yuanrdma
-# yuanrdma: engine version 00010000 caps 0d060404, netdev eth0
+dmesg | grep 'engine version'
+# yuanrdma: engine version 00010000 caps <能力位>, netdev eth0     （caps 随镜像版本变化）
 ```
 
 若出现 `RoCE engine not present (ID deadbeef)`，说明 BAR2 地址映射不对，
@@ -665,7 +665,7 @@ sudo rmmod yuanrdma; sudo rmmod yuannic; sudo rmmod yuanmcdma
 ## 3. 网口配置
 
 ```bash
-ip -br link                          # 找到 YuanNIC 对应的网口，假设是 eth0
+rdma link show                       # 输出里 yuanrdma0 后面的 netdev 就是 YuanNIC 的网口，下文假设是 eth0
 sudo ip link set eth0 up
 sudo ip addr add 192.168.50.1/24 dev eth0
 ```
@@ -683,10 +683,12 @@ ibv_devinfo -d yuanrdma0                       # 期望 state: PORT_ACTIVE
 RoCEv2 用 IPv4 GID。索引会随地址增减变化，每次改完 IP 都要重新确认：
 
 ```bash
-show_gids        # 或：for i in $(seq 0 31); do
-                 #         echo "$i $(cat /sys/class/infiniband/yuanrdma0/ports/1/gids/$i) \
-                 #               $(cat /sys/class/infiniband/yuanrdma0/ports/1/gid_attrs/types/$i)"
-                 #       done
+G=/sys/class/infiniband/yuanrdma0/ports/1
+for i in $(seq 0 15); do
+    g=$(cat $G/gids/$i 2>/dev/null) || continue
+    [ "$g" = 0000:0000:0000:0000:0000:0000:0000:0000 ] && continue    # 空槽跳过
+    echo "$i $g $(cat $G/gid_attrs/types/$i 2>/dev/null)"
+done
 ```
 
 找形如 `0000:0000:0000:0000:0000:ffff:c0a8:3201` 且类型为 `RoCE v2` 的那一行，
@@ -707,23 +709,32 @@ show_gids        # 或：for i in $(seq 0 31); do
 ./bin/yuancli capabilities                   # 哪些功能有真硬件
 ```
 
-命令名一律用完整单词，旧的短名（`reg` / `probe` / `dbg` 等）仍可用。
+命令名一律用完整单词。部分旧短名仍可用（如 `reg probe` = `register probe_engine`），
+但**语义以 `yuancli <命令> -h` 为准**：例如 `dbg` 现在指 BAS 状态（`register bas_status`），
+不是 `dump_debug_registers`。
 
 ## 6. 固件更新（ynictrl）
 
+`-c` 写板卡型号（NH400-A 为 `YN400GA7B027A`，NH400-C 为 `YN400GA7B027C`），`-a` 是网卡序号（`-q` 输出里的
+Adapter 编号）。**镜像文件名开头的型号必须与板卡一致，ynictrl 不会替你核对**，烧错板会起不来。
+
 ```bash
-sudo ./bin/ynictrl -c YN400GA7B027A -a 0 -q      # 查询当前版本
-sudo ./bin/ynictrl -c YN400GA7B027A -a 0 -p firmware/<镜像>-R<版本>.rpd                     # 升级，序列号保持不变
-sudo ./bin/ynictrl -c YN400GA7B027A -a 0 -p firmware/<镜像>-R<版本>.rpd -n MD400G260713002  # 升级并同时写序列号
-sudo ./bin/ynictrl -c YN400GA7B027A -a 0 -n MD400G260713002                                # 只改序列号
+sudo ./bin/ynictrl -c <型号> -a 0 -q                                              # 查询当前版本
+sudo ./bin/ynictrl -c <型号> -a 0 -n MD400G260713002                              # 只改序列号（不切镜像，不用重启）
+sudo ./bin/ynictrl -c <型号> -a 0 -p firmware/<型号>-R<版本>-….rpd                  # 升级 active 镜像，序列号保持不变
+sudo ./bin/ynictrl -c <型号> -a 0 -p firmware/<型号>-R<版本>-….rpd -n MD400G260713002  # 升级并同时写序列号
 ```
 
 固件更新需要 `yuannic.ko` 已加载。
 
 - `-q` 的 `BANK` 是当前运行的镜像：`Active`（升级区）或 `Boot`（出厂回退镜像）；`TYPE` 是产品型号。
-- `-p` 依次显示 `erase` / `program` / `verify` 三行，每行都到 `100%` 才算完成；随后打印写入的
-  `firmware info` 与 `serial number`，最后提示 `update success`，重启后生效。任何一步失败都会报错并以非 0 退出，
-  不会切换镜像。
+- `-p` 依次显示 `erase` / `program` / `verify` 三行，每行都到 `100%` 才算完成；**整个过程约 14 分钟**，
+  erase 阶段进度会长时间不动，属正常，不要中断。随后打印写入的 `firmware info` 与 `serial number`，
+  最后提示 `update success`。任何一步失败都会报错并以非 0 退出，不会切换镜像。
+- **`-p` 成功结束的那一刻，网卡立即切换到新镜像并从 PCIe 总线上短暂消失，之后必须重启主机。**
+  卸载重装驱动、PCIe 重新扫描都不够（RDMA 能恢复，但网口发不出包）。重启之前不要再执行任何 ynictrl
+  命令（`-q` 会读出空版本、`-p`/`-n` 会报 `Fail to execute QSPI Open`），也不要再跑业务。
+  所以「升级 + 改序列号」请用上面的 `-p … -n …` **一条命令**完成，不要分两次。
 - 序列号以 `MD` 开头、只含字母数字、最多 15 位；不带 `-n` 时保留 flash 里原有的序列号。
 
 ## 6.1 环境初始化脚本 flash_and_init.sh
@@ -973,7 +984,8 @@ if [ -d "$FW_SRC" ]; then
 | `<型号>-B….rpd` | Factory boot 镜像 | 一般不需要单独烧（`ynictrl -b` 写备份区）；整片恢复用 `.jic` |
 | `<型号>-R….sof` | active 镜像（易失） | JTAG 临时加载：`tools/flash_and_init.sh --sram <文件名>`，掉电恢复 flash 里的版本 |
 
-型号必须与板卡一致，`flash_and_init.sh` 会按文件名里的型号段认板、拒绝烧错卡。
+型号必须与板卡一致。`flash_and_init.sh` 按文件名里的型号段选择配置 flash 器件，`ynictrl` 按 `-c` 走流程，
+**两者都不读取板卡的实际型号来核对**——烧之前请自己确认（`ynictrl -q` 的型号、卡上标签）。
 FWEOF
         echo "  共 $fw_count 个镜像，校验和写入 firmware/SHA256SUMS"
     else

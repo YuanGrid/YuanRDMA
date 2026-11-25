@@ -19,10 +19,10 @@
 #   ./flash_and_init.sh --sram  B6369                # 烧 SRAM（.sof），掉电回退
 #   ./flash_and_init.sh --flash <镜像名 | jic 路径 | Build 号>
 #   ./flash_and_init.sh --sram  <镜像名 | sof 路径 | Build 号>
-#   ./flash_and_init.sh --flash YN400GA7B027A-R26.12.09-B6388-20261101-1X400G-9cac73fd
-#   ./flash_and_init.sh --flash YN400GA7B027A-R26.12.09-B6388-20261101-1X400G-9cac73fd.jic
+#   ./flash_and_init.sh --flash YN400GA7B027C-A26.12.02-B0116-20261123-1X400G-4203a24c      # .jic 是 A 型（boot+active 整片）
+#   ./flash_and_init.sh --sram  YN400GA7B027C-R26.12.02-B0116-20261123-1X400G-4203a24c.sof  # .sof 用 R 型（active）
 #                                                    # 完整镜像名（可带 .jic），从型号段
-#                                                    # LA/LC/LD 认板，在
+#                                                    # 型号段（YN400GA7B027A/C）认板，在
 #                                                    # firmware/ 里找
 #   ./flash_and_init.sh --flash B6369                # 简写：三个板都找，匹配到多块板就报错
 #   ./flash_and_init.sh --flash path/to/xxx.jic      # 显式路径，由调用者负责
@@ -139,7 +139,7 @@ board_name() {
     esac
 }
 
-# 从文件名里取型号段（LA/LC/LD），取不到返回空。
+# 从文件名里取型号段（YN400GA7B027A/C；旧名 *LD-* 仍认），取不到返回空。
 # .sof 和 .jic 两种名字都要认——同一个 Build 归档时两个文件同名不同后缀。
 img_model() {
     local b
@@ -206,7 +206,7 @@ if [ "$FLASH_MODE" != 0 ] && [ -n "$IMG" ] && [ ! -f "$IMG" ]; then
         # 路径形式但文件不存在：报明确的「找不到文件」，不要等到后面
         */*) die "找不到镜像文件：$IMG" ;;
         *)   die "认不出镜像参数「$IMG」：应为 .${IMG_EXT} 路径、B<Build> 简写，
-        或 YN400GA7B027A/LC/LD-... 形式的完整镜像名" ;;
+        或 YN400GA7B027A-… / YN400GA7B027C-… 形式的完整镜像名" ;;
     esac
 fi
 
@@ -263,10 +263,10 @@ sleep 1
 
 # ================================================================ 3. JTAG 烧写
 if [ "$FLASH_MODE" != 0 ]; then
-    [ -n "$IMG" ] || die "需要镜像名（YN400GA7B027A/LC/LD-...）、.${IMG_EXT} 路径或 Build 号，例：./flash_and_init.sh --$([ "$FLASH_MODE" = 1 ] && echo flash || echo sram) YN400GA7B027A-R26.12.09-B6388-20261101-1X400G-9cac73fd"
+    [ -n "$IMG" ] || die "需要镜像名（YN400GA7B027A-… / YN400GA7B027C-…）、.${IMG_EXT} 路径或 Build 号，例：./flash_and_init.sh --$([ "$FLASH_MODE" = 1 ] && echo flash || echo sram) B0116"
 
     # 三种参数形式：显式文件路径 / 完整镜像名 / B<Build> 简写。
-    # 完整镜像名按型号段（LA/LC/LD）锁定板卡，杜绝烧错卡。
+    # 完整镜像名按型号段（YN400GA7B027A/C）选配置器件；不读板卡实际型号，型号对不对由调用者确认。
     if [ -f "$IMG" ]; then
         # 显式路径：板卡由调用者负责，型号段能认出就打出来。
         # 后缀必须和开关对上——--flash 给 .sof 会被烧成「烧 flash」的名义下的 SRAM 配置，
@@ -326,7 +326,7 @@ if [ "$FLASH_MODE" != 0 ]; then
         base=${IMG%.sof}
         base=${base%.jic}
         IMG_MODEL=$(img_model "$base")
-        [ -n "$IMG_MODEL" ] || die "认不出镜像名的型号段（期望 YN400GA7B027A/LC/LD-...）：$IMG"
+        [ -n "$IMG_MODEL" ] || die "认不出镜像名的型号段（期望 YN400GA7B027A-… / YN400GA7B027C-…）：$IMG"
         title=$base
         IMG="$FW_BACKUP/$base.${IMG_EXT}"
         [ -f "$IMG" ] || die "找不到 $base.${IMG_EXT}：
@@ -686,4 +686,8 @@ warn "CHIPVERSION 读的是 flash 里的版本；--sram 用 .sof 烧的是易失
 warn "掉电会回到 flash 那版。判断当前跑哪版看上面的 slot2 值，不要看 CHIPVERSION。"
 warn "--flash 烧 .jic 才是改 flash 内容，烧完要冷断电一次再测性能。"
 printf '\n'
-ok "初始化完成 → ./roce_perf_test.sh --label <Build>"
+if [ "$IN_PACKAGE" = 1 ]; then
+    ok "初始化完成 → ./tools/roce_perf_test.sh --label <版本>"
+else
+    ok "初始化完成 → ./roce_perf_test.sh --label <Build>"
+fi
