@@ -146,7 +146,7 @@ Shipping forms include security gateways / firewalls, traffic-audit platforms, D
 ### 4.5 Continuous evolution
 
 - **Online firmware upgrade**: images are written to the configuration device over on-board Active Serial x4 (outputs `.sof` / `.rpd` / `.jic`). After the write the link re-enumerates and the drivers reload while the host OS keeps running — one script chains flash → re-enumerate → load drivers → configure network → self-check.
-- **Version rollback**: images are identified by version (card model `YN400GA7B027A` / C) and multiple versions coexist, so rolling back is flashing the previous image. Upgrades touch only the configuration device and install nothing into the host system.
+- **Version rollback**: images are identified by version (card model `YN400GA7B041C`) and multiple versions coexist, so rolling back is flashing the previous image. Upgrades touch only the configuration device and install nothing into the host system.
 - **Layered upgrades**: firmware, kernel drivers (built against `uname -r`), and the user-space provider and PMD evolve separately, so changing one does not disturb the others; with parameters readable and writable at run time, tuning needs no firmware rebuild and upgrading needs no OS reinstall.
 - **Diagnosable**: `yuancli` and `ynictrl` read registers and counters and export hang snapshots; together with perftest, `roce_perf_test.sh` regression runs and hardware-side packet capture, a fault can be traced from symptom to register state instead of guessed at.
 - **Interoperable with upper-layer software**: `rdma_cm`, NCCL and perftest keep their existing paths, while `yuancli` / `ynictrl` and the control plane expose read and drive access upward, so monitoring and policy fit into existing operations tooling.
@@ -184,18 +184,18 @@ Queues, tables and memory translation are consolidated below; the figures follow
 
 ## 6 Performance
 
-Setup: YuanNIC-NH400-A, peer NVIDIA ConnectX-7, 400GbE direct link, upstream perftest. Bandwidth cases use 1 MiB messages, 30 s each; latency cases use 2 B messages, 30 s each, and the tables list perftest's typical (median) values. Figures from image `R26.12.17-B6464-20261123-1X400G`.
+Setup: YuanNIC-NH400-C, peer NVIDIA ConnectX-7, 400GbE direct link, upstream perftest. Bandwidth cases use 1 MiB messages, 30 s each; latency cases use 2 B messages, 30 s each, and the tables list perftest's typical (median) values. Figures from image `R26.12.02-B0116-20261123-1X400G`.
 
 <table width="100%" style="width:100%;border:0;border-collapse:collapse">
 <tr><td style="border:0;padding:0">
 
 <table width="100%" style="width:100%">
 <tr><th style="width:26%">Test</th><th style="width:37%">YuanNIC as client</th><th style="width:37%">YuanNIC as server</th></tr>
-<tr><td style="width:26%"><code>ib_write_bw</code> (1 QP)</td><td style="width:37%"><strong>198.0 Gb/s (49.5%)</strong></td><td style="width:37%">99.9 Gb/s (25.0%)</td></tr>
-<tr><td style="width:26%"><code>ib_read_bw</code> (1 QP)</td><td style="width:37%">74.4 Gb/s (18.6%)</td><td style="width:37%">89.7 Gb/s (22.4%)</td></tr>
-<tr><td style="width:26%"><code>ib_send_bw</code> (1 QP)</td><td style="width:37%"><strong>198.1 Gb/s (49.5%)</strong></td><td style="width:37%">97.2 Gb/s (24.3%)</td></tr>
-<tr><td style="width:26%"><code>ib_write_bw</code> (4 QP)</td><td style="width:37%"><strong>352.1 Gb/s (88.0%)</strong></td><td style="width:37%">96.6 Gb/s (24.1%)</td></tr>
-<tr><td style="width:26%"><code>ib_read_bw</code> (4 QP)</td><td style="width:37%">99.3 Gb/s (24.8%)</td><td style="width:37%"><strong>328.2 Gb/s (82.1%)</strong></td></tr>
+<tr><td style="width:26%"><code>ib_write_bw</code> (1 QP)</td><td style="width:37%"><strong>198.1 Gb/s (49.5%)</strong></td><td style="width:37%">98.2 Gb/s (24.5%)</td></tr>
+<tr><td style="width:26%"><code>ib_read_bw</code> (1 QP)</td><td style="width:37%">74.4 Gb/s (18.6%)</td><td style="width:37%">89.8 Gb/s (22.5%)</td></tr>
+<tr><td style="width:26%"><code>ib_send_bw</code> (1 QP)</td><td style="width:37%"><strong>198.1 Gb/s (49.5%)</strong></td><td style="width:37%">97.4 Gb/s (24.4%)</td></tr>
+<tr><td style="width:26%"><code>ib_write_bw</code> (4 QP)</td><td style="width:37%"><strong>351.9 Gb/s (88.0%)</strong></td><td style="width:37%">96.9 Gb/s (24.2%)</td></tr>
+<tr><td style="width:26%"><code>ib_read_bw</code> (4 QP)</td><td style="width:37%">99.6 Gb/s (24.9%)</td><td style="width:37%"><strong>328.2 Gb/s (82.1%)</strong></td></tr>
 </table>
 
 </td></tr>
@@ -210,44 +210,34 @@ Latency (2 B messages, one-way, typical / p99):
 
 <table width="100%" style="width:100%">
 <tr><th style="width:26%">Test</th><th style="width:37%">YuanNIC as client</th><th style="width:37%">YuanNIC as server</th></tr>
-<tr><td style="width:26%"><code>ib_write_lat</code></td><td style="width:37%"><strong>2.46 / 2.69 µs</strong></td><td style="width:37%"><strong>2.44 / 2.66 µs</strong></td></tr>
-<tr><td style="width:26%"><code>ib_read_lat</code></td><td style="width:37%">3.68 / 3.97 µs</td><td style="width:37%">2.87 / 3.14 µs</td></tr>
-<tr><td style="width:26%"><code>ib_send_lat</code></td><td style="width:37%">2.38 / 2.54 µs</td><td style="width:37%">2.65 / 2.87 µs</td></tr>
+<tr><td style="width:26%"><code>ib_write_lat</code></td><td style="width:37%"><strong>2.53 / 2.75 µs</strong></td><td style="width:37%"><strong>2.45 / 2.65 µs</strong></td></tr>
+<tr><td style="width:26%"><code>ib_read_lat</code></td><td style="width:37%">4.25 / 4.50 µs</td><td style="width:37%">2.83 / 3.15 µs</td></tr>
+<tr><td style="width:26%"><code>ib_send_lat</code></td><td style="width:37%">2.75 / 2.92 µs</td><td style="width:37%">2.66 / 2.88 µs</td></tr>
 </table>
 
 </td></tr>
 </table>
 
-Write latency sits near 2.4 µs on both ends and barely moves with message size. Read latency is higher — 3.7 µs in the client direction — the cost of the responding data being copied serially on the receive side. p99 runs 0.1–0.3 µs above typical, most of it host-side interrupt and scheduling jitter; use typical when judging regressions across versions.
+Write latency sits near 2.5 µs on both ends and barely moves with message size. Read latency is higher — 4.3 µs in the client direction — the cost of the responding data being copied serially on the receive side. p99 runs 0.2–0.3 µs above typical, most of it host-side interrupt and scheduling jitter; use typical when judging regressions across versions.
 
 ## 7 Supported Hardware
 
 <table width="100%" style="width:100%;border:0;border-collapse:collapse">
-<tr>
-<td width="62%" valign="top" style="border:0;padding:0">
+<tr><td style="border:0;padding:0">
 
 <table width="100%" style="width:100%">
 <tr><th style="width:48%">Item</th><th style="width:52%">Specification</th></tr>
-<tr><td style="width:48%">Model</td><td style="width:52%">YuanNIC-NH400-A</td></tr>
-<tr><td style="width:48%">FPGA device</td><td style="width:52%">Agilex 7 I <code>AGIB027</code></td></tr>
+<tr><td style="width:48%">Model</td><td style="width:52%">YuanNIC-NH400-C</td></tr>
+<tr><td style="width:48%">FPGA device</td><td style="width:52%">Agilex 7 I <code>AGIB041</code></td></tr>
 <tr><td style="width:48%">Network port</td><td style="width:52%">1 × 400G QSFP-112 (F-tile 4x112)</td></tr>
 <tr><td style="width:48%">Port modes</td><td style="width:52%">1x400G / 1x200G / 1x100G / 1x40G on the same cage, set by firmware</td></tr>
 <tr><td style="width:48%">Host interface</td><td style="width:52%">PCIe Gen5 x16 (R-tile)</td></tr>
 <tr><td style="width:48%">Core clock</td><td style="width:52%">RoCE engine at 250 MHz</td></tr>
 <tr><td style="width:48%">Configuration</td><td style="width:52%">Active Serial x4</td></tr>
-<tr><td style="width:48%">Card model</td><td style="width:52%"><code>YN400GA7B027A</code> / C</td></tr>
-<tr><td style="width:48%">Form factor</td><td style="width:52%">Single slot, half-height half-length (with full-height bracket)</td></tr>
-<tr><td style="width:48%">Dimensions</td><td style="width:52%">169.5 × 68.9 × 18.5 mm</td></tr>
-<tr><td style="width:48%">Power</td><td style="width:52%">75 W max</td></tr>
-<tr><td style="width:48%">Cooling</td><td style="width:52%">Passive heatsink, relies on chassis airflow</td></tr>
-<tr><td style="width:48%">Operating temperature</td><td style="width:52%">0 – 55 ℃</td></tr>
+<tr><td style="width:48%">Card model</td><td style="width:52%"><code>YN400GA7B041C</code></td></tr>
 </table>
 
-</td>
-<td width="38%" valign="middle" align="center" style="border:0;padding:0">
-  <img src="docs/image/YuanNIC-NH400-A.png" alt="YuanNIC-NH400-A" width="300">
-</td>
-</tr>
+</td></tr>
 </table>
 
 The port mode is chosen at firmware build time and takes effect after link negotiation; switching rate changes only MAC and link-layer configuration, leaving the verbs interface and the software stack untouched. Interoperability is validated against NVIDIA ConnectX-7. PCIe Gen5 x16 keeps the host-side bandwidth roughly at parity with 400GbE line rate, so the host interface does not become the first bottleneck.
@@ -295,7 +285,7 @@ test/sim/rtl_prebuild_gate.sh --lint-only  # wiring check only (seconds)
 ### 9.3 Build the FPGA firmware
 
 ```bash
-cd build/YuanNIC-NH400-A
+cd build/YuanNIC-NH400-C
 ./yuannic_build.sh <VER> <BUILD> <PORT_MODE> [all|boot|active]
 ./yuannic_build.sh 1 1 1X400G boot        # single 400G port
 ./yuannic_build.sh 2 1 1X200G active      # drop to 200G

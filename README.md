@@ -146,7 +146,7 @@ YuanSec 以 FPGA 并行计算加 DPDK 转发为数据面，把检测与密码运
 ### 4.5 持续迭代
 
 - **固件在线升级**：镜像经板载 Active Serial x4 写入配置器件（产物 `.sof` / `.rpd` / `.jic`）；升级后 PCIe 重枚举、驱动重新加载，主机操作系统不重启，一条脚本串起烧写 → 重枚举 → 加载驱动 → 配网 → 自检。
-- **版本可回退**：镜像以版本号标识（网卡型号 `YN400GA7B027A` / C），多版本并存，回退即烧回旧镜像；升级只动配置器件，不向主机系统安装任何文件。
+- **版本可回退**：镜像以版本号标识（网卡型号 `YN400GA7B041C`），多版本并存，回退即烧回旧镜像；升级只动配置器件，不向主机系统安装任何文件。
 - **分层独立升级**：固件、内核驱动（随 `uname -r` 编译）、用户态 provider 与 PMD 各自独立演进，改一层不必动另两层；加上参数在线读写，调参不重编固件、升级不重装系统。
 - **问题可定位**：`yuancli` 与 `ynictrl` 读取寄存器与计数器、导出卡死现场快照，配合 perftest、`roce_perf_test.sh` 回归与硬件侧镜像抓包，故障可从现象追到寄存器状态，不必靠猜。
 - **与上层软件联动**：对内保持 `rdma_cm`、NCCL 与 perftest 的既有路径；对外经 `yuancli` / `ynictrl` 与配置面开放读写与操控，监控与策略可纳入既有运维体系。
@@ -184,18 +184,18 @@ YuanSec 以 FPGA 并行计算加 DPDK 转发为数据面，把检测与密码运
 
 ## 6 性能
 
-测试条件：YuanNIC-NH400-A，对端 NVIDIA ConnectX-7，400GbE 直连，原版 perftest。带宽用例消息 1 MiB、每项 30 s；延迟用例消息 2 B、每项 30 s，表中取 perftest 的典型值（typical，中位）。数据取自镜像 `R26.12.17-B6464-20261123-1X400G`。
+测试条件：YuanNIC-NH400-C，对端 NVIDIA ConnectX-7，400GbE 直连，原版 perftest。带宽用例消息 1 MiB、每项 30 s；延迟用例消息 2 B、每项 30 s，表中取 perftest 的典型值（typical，中位）。数据取自镜像 `R26.12.02-B0116-20261123-1X400G`。
 
 <table width="100%" style="width:100%;border:0;border-collapse:collapse">
 <tr><td style="border:0;padding:0">
 
 <table width="100%" style="width:100%">
 <tr><th style="width:26%">用例</th><th style="width:37%">YuanNIC 作客户端</th><th style="width:37%">YuanNIC 作服务端</th></tr>
-<tr><td style="width:26%"><code>ib_write_bw</code>（1 QP）</td><td style="width:37%"><strong>198.0 Gb/s（49.5%）</strong></td><td style="width:37%">99.9 Gb/s（25.0%）</td></tr>
-<tr><td style="width:26%"><code>ib_read_bw</code>（1 QP）</td><td style="width:37%">74.4 Gb/s（18.6%）</td><td style="width:37%">89.7 Gb/s（22.4%）</td></tr>
-<tr><td style="width:26%"><code>ib_send_bw</code>（1 QP）</td><td style="width:37%"><strong>198.1 Gb/s（49.5%）</strong></td><td style="width:37%">97.2 Gb/s（24.3%）</td></tr>
-<tr><td style="width:26%"><code>ib_write_bw</code>（4 QP）</td><td style="width:37%"><strong>352.1 Gb/s（88.0%）</strong></td><td style="width:37%">96.6 Gb/s（24.1%）</td></tr>
-<tr><td style="width:26%"><code>ib_read_bw</code>（4 QP）</td><td style="width:37%">99.3 Gb/s（24.8%）</td><td style="width:37%"><strong>328.2 Gb/s（82.1%）</strong></td></tr>
+<tr><td style="width:26%"><code>ib_write_bw</code>（1 QP）</td><td style="width:37%"><strong>198.1 Gb/s（49.5%）</strong></td><td style="width:37%">98.2 Gb/s（24.5%）</td></tr>
+<tr><td style="width:26%"><code>ib_read_bw</code>（1 QP）</td><td style="width:37%">74.4 Gb/s（18.6%）</td><td style="width:37%">89.8 Gb/s（22.5%）</td></tr>
+<tr><td style="width:26%"><code>ib_send_bw</code>（1 QP）</td><td style="width:37%"><strong>198.1 Gb/s（49.5%）</strong></td><td style="width:37%">97.4 Gb/s（24.4%）</td></tr>
+<tr><td style="width:26%"><code>ib_write_bw</code>（4 QP）</td><td style="width:37%"><strong>351.9 Gb/s（88.0%）</strong></td><td style="width:37%">96.9 Gb/s（24.2%）</td></tr>
+<tr><td style="width:26%"><code>ib_read_bw</code>（4 QP）</td><td style="width:37%">99.6 Gb/s（24.9%）</td><td style="width:37%"><strong>328.2 Gb/s（82.1%）</strong></td></tr>
 </table>
 
 </td></tr>
@@ -210,44 +210,34 @@ YuanSec 以 FPGA 并行计算加 DPDK 转发为数据面，把检测与密码运
 
 <table width="100%" style="width:100%">
 <tr><th style="width:26%">用例</th><th style="width:37%">YuanNIC 作客户端</th><th style="width:37%">YuanNIC 作服务端</th></tr>
-<tr><td style="width:26%"><code>ib_write_lat</code></td><td style="width:37%"><strong>2.46 / 2.69 µs</strong></td><td style="width:37%"><strong>2.44 / 2.66 µs</strong></td></tr>
-<tr><td style="width:26%"><code>ib_read_lat</code></td><td style="width:37%">3.68 / 3.97 µs</td><td style="width:37%">2.87 / 3.14 µs</td></tr>
-<tr><td style="width:26%"><code>ib_send_lat</code></td><td style="width:37%">2.38 / 2.54 µs</td><td style="width:37%">2.65 / 2.87 µs</td></tr>
+<tr><td style="width:26%"><code>ib_write_lat</code></td><td style="width:37%"><strong>2.53 / 2.75 µs</strong></td><td style="width:37%"><strong>2.45 / 2.65 µs</strong></td></tr>
+<tr><td style="width:26%"><code>ib_read_lat</code></td><td style="width:37%">4.25 / 4.50 µs</td><td style="width:37%">2.83 / 3.15 µs</td></tr>
+<tr><td style="width:26%"><code>ib_send_lat</code></td><td style="width:37%">2.75 / 2.92 µs</td><td style="width:37%">2.66 / 2.88 µs</td></tr>
 </table>
 
 </td></tr>
 </table>
 
-写时延两端都在 2.4 µs 附近，与消息长度基本无关；读时延在客户端方向上偏高到 3.7 µs，是响应数据在接收侧串行搬运的代价。p99 与 typical 相差 0.1–0.3 µs，主要来自主机侧中断与调度抖动，评估跨版本回归时以 typical 为准。
+写时延两端都在 2.5 µs 附近，与消息长度基本无关；读时延在客户端方向上偏高到 4.3 µs，是响应数据在接收侧串行搬运的代价。p99 与 typical 相差 0.2–0.3 µs，主要来自主机侧中断与调度抖动，评估跨版本回归时以 typical 为准。
 
 ## 7 支持的硬件
 
 <table width="100%" style="width:100%;border:0;border-collapse:collapse">
-<tr>
-<td width="62%" valign="top" style="border:0;padding:0">
+<tr><td style="border:0;padding:0">
 
 <table width="100%" style="width:100%">
 <tr><th style="width:48%">项</th><th style="width:52%">规格</th></tr>
-<tr><td style="width:48%">型号</td><td style="width:52%">YuanNIC-NH400-A</td></tr>
-<tr><td style="width:48%">FPGA 器件</td><td style="width:52%">Agilex 7 I <code>AGIB027</code></td></tr>
+<tr><td style="width:48%">型号</td><td style="width:52%">YuanNIC-NH400-C</td></tr>
+<tr><td style="width:48%">FPGA 器件</td><td style="width:52%">Agilex 7 I <code>AGIB041</code></td></tr>
 <tr><td style="width:48%">网口</td><td style="width:52%">1 × 400G QSFP-112（F-tile 4x112）</td></tr>
 <tr><td style="width:48%">端口模式</td><td style="width:52%">1x400G / 1x200G / 1x100G / 1x40G（同一 400G 笼口，按固件配置）</td></tr>
 <tr><td style="width:48%">主机接口</td><td style="width:52%">PCIe Gen5 x16（R-tile）</td></tr>
 <tr><td style="width:48%">核心时钟</td><td style="width:52%">RoCE 引擎 250 MHz</td></tr>
 <tr><td style="width:48%">配置方式</td><td style="width:52%">Active Serial x4</td></tr>
-<tr><td style="width:48%">网卡型号</td><td style="width:52%"><code>YN400GA7B027A</code> / C</td></tr>
-<tr><td style="width:48%">形态</td><td style="width:52%">单槽半高半长（配全高挡片）</td></tr>
-<tr><td style="width:48%">尺寸</td><td style="width:52%">169.5 × 68.9 × 18.5 mm</td></tr>
-<tr><td style="width:48%">功耗</td><td style="width:52%">最大 75 W</td></tr>
-<tr><td style="width:48%">散热</td><td style="width:52%">被动散热，依赖机箱风道</td></tr>
-<tr><td style="width:48%">工作温度</td><td style="width:52%">0 – 55 ℃</td></tr>
+<tr><td style="width:48%">网卡型号</td><td style="width:52%"><code>YN400GA7B041C</code></td></tr>
 </table>
 
-</td>
-<td width="38%" valign="middle" align="center" style="border:0;padding:0">
-  <img src="docs/image/YuanNIC-NH400-A.png" alt="YuanNIC-NH400-A" width="300">
-</td>
-</tr>
+</td></tr>
 </table>
 
 端口模式随固件编译选定，上板后按链路协商生效；速率切换只改 MAC 与链路层配置，verbs 接口与上层软件栈保持不变。互通性以 NVIDIA ConnectX-7 为对端验证。PCIe Gen5 x16 的主机侧带宽与 400GbE 线速基本对等，避免主机接口先成为瓶颈。
@@ -295,7 +285,7 @@ test/sim/rtl_prebuild_gate.sh --lint-only  # 只跑连线检查（秒级）
 ### 9.3 编译 FPGA 固件
 
 ```bash
-cd build/YuanNIC-NH400-A
+cd build/YuanNIC-NH400-C
 ./yuannic_build.sh <VER> <BUILD> <PORT_MODE> [all|boot|active]
 ./yuannic_build.sh 1 1 1X400G boot        # 400G 单口
 ./yuannic_build.sh 2 1 1X200G active      # 降到 200G
