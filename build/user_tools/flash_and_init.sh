@@ -288,6 +288,11 @@ if [ "$FLASH_MODE" != 0 ]; then
         for d in "$FW_BACKUP"; do
             for f in "$d"/*-${build}-*.${IMG_EXT}; do
                 [ -f "$f" ] || continue
+                # 同一 Build 归档里还有 Boot（Factory）镜像 <型号>-B<版本>-B<build>-…，按字母序它排在
+                # Release（R）前面——不跳过的话 B<Build> 简写会把 boot 的 .sof 当成 active 烧进去。
+                case "$(basename -- "$f" | sed -nE 's/^[A-Za-z0-9]+-([ABR])[0-9]+\.[0-9]+\.[0-9]+-.*/\1/p')" in
+                    B) continue ;;
+                esac
                 m=$(img_model "$f")
                 [ -n "$m" ] || continue
                 case " $models " in *" $m "*) continue ;; esac
