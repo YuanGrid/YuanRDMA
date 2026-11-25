@@ -302,6 +302,10 @@ ibv_devinfo -d yuanrdma0                   # expect PORT_ACTIVE
 ./roce_perf_test.sh --label <image>        # full bidirectional perftest suite against ConnectX-7
 ```
 
+Step-by-step instructions for JTAG flashing, online firmware upgrade, MAC/SN provisioning and the perftest baseline
+(test topology, configuration of both servers, how to run the tests, how to read the results, reference values) are in the
+[YuanNIC-NH400-C user manual](docs/manual/YuanNIC-NH400网卡使用手册.pdf) (Chinese; also available as [docx](docs/manual/YuanNIC-NH400网卡使用手册.docx)).
+
 ## 10 Roadmap
 
 Done:

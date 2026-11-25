@@ -302,6 +302,9 @@ ibv_devinfo -d yuanrdma0                   # 应看到 PORT_ACTIVE
 ./roce_perf_test.sh --label <镜像版本>     # 与 ConnectX-7 双向跑全套 perftest
 ```
 
+JTAG 烧写、在线升级、MAC 与 SN 写入，以及 perftest 基线测试（测试拓扑、两台服务器的配置、启动方法、结果判读与参考值）的完整步骤见
+[《YuanNIC-NH400-C 网卡使用手册》](docs/manual/YuanNIC-NH400网卡使用手册.pdf)（另有 [docx 版](docs/manual/YuanNIC-NH400网卡使用手册.docx)）。
+
 ## 10 路线图
 
 已完成：
