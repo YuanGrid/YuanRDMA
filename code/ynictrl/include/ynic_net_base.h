@@ -440,21 +440,21 @@ typedef enum MDAdapterType_e {
   YNIC_ADAPTER_MD2X025GF27LA_2X2D5G,	/**< 锐文xfast-1000网卡，Xilinx KU5P芯片，2X2.5G光模式 */
   YNIC_ADAPTER_MD2X025GF27LA_2X10G,	/**< 锐文xfast-1000网卡，Xilinx KU5P芯片，2X10G光模式 */
   YNIC_ADAPTER_MD2X025GF27LA_2X25G,	/**< 锐文xfast-1000网卡，Xilinx KU5P芯片，2X25G光模式 */
-  YNIC_ADAPTER_YN400GA7B027A_1X400G,	/**< altera 1x400G光模式--A 型板 */
-  YNIC_ADAPTER_YN400GA7B027A_4X100G,	/**< altera 1x400G光模式--A 型板 */
-  YNIC_ADAPTER_YN400GA7B027A_1X200G,	/**< altera 1x400G光模式--A 型板 */
-  YNIC_ADAPTER_YN400GA7B027A_1X100G,	/**< altera 4x100G光模式--A 型板 */
-  YNIC_ADAPTER_YN400GA7B027A_1X50G,	/**< altera 4x100G光模式--A 型板 */
-  YNIC_ADAPTER_YN400GA7B027B_1X400G,	/**< altera 1x400G光模式--B 型板 */
-  YNIC_ADAPTER_YN400GA7B027B_4X100G,	/**< altera 1x400G光模式--B 型板 */
-  YNIC_ADAPTER_YN400GA7B027B_1X200G,	/**< altera 1x400G光模式--B 型板 */
-  YNIC_ADAPTER_YN400GA7B027B_1X100G,	/**< altera 1x400G光模式--B 型板 */
-  YNIC_ADAPTER_YN400GA7B027B_1X50G,	/**< altera 4x100G光模式--B 型板 */
-  YNIC_ADAPTER_YN400GA7B027C_1X400G,	/**< altera 1x400G光模式--C 型板 */
-  YNIC_ADAPTER_YN400GA7B027C_4X100G,	/**< altera 1x400G光模式--C 型板 */
-  YNIC_ADAPTER_YN400GA7B027C_1X200G,	/**< altera 1x400G光模式--C 型板 */
-  YNIC_ADAPTER_YN400GA7B027C_1X100G,	/**< altera 1x400G光模式--C 型板 */
-  YNIC_ADAPTER_YN400GA7B027C_1X50G,	/**< altera 4x100G光模式--C 型板 */
+  YNIC_ADAPTER_RSVD_400G_0,		/**< 保留：占位，保持其后的枚举取值不变 */
+  YNIC_ADAPTER_RSVD_400G_1,		/**< 保留：占位，保持其后的枚举取值不变 */
+  YNIC_ADAPTER_RSVD_400G_2,		/**< 保留：占位，保持其后的枚举取值不变 */
+  YNIC_ADAPTER_RSVD_400G_3,		/**< 保留：占位，保持其后的枚举取值不变 */
+  YNIC_ADAPTER_RSVD_400G_4,		/**< 保留：占位，保持其后的枚举取值不变 */
+  YNIC_ADAPTER_RSVD_400G_5,		/**< 保留：占位，保持其后的枚举取值不变 */
+  YNIC_ADAPTER_RSVD_400G_6,		/**< 保留：占位，保持其后的枚举取值不变 */
+  YNIC_ADAPTER_RSVD_400G_7,		/**< 保留：占位，保持其后的枚举取值不变 */
+  YNIC_ADAPTER_RSVD_400G_8,		/**< 保留：占位，保持其后的枚举取值不变 */
+  YNIC_ADAPTER_RSVD_400G_9,		/**< 保留：占位，保持其后的枚举取值不变 */
+  YNIC_ADAPTER_YN400GA7B041C_1X400G,	/**< altera 1x400G光模式（YuanNIC-NH400-C） */
+  YNIC_ADAPTER_YN400GA7B041C_4X100G,	/**< altera 1x400G光模式（YuanNIC-NH400-C） */
+  YNIC_ADAPTER_YN400GA7B041C_1X200G,	/**< altera 1x400G光模式（YuanNIC-NH400-C） */
+  YNIC_ADAPTER_YN400GA7B041C_1X100G,	/**< altera 1x400G光模式（YuanNIC-NH400-C） */
+  YNIC_ADAPTER_YN400GA7B041C_1X50G,	/**< altera 4x100G光模式（YuanNIC-NH400-C） */
 
   YNIC_ADAPTER_TYPE_MAX,			/**< YuanGrid 网卡类型的最大值，用于范围校验 */
 } md_adapter_type_t;

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 OR BSD-2-Clause */
 /*
- * yuanrdma_hw.h - YuanNIC-NH400-B RoCEv2 引擎的硬件接口（CSR、WQE、CQE、表项格式）
+ * yuanrdma_hw.h - YuanNIC-NH400-C RoCEv2 引擎的硬件接口（CSR、WQE、CQE、表项格式）
  *
  * 内核驱动、rdma-core provider 共用；RTL 侧对应 code/release/src/roce/roce_pkg.sv，
  * 两边改动必须同步。所有多字节字段为小端（host 序），除非注明 "网络序"。
@@ -330,7 +330,7 @@ struct ynrdma_cqe {
 #define   YNRDMA_DBG_CORE_TX_OFFSET   0x2Cu  /* 当前 WQE 内偏移 */
 
 /* ---------------- 拥塞控制寄存器（AVMM 0x0800..0x0BFC，需 full_pfc_func 镜像） ----------------
- * 三个窗口，各由一个模块独占（见 code/quartus/YuanNIC-NH400-A/active/rtl_src/roce/ 下对应 RTL）：
+ * 三个窗口，各由一个模块独占（见 code/quartus/YuanNIC-NH400-C/active/rtl_src/roce/ 下对应 RTL）：
  *   0x0800..0x09FC  PFC 控制器     roce_pfc.sv
  *   0x0A00..0x0AFC  ECN / CNP（NP） roce_cnp.sv
  *   0x0B00..0x0BFC  DCQCN（RP）     roce_dcqcn.sv

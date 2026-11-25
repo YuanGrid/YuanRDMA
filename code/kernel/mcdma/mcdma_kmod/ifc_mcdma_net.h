@@ -83,7 +83,7 @@
 
 /* TX 单帧上限（字节）。MCDMA H2D 出来后要过 qdma_top.sv 的 u2_tx_fifo_inst：
  * DCFIFO、PACKET_FIFO（整包写完才放行）、FIFO_DEPTH = 64 拍 × 128 B，写到约 60 拍就满。
- * 比这长的帧永远凑不齐 tlast，H2D 通路会永久卡死（三块板的 release 工程都一样）。
+ * 比这长的帧永远凑不齐 tlast，H2D 通路会永久卡死。
  * 保守取 58 拍 = 7424 B，xmit 直接丢掉更长的帧，不交给硬件。 */
 #define IFC_MCDMA_TX_FRAME_MAX	(58 * 128)
 #define IFC_MCDMA_TX_MAX_SEGS	DIV_ROUND_UP(IFC_MCDMA_TX_FRAME_MAX, IFC_MCDMA_BUF_SIZE)

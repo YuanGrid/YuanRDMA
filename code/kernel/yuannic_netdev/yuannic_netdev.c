@@ -1469,53 +1469,19 @@ int ynic_get_sys_card_info(uint32_t vendor_id, ynic_nsdev_t *knsdev)
                             knsdev->ynic_adapter[nic].adapter_type = YNIC_ADAPTER_TYPE_UNKNOWN;
                             break;
                         }
-                        if (mhwver == 0) {
+                        if (mhwver == 2) {  /* YuanNIC-NH400-C */
                             if (kspd == MD_LINK_SPEED_400G) {
-                                knsdev->ynic_adapter[nic].adapter_type = YNIC_ADAPTER_YN400GA7B027A_1X400G;
+                                knsdev->ynic_adapter[nic].adapter_type = YNIC_ADAPTER_YN400GA7B041C_1X400G;
                             } else if (kspd == MD_LINK_SPEED_200G) {
-                                knsdev->ynic_adapter[nic].adapter_type = YNIC_ADAPTER_YN400GA7B027A_1X200G;
+                                knsdev->ynic_adapter[nic].adapter_type = YNIC_ADAPTER_YN400GA7B041C_1X200G;
                             } else if (kspd == MD_LINK_SPEED_100G) {
                                 if (kmulpt > 1) {
-                                    knsdev->ynic_adapter[nic].adapter_type = YNIC_ADAPTER_YN400GA7B027A_4X100G;
+                                    knsdev->ynic_adapter[nic].adapter_type = YNIC_ADAPTER_YN400GA7B041C_4X100G;
                                 } else {
-                                    knsdev->ynic_adapter[nic].adapter_type = YNIC_ADAPTER_YN400GA7B027A_1X100G;
+                                    knsdev->ynic_adapter[nic].adapter_type = YNIC_ADAPTER_YN400GA7B041C_1X100G;
                                 }
                             } else if (kspd == MD_LINK_SPEED_50G) {
-                                knsdev->ynic_adapter[nic].adapter_type = YNIC_ADAPTER_YN400GA7B027A_1X50G;
-                            } else {
-                                printk(KERN_ERR "Network Card actual speed %u Invalid.\n", kspd);
-                                knsdev->ynic_adapter[nic].adapter_type = YNIC_ADAPTER_TYPE_UNKNOWN;
-                            }
-                        } else if (mhwver == 1) {
-                            if (kspd == MD_LINK_SPEED_400G) {
-                                knsdev->ynic_adapter[nic].adapter_type = YNIC_ADAPTER_YN400GA7B027B_1X400G;
-                            } else if (kspd == MD_LINK_SPEED_200G) {
-                                knsdev->ynic_adapter[nic].adapter_type = YNIC_ADAPTER_YN400GA7B027B_1X200G;
-                            } else if (kspd == MD_LINK_SPEED_100G) {
-                                if (kmulpt > 1) {
-                                    knsdev->ynic_adapter[nic].adapter_type = YNIC_ADAPTER_YN400GA7B027B_4X100G;
-                                } else {
-                                    knsdev->ynic_adapter[nic].adapter_type = YNIC_ADAPTER_YN400GA7B027B_1X100G;
-                                }
-                            } else if (kspd == MD_LINK_SPEED_50G) {
-                                knsdev->ynic_adapter[nic].adapter_type = YNIC_ADAPTER_YN400GA7B027B_1X50G;
-                            } else {
-                                printk(KERN_ERR "Network Card actual speed %u Invalid.\n", kspd);
-                                knsdev->ynic_adapter[nic].adapter_type = YNIC_ADAPTER_TYPE_UNKNOWN;
-                            }
-                        } else if (mhwver == 2) {
-                            if (kspd == MD_LINK_SPEED_400G) {
-                                knsdev->ynic_adapter[nic].adapter_type = YNIC_ADAPTER_YN400GA7B027C_1X400G;
-                            } else if (kspd == MD_LINK_SPEED_200G) {
-                                knsdev->ynic_adapter[nic].adapter_type = YNIC_ADAPTER_YN400GA7B027C_1X200G;
-                            } else if (kspd == MD_LINK_SPEED_100G) {
-                                if (kmulpt > 1) {
-                                    knsdev->ynic_adapter[nic].adapter_type = YNIC_ADAPTER_YN400GA7B027C_4X100G;
-                                } else {
-                                    knsdev->ynic_adapter[nic].adapter_type = YNIC_ADAPTER_YN400GA7B027C_1X100G;
-                                }
-                            } else if (kspd == MD_LINK_SPEED_50G) {
-                                knsdev->ynic_adapter[nic].adapter_type = YNIC_ADAPTER_YN400GA7B027C_1X50G;
+                                knsdev->ynic_adapter[nic].adapter_type = YNIC_ADAPTER_YN400GA7B041C_1X50G;
                             } else {
                                 printk(KERN_ERR "Network Card actual speed %u Invalid.\n", kspd);
                                 knsdev->ynic_adapter[nic].adapter_type = YNIC_ADAPTER_TYPE_UNKNOWN;

@@ -33,7 +33,7 @@
 #define CARD_ADAPTER_FLAG		0xAD00
 #define CARD_INTERFACE_ID		-1
 #define CARD_SN_PREFIX			"MD"
-#define CARD_MODEL_YN400G		"YN400GA7B027"	/* -q 的 TYPE：国产 400G 板统一型号 */
+#define CARD_MODEL_YN400G		"YN400GA7B041C"	/* 400G 板型号（YuanNIC-NH400-C），-c 与 -q 的 TYPE 共用 */
 #define CARD_VERSION_PREFIX		"ba"
 /*
  * 4 lane 引擎后 rpd 约 37MB，超过原来的 32MB；flash 是 2Gb(256MB)。
@@ -143,7 +143,7 @@ void usage(void)
 	printf("       %s [-h|--help] [-V|--version]\n", NF_PROGRAM_NAME);
 	printf("\n");
 	printf("  -c, --card model                Select the card model 400G/100G/25G/10G to be operated,\n");
-	printf("                                  model name is YN400GA7B027A(YN400GA7B027B/YN400GA7B027C)/\n");
+	printf("                                  model name is YN400GA7B041C/\n");
 	printf("                                  MD2X100GF27LA/MD4X025GF27LB/MD4X025GF27LA/\n");
 	printf("                                  MD2X025GF27LA/MD4X010GF27LA\n");
 	printf("  -a, --adapter <num>             Select the Adapter to be operated,Use with -p/-s/-r\n");
@@ -166,21 +166,21 @@ void usage(void)
 	printf("\n");
 	printf("example:\n");
 	printf("  update program\n");
-	printf("    ynictrl -c YN400GA7B027A -a 0 -p YN400GA7B027A-R26.12.16-B6456-20261119-1X400G-a0db90d2.rpd\n");
+	printf("    ynictrl -c YN400GA7B041C -a 0 -p YN400GA7B041C-R26.12.02-B0116-20261123-1X400G-4203a24c.rpd\n");
 	printf("  write the mac address of a port of the adapter\n");
-	printf("    ynictrl -c YN400GA7B027A -a 0 -i 0 -s b0:47:5e:d0:00:00\n");
+	printf("    ynictrl -c YN400GA7B041C -a 0 -i 0 -s b0:47:5e:d0:00:00\n");
 	printf("  read the mac address of all ports of the adapter\n");
-	printf("    ynictrl -c YN400GA7B027A -a 0 -r\n");
+	printf("    ynictrl -c YN400GA7B041C -a 0 -r\n");
 	printf("  read the mac address of a port of the adapter\n");
-	printf("    ynictrl -c YN400GA7B027A -a 0 -i 0 -r\n");
+	printf("    ynictrl -c YN400GA7B041C -a 0 -i 0 -r\n");
 	printf("  update program and set the serial number in the same flash update\n");
-	printf("    ynictrl -c YN400GA7B027A -a 0 -p YN400GA7B027A-R26.12.16-B6456-20261119-1X400G-a0db90d2.rpd -n MD400G260713002\n");
+	printf("    ynictrl -c YN400GA7B041C -a 0 -p YN400GA7B041C-R26.12.02-B0116-20261123-1X400G-4203a24c.rpd -n MD400G260713002\n");
 	printf("  write the serial number of the adapter\n");
-	printf("    ynictrl -c YN400GA7B027A -a 0 -n MD010G250217001\n");
+	printf("    ynictrl -c YN400GA7B041C -a 0 -n MD010G250217001\n");
 	//printf("  select the boot image 2\n");
-	//printf("    ynictrl -c YN400GA7B027A -j 2\n");
+	//printf("    ynictrl -c YN400GA7B041C -j 2\n");
 	printf("  fec enable\n");
-	printf("    ynictrl -c YN400GA7B027A -a 0 -i 0 -f enable\n");
+	printf("    ynictrl -c YN400GA7B041C -a 0 -i 0 -f enable\n");
 	printf("  (其余型号把 -c 后面的型号换掉即可，如 -c MD2X100GF27LA)\n");
 }
 
@@ -296,9 +296,8 @@ int neti_model_code(const char *model)
 	memcpy(name, model, len);
 	name[len] = '\0';
 
-	/* 国产 400G 板：YN400GA7B027A / B / C，统一走 Altera QSPI flash 流程 */
-	if(strncmp(name, "YN400GA7B027", 12) == 0 &&
-	   (name[12] == '\0' || (name[12] >= 'A' && name[12] <= 'C' && name[13] == '\0'))) {
+	/* 400G 板 YN400GA7B041C，走 Altera QSPI flash 流程 */
+	if(strcmp(name, CARD_MODEL_YN400G) == 0) {
 		return MODEL_400G;
 	}
 
@@ -481,14 +480,14 @@ int neti_proname_valid_new(char cmd, const char *name)
 
 	if(cmd == 'p') {
 		pattern =
-			"^(YN400GA7B027[ABC]|MD[0-9]X[0-9]{3}G[FCW][0-9]{2}L[ABC])"	  // 型号（新 YN400GA7B027A / 旧 MD2X100GF27LA）
+			"^(YN400GA7B041C|MD[0-9]X[0-9]{3}G[FCW][0-9]{2}L[ABC])"	  // 型号（YN400GA7B041C / 旧 MD2X100GF27LA）
 			"-R[0-9]{2}\\.[0-9]{2}\\.[0-9]{2}"		   // 版本号（R25.06.07）
 			"-B[0-9]{4,}"								// 构建编号（B0029）
 			"-[0-9]{8}"								  // 日期（20250322）
 			"-[0-9a-zA-Z]+X[0-9D]+G-[0-9a-zA-Z]{8}\\..+$";					 // 结尾和扩展名
 	} else if(cmd == 'b') {
 		pattern =
-			"^(YN400GA7B027[ABC]|MD[0-9]X[0-9]{3}G[FCW][0-9]{2}L[ABC])"
+			"^(YN400GA7B041C|MD[0-9]X[0-9]{3}G[FCW][0-9]{2}L[ABC])"
 			"-[AB][0-9]{2}\\.[0-9]{2}\\.[0-9]{2}"
 			"-B[0-9]{4,}"
 			"-[0-9]{8}"
@@ -514,9 +513,9 @@ neti_quit:
 	if(ret == XST_FAILURE) {
 		printf("File format error,it should be similar to ");
 		if(cmd == 'p') {
-			printf("<YN400GA7B027A-R26.12.16-B6456-20261119-1X400G-a0db90d2.rpd>\n");
+			printf("<YN400GA7B041C-R26.12.02-B0116-20261123-1X400G-4203a24c.rpd>\n");
 		} else if(cmd == 'b') {
-			printf("<YN400GA7B027A-B26.12.16-B6456-20261119-1X400G-a0db90d2.rpd>\n");
+			printf("<YN400GA7B041C-B26.12.02-B0116-20261123-1X400G-4203a24c.rpd>\n");
 		}
 		fflush(stdout);
 	}
@@ -1125,7 +1124,7 @@ int neti_get_sys_info(int ifport)
 					}
 					printf("   TYPE        : ");
 					if(tspd == 4) {
-						/* 400G 板（YN400GA7B027A/B/C）统一显示产品型号 */
+						/* 400G 板显示产品型号 */
 						printf("%s\n", CARD_MODEL_YN400G);
 					} else if((tspd >= 0) && (tspd <= 4) && (tif >= 0) && (tif <= 2)
 							&& (tbrd >= 0) && (tbrd <= 1) && (thw >= 0) && (thw <= 2)) {
@@ -1758,7 +1757,7 @@ int neti_sernum_convert(u8 *src, int len)
 }
 
 /*
- * 从升级件文件名取版本串：YN400GA7B027C-R26.12.02-B0116-20261123-1X400G-4203a24c.rpd
+ * 从升级件文件名取版本串：YN400GA7B041C-R26.12.02-B0116-20261123-1X400G-4203a24c.rpd
  * → R26.12.02-B0116-20261123-1X400G-4203a24c（型号后第一个 '-' 到扩展名之前）。
  * 只看文件名本身，不看目录（目录里带 '-' 时会截错位置），不改写调用者的字符串。
  * 返回 1 = 取到版本串；0 = 不是 Release/All 升级件（如 Boot 镜像），不写版本串；-1 = 格式错。
@@ -2783,7 +2782,7 @@ int main(int argc, char *argv[])
 			case 'c':
 				flag = neti_model_code(optarg);
 				if(flag == MODEL_MIN) {
-					printf("card model error! should be YN400GA7B027A/B/C or MDxxxxxx\n");
+					printf("card model error! should be YN400GA7B041C or MDxxxxxx\n");
 					ret = XST_FAILURE;
 					goto quit_pro;
 				}
@@ -2906,7 +2905,7 @@ int main(int argc, char *argv[])
 					printf("optarg=%s,optind=%d,argv[optind]=%s\n", optarg, optind,
 						   argv[optind] ? argv[optind] : "(null)");
 				/*
-				 * 文件名本身就是升级件时直接用 optarg（新 YN400GA7B027A 镜像不含 "MD"，
+				 * 文件名本身就是升级件时直接用 optarg（YN400GA7B041C 镜像不含 "MD"，
 				 * 旧代码在这里会把 optarg 丢掉、拿 argv[optind] 顶替，而 -p 的参数已经
 				 * 被 optarg 吃掉，argv[optind] 可能是 NULL）。
 				 * "1 xxx.bin" / "MD..." 开头的旧用法（100G 多镜像）保持原样。
@@ -3015,7 +3014,7 @@ int main(int argc, char *argv[])
 					addr = ALTERA_HW_JUMPTABLE_ADDR;
 					addr1 = ALTERA_IMG_SECTOR_ADDR;
 				} else {
-					printf("card model error,should be YN400GA7B027A/B/C or 100G/25G model\n");
+					printf("card model error,should be YN400GA7B041C or 100G/25G model\n");
 					ret = XST_FAILURE;
 					goto quit_pro;
 				}
@@ -3048,7 +3047,7 @@ int main(int argc, char *argv[])
 				} else if(flag == MODEL_400G) {
 					addr = ALTERA_IMG_SECTOR_ADDR;
 				} else {
-					printf("card model error,should be YN400GA7B027A/B/C or 100G/25G model\n");
+					printf("card model error,should be YN400GA7B041C or 100G/25G model\n");
 					ret = XST_FAILURE;
 					goto quit_pro;
 				}

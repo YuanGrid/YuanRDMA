@@ -72,14 +72,14 @@ if [ "$FPGA_BIN_TYPE" != "all" ] && [ "$FPGA_BIN_TYPE" != "boot" ] && [ "$FPGA_B
      build_usage
 fi
 
-FPGA_NIC_NAME=${FPGA_NIC_NAME:-YN400GA7B027C}
+FPGA_NIC_NAME=${FPGA_NIC_NAME:-YN400GA7B041C}
 
 # 工程目录名（code/quartus 下），拷贝到构建目录后换成带 boot_/active_ 前缀的目录名
 PRO_DIR_NAME=YuanNIC-NH400-C
 BASE_PRO_NAME=boot_yuanrdma_c_400g
 RELS_PRO_NAME=active_yuanrdma_c_400g
 # boot 工程已冻结（2026-11-21）：all 模式不再编译它，直接用这里预置的 Factory 镜像。
-# 型号段与 FPGA_NIC_NAME 一致——A/C 两块的器件和 flash loader 不同，镜像不能混用。
+# 型号段与 FPGA_NIC_NAME 一致。
 BOOT_IMG_DIR=${BOOT_IMG_DIR:-${FWB_SCRIPT_DIR}/../../firmware/boot_images/${FPGA_NIC_NAME}}
 BOOT_IMG_SOF=${BOOT_IMG_SOF:-${BOOT_IMG_DIR}/YuanRDMA_boot.sof}
 BOOT_IMG_RPD=${BOOT_IMG_RPD:-${BOOT_IMG_DIR}/YuanRDMA_boot.rpd}
@@ -343,8 +343,7 @@ ls -l $FWB_PWD/${FPGA_NIC_NAME}*
 
 # ---------------------------------------------------------------
 # 归档：把带版本号的镜像另存到公共的仓库根 firmware/，避免下次编译
-# 被脚本开头的 rm *.sof *.rpd 清掉。三块板（LA/LC/LD）的镜像汇总到同一个
-# 目录，烧写脚本按镜像名里的型号段直接定位，不必去各板目录里翻。
+# 被脚本开头的 rm *.sof *.rpd 清掉。烧写脚本按镜像名里的型号段在这里直接定位。
 # 文件名已含 Build 号、日期和 githash，本身就是唯一标识，同名直接覆盖。
 # 只归档带版本号的副本，固定名（*_Base/_Release/_All）只留在运行目录。
 # 归档目录不在运行目录里，脚本开头的 rm *.sof 清不到它。

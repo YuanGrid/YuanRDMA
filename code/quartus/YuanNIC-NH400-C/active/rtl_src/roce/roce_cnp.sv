@@ -19,7 +19,7 @@
 //   每个 lane 收到 grant 就用自己那个 QP 组一个 CNP，从**本 lane** 的 roce_tx 出去
 //   （CNP 的 dmac/dip/dqpn/sport 都从该 QP 的 QPC 取，所以必须由属主 lane 发）。
 //
-// 计数器（core 域，拍 = core_clk，A 卡 250 MHz → 4 ns）
+// 计数器（core 域，拍 = core_clk，250 MHz → 4 ns）
 //   np_ecn_marked_roce_packets  收到的 CE 数据包数（含被限频丢弃的）——与业界通用计数同名
 //   np_cnp_sent                 实际发出的 CNP 数
 //   rp_cnp_handled              收到的 CNP 中被处理的（阶段 3 起由 RP 逻辑置位；现在恒 0）

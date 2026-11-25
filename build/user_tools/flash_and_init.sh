@@ -19,12 +19,12 @@
 #   ./flash_and_init.sh --sram  B6369                # 烧 SRAM（.sof），掉电回退
 #   ./flash_and_init.sh --flash <镜像名 | jic 路径 | Build 号>
 #   ./flash_and_init.sh --sram  <镜像名 | sof 路径 | Build 号>
-#   ./flash_and_init.sh --flash YN400GA7B027C-A26.12.02-B0116-20261123-1X400G-4203a24c      # .jic 是 A 型（boot+active 整片）
-#   ./flash_and_init.sh --sram  YN400GA7B027C-R26.12.02-B0116-20261123-1X400G-4203a24c.sof  # .sof 用 R 型（active）
+#   ./flash_and_init.sh --flash YN400GA7B041C-A26.12.02-B0116-20261123-1X400G-4203a24c      # .jic 是 A 型（boot+active 整片）
+#   ./flash_and_init.sh --sram  YN400GA7B041C-R26.12.02-B0116-20261123-1X400G-4203a24c.sof  # .sof 用 R 型（active）
 #                                                    # 完整镜像名（可带 .jic），从型号段
-#                                                    # 型号段（YN400GA7B027A/C）认板，在
+#                                                    # 型号段（YN400GA7B041C）认板，在
 #                                                    # firmware/ 里找
-#   ./flash_and_init.sh --flash B6369                # 简写：三个板都找，匹配到多块板就报错
+#   ./flash_and_init.sh --flash B6369                # 简写：在 firmware/ 里按 Build 号找
 #   ./flash_and_init.sh --flash path/to/xxx.jic      # 显式路径，由调用者负责
 #   ./flash_and_init.sh --sram  path/to/xxx.sof      # 同上，烧 SRAM
 #   ./flash_and_init.sh --no-flash                   # 兼容旧写法，等同不带参数（两个开关都关）
@@ -41,8 +41,7 @@
 #   CABLE         JTAG 线，默认取 `jtagconfig` 列出的第一根（USB 口号重启后会变，
 #                 写死 [1-1] 会报 213013 cable not detected）
 #   DEVICE_INDEX  器件索引（只对 --sram 烧 .sof 有意义），默认 1
-#   CFG_DEVICE    配置器件名（只对 --flash 烧 .jic 有意义），默认按镜像认板：
-#                 C 卡（YN400GA7B027C-*）= MX66U2G，其余 = MT25QU02G，与各板 JIC 里记录的
+#   CFG_DEVICE    配置器件名（只对 --flash 烧 .jic 有意义），默认 MX66U2G，与 JIC 里记录的
 #                 flash 器件一致。**尚未在实卡上核对**，
 #                 如果 quartus_pgm 报器件名不认识，用 `quartus_pgm --list` 或
 #                 Programmer GUI 的 Auto Detect 看实际型号后覆盖本变量
@@ -97,10 +96,8 @@ BDF=${BDF:-0000:6f:00.0}
 CABLE=${CABLE:-}
 DEVICE_INDEX=${DEVICE_INDEX:-1}
 # 配置器件名，只用于 --flash 烧 .jic 的 `pvi;<cfg_dev>;<file>` 形式。
-# 取值依据：各板 fpga_gen_jic.pfg 的 <flash_device>——A 卡 MT25QU02G，C 卡板载 flash 为 MX66U2G。
-# 留空则在烧写前按镜像认板选。注意 YuanNIC-NH400-A 交付件 ma_a3-20241012_jic.map 的分区只到
-# 0x08505FFF（约 134 MB），不足以反证 flash 就是 2 Gb —— 这个值**没有在实卡上核对过**。
-CFG_DEVICE=${CFG_DEVICE:-}
+# 取值依据：fpga_gen_jic.pfg 的 <flash_device>，板载 flash 为 MX66U2G——这个值**没有在实卡上核对过**。
+CFG_DEVICE=${CFG_DEVICE:-MX66U2G}
 QUARTUS_BIN=${QUARTUS_BIN:-/home/quartus/program/quartus/bin}
 NIC_IP=${NIC_IP:-192.168.50.1}
 NIC_PREFIX=${NIC_PREFIX:-24}
@@ -128,26 +125,23 @@ ok()   { printf '   \033[32mOK\033[0m   %s\n' "$*"; }
 warn() { printf '   \033[33mWARN\033[0m %s\n' "$*"; }
 die()  { printf '   \033[31mFAIL\033[0m %s\n' "$*" >&2; exit 1; }
 
-# 板卡标识（img_model 的输出：A / C / LD）-> 板卡名。A = YuanNIC-NH400-A，C = YuanNIC-NH400-C，
-# LD = YuanNIC-NH400-B。LA/LC 是旧镜像名的写法，一并接受。
+# 板卡标识（img_model 的输出：C）-> 板卡名。
 board_name() {
     case "$1" in
-        A|LA) echo "YuanNIC-NH400-A" ;;
-        C|LC) echo "YuanNIC-NH400-C" ;;
-        LD) echo "YuanNIC-NH400-B" ;;
-        *)  echo "未知板卡" ;;
+        C) echo "YuanNIC-NH400-C" ;;
+        *) echo "未知板卡" ;;
     esac
 }
 
-# 从文件名里取型号段（YN400GA7B027A/C；旧名 *LD-* 仍认），取不到返回空。
+# 从文件名里取型号段（YN400GA7B041C），取不到返回空。
 # .sof 和 .jic 两种名字都要认——同一个 Build 归档时两个文件同名不同后缀。
 img_model() {
     local b
     b=$(basename -- "$1")
     b=${b%.sof}
     b=${b%.jic}
-    # 型号段 → 板卡标识：A/C 取自 YN400GA7B027{A,C}，LD 取自 YuanNIC-NH400-B 的镜像型号段。
-    printf '%s\n' "$b" | sed -nE 's/^YN400GA7B027([AC])-.*/\1/p; s/^[A-Za-z0-9]+LD-.*/LD/p'
+    # 型号段 YN400GA7B041C → 板卡标识 C。
+    printf '%s\n' "$b" | sed -nE 's/^YN400GA7B041(C)-.*/\1/p'
 }
 
 while [ $# -gt 0 ]; do
@@ -202,11 +196,11 @@ fi
 if [ "$FLASH_MODE" != 0 ] && [ -n "$IMG" ] && [ ! -f "$IMG" ]; then
     case "$IMG" in
         B[0-9]*) ;;
-        YN400GA7B027A-*|YN400GA7B027C-*|*LD-*) ;;
+        YN400GA7B041C-*) ;;
         # 路径形式但文件不存在：报明确的「找不到文件」，不要等到后面
         */*) die "找不到镜像文件：$IMG" ;;
         *)   die "认不出镜像参数「$IMG」：应为 .${IMG_EXT} 路径、B<Build> 简写，
-        或 YN400GA7B027A-… / YN400GA7B027C-… 形式的完整镜像名" ;;
+        或 YN400GA7B041C-… 形式的完整镜像名" ;;
     esac
 fi
 
@@ -263,10 +257,10 @@ sleep 1
 
 # ================================================================ 3. JTAG 烧写
 if [ "$FLASH_MODE" != 0 ]; then
-    [ -n "$IMG" ] || die "需要镜像名（YN400GA7B027A-… / YN400GA7B027C-…）、.${IMG_EXT} 路径或 Build 号，例：./flash_and_init.sh --$([ "$FLASH_MODE" = 1 ] && echo flash || echo sram) B0116"
+    [ -n "$IMG" ] || die "需要镜像名（YN400GA7B041C-…）、.${IMG_EXT} 路径或 Build 号，例：./flash_and_init.sh --$([ "$FLASH_MODE" = 1 ] && echo flash || echo sram) B0116"
 
     # 三种参数形式：显式文件路径 / 完整镜像名 / B<Build> 简写。
-    # 完整镜像名按型号段（YN400GA7B027A/C）选配置器件；不读板卡实际型号，型号对不对由调用者确认。
+    # 完整镜像名按型号段（YN400GA7B041C）认板；不读板卡实际型号，型号对不对由调用者确认。
     if [ -f "$IMG" ]; then
         # 显式路径：板卡由调用者负责，型号段能认出就打出来。
         # 后缀必须和开关对上——--flash 给 .sof 会被烧成「烧 flash」的名义下的 SRAM 配置，
@@ -280,8 +274,8 @@ if [ "$FLASH_MODE" != 0 ]; then
         title=$(basename -- "$IMG")
         IMG=$(cd "$(dirname "$IMG")" && pwd)/$(basename -- "$IMG")
     elif [[ "$IMG" =~ ^B[0-9]+$ ]]; then
-        # 简写：只在 firmware/ 里找（三块板的镜像都归档在这里）。
-        # 匹配到多块板时报错退出并列出候选，不再静默取最新。
+        # 简写：只在 firmware/ 里找（编译脚本把镜像归档在这里）。
+        # 匹配到多个型号段时报错退出并列出候选，不再静默取最新。
         build=$IMG
         found=""
         models=""
@@ -326,7 +320,7 @@ if [ "$FLASH_MODE" != 0 ]; then
         base=${IMG%.sof}
         base=${base%.jic}
         IMG_MODEL=$(img_model "$base")
-        [ -n "$IMG_MODEL" ] || die "认不出镜像名的型号段（期望 YN400GA7B027A-… / YN400GA7B027C-…）：$IMG"
+        [ -n "$IMG_MODEL" ] || die "认不出镜像名的型号段（期望 YN400GA7B041C-…）：$IMG"
         title=$base
         IMG="$FW_BACKUP/$base.${IMG_EXT}"
         [ -f "$IMG" ] || die "找不到 $base.${IMG_EXT}：
@@ -358,12 +352,6 @@ if [ "$FLASH_MODE" != 0 ]; then
     # jic 的配置器件名由 CFG_DEVICE 决定（见文件头环境变量说明）；烧 jic 不需要 device index，
     # 器件在 JTAG 链上的位置由 SFL/load 决定。
     if [ "$FLASH_MODE" = 1 ]; then
-        if [ -z "$CFG_DEVICE" ]; then
-            case "$IMG_MODEL" in
-                C|LC) CFG_DEVICE=MX66U2G ;;
-                *)  CFG_DEVICE=MT25QU02G ;;
-            esac
-        fi
         PGM_OP="pvi;$CFG_DEVICE;$IMG"
         PGM_TIMEOUT=$FLASH_TIMEOUT
         printf '   配置器件: %s（可用 CFG_DEVICE 覆盖）\n' "$CFG_DEVICE"
@@ -677,7 +665,7 @@ else
 fi
 
 if [ -x "$NIC/bin/ynictrl" ]; then
-    ver=$("$NIC/bin/ynictrl" -c YN400GA7B027A -a 0 -q 2>/dev/null | grep -E "VERSION|CHIPVERSION")
+    ver=$("$NIC/bin/ynictrl" -c YN400GA7B041C -a 0 -q 2>/dev/null | grep -E "VERSION|CHIPVERSION")
     [ -n "$ver" ] && echo "$ver" | sed 's/^/        /' || warn "ynictrl 读不到版本（yuannic 没加载？）"
 fi
 

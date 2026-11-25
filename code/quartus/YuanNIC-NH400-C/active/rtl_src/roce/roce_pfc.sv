@@ -4,7 +4,7 @@
 //
 // 为什么判定放在 mac_clk 域
 //   F-tile 的 i_tx_pfc / i_tx_pause 与 o_rx_pfc / o_rx_pause 都在 eth_mac_clk（= o_clk_pll，
-//   A 型板 415 MHz）域；rx_front 的 staging 占用、RoCE 每 lane TX 出口也在同一域。PFC 的
+//   约 415 MHz）域；rx_front 的 staging 占用、RoCE 每 lane TX 出口也在同一域。PFC 的
 //   响应时间要紧（400G 下 1 µs ≈ 50 KB），所以收发两个方向的判定都在 mac 域完成；跨域的只有
 //   配置 bundle（准静态，两级同步）与给 core 域准入/计数用的电平（两级同步）。
 //
@@ -39,7 +39,7 @@
 //     一旦卡死（PCIe/驱动挂住），不放开会把对端永远按死。源电平回落后重新武装。
 //
 // ---------------------------------------------------------------------------------------------
-// 计数（core 域，TICK 单位 = core_clk 拍；A 卡 250 MHz → 4 ns，换算 µs 除以 CORE_CLOCK_MHZ）
+// 计数（core 域，TICK 单位 = core_clk 拍；250 MHz → 4 ns，换算 µs 除以 CORE_CLOCK_MHZ）
 //   0x900 + 4*k：
 //     k = 0..8    RX_EVT[p]   生效的被暂停段数（上升沿；刷新帧不产生新段，所以不是帧数）
 //     k = 9..17   RX_TICK[p]  生效的被暂停持续拍数

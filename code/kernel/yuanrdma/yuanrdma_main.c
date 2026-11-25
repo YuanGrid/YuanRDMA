@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0 OR BSD-2-Clause
 /*
- * yuanrdma_main.c - 模块加载：找到 yuanmcdma 已经接管的 YuanNIC-NH400-B（0x1172:0x0000）及其 netdev，
+ * yuanrdma_main.c - 模块加载：找到 yuanmcdma 已经接管的 YuanNIC-NH400-C（0x1172:0x0000）及其 netdev，
  * 映射 BAR2 中的 RoCE CSR 窗口，初始化引擎并注册 ib_device。
  */
 #include <linux/module.h>
@@ -12,12 +12,12 @@
 #include "yuanrdma_driver.h"
 
 MODULE_AUTHOR("YuanGrid");
-MODULE_DESCRIPTION("YuanNIC-NH400-B RoCEv2 RDMA driver");
+MODULE_DESCRIPTION("YuanNIC-NH400-C RoCEv2 RDMA driver");
 MODULE_LICENSE("Dual BSD/GPL");
 
 static ushort pci_device_id = 0x0000;
 module_param(pci_device_id, ushort, 0444);
-MODULE_PARM_DESC(pci_device_id, "PCI device id of the YuanNIC-NH400-B function (vendor 0x1172)");
+MODULE_PARM_DESC(pci_device_id, "PCI device id of the YuanNIC-NH400-C function (vendor 0x1172)");
 
 static struct yuanrdma_dev *yuanrdma_device;
 
@@ -265,7 +265,7 @@ static int __init yuanrdma_init(void)
 		BIT_ULL(IB_USER_VERBS_CMD_QUERY_QP) |
 		BIT_ULL(IB_USER_VERBS_CMD_REG_MR) |
 		BIT_ULL(IB_USER_VERBS_CMD_DEREG_MR);
-	strscpy(dev->ibdev.node_desc, "YuanNIC-NH400-B", sizeof(dev->ibdev.node_desc));
+	strscpy(dev->ibdev.node_desc, "YuanNIC-NH400-C", sizeof(dev->ibdev.node_desc));
 	addrconf_addr_eui48((u8 *)&dev->ibdev.node_guid, dev->netdev->dev_addr);
 	ret = ib_device_set_netdev(&dev->ibdev, dev->netdev, 1);
 	if (ret)

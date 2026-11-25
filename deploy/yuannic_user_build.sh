@@ -11,7 +11,7 @@
 #   YuanNIC_User_Package/ko/        内核模块：yuanrdma.ko / yuanmcdma.ko / yuannic.ko
 #   YuanNIC_User_Package/doc/       用户手册
 #   YuanNIC_User_Package/tools/     运维脚本（flash_and_init.sh / roce_perf_test.sh）
-#   YuanNIC_User_Package/firmware/  每块板最新一版烧写镜像（.jic + .rpd + .sof），取自 firmware/
+#   YuanNIC_User_Package/firmware/  最新一版烧写镜像（.jic + .rpd + .sof），取自 firmware/
 #   YuanNIC_User_Package-<版本>-<YYYYMMDD>.tgz
 #                                   整个目录的打包，可直接交给最终用户（包内顶层目录名不带版本）
 #
@@ -98,7 +98,6 @@ usage()
   CC_KERN        编内核模块用的编译器，默认自动找 gcc-12，找不到则用 gcc。
                  必须与编译当前内核的编译器一致（Ubuntu 22.04 HWE 6.8 是 gcc-12）。
   YUANNIC_FW_DIR    固件镜像目录，默认仓库根 firmware/。
-  YUANNIC_FW_BOARDS 只带指定板卡的镜像，如 "C"；默认每块板各带最新一版。
 
 做什么：
   1. 复制 code/github/rdma-core（v66）到 work/，注入 code/rdmasw/rdma-core-provider/yuanrdma，
@@ -119,7 +118,7 @@ usage()
   YuanNIC_User_Package/ko/         yuanrdma.ko / yuanmcdma.ko / yuannic.ko
   YuanNIC_User_Package/etc/libibverbs.d/  空目录，libibverbs 启动时 opendir 用（消除 Warning）
   YuanNIC_User_Package/doc/        用户手册
-  YuanNIC_User_Package/firmware/   每块板最新一版烧写镜像（.jic / .rpd / .sof + SHA256SUMS）
+  YuanNIC_User_Package/firmware/   最新一版烧写镜像（.jic / .rpd / .sof + SHA256SUMS）
   YuanNIC_User_Package-<版本>-<YYYYMMDD>.tgz   可直接交付的压缩包
 
 与系统 DOCA/OFED 的隔离：
@@ -575,7 +574,7 @@ YuanNIC_User_Package/
 ├── ko/                yuanrdma.ko / yuanmcdma.ko / yuannic.ko
 ├── etc/libibverbs.d/  provider 配置目录（libibverbs 启动时要读）
 ├── tools/             flash_and_init.sh（烧写 + 环境初始化）/ roce_perf_test.sh
-├── firmware/          每块板最新一版固件（.jic / .rpd / .sof，见 firmware/README.md）
+├── firmware/          最新一版固件（.jic / .rpd / .sof，见 firmware/README.md）
 └── doc/
     ├── user-guide.md      完整使用手册
     └── perftest-guide.md  perftest 测试指南
@@ -715,8 +714,8 @@ done
 
 ## 6. 固件更新（ynictrl）
 
-`-c` 写板卡型号（NH400-A 为 `YN400GA7B027A`，NH400-C 为 `YN400GA7B027C`），`-a` 是网卡序号（`-q` 输出里的
-Adapter 编号）。**镜像文件名开头的型号必须与板卡一致，ynictrl 不会替你核对**，烧错板会起不来。
+`-c` 写板卡型号 `YN400GA7B041C`，`-a` 是网卡序号（`-q` 输出里的 Adapter 编号）。
+镜像用包内 `firmware/` 里 `YN400GA7B041C-` 开头的文件；**ynictrl 不读取板卡的实际型号来核对**，烧之前先确认是这块卡。
 
 ```bash
 sudo ./bin/ynictrl -c <型号> -a 0 -q                                              # 查询当前版本
@@ -908,7 +907,7 @@ for t in flash_and_init.sh roce_perf_test.sh; do
 done
 
 # ---------------------------------------------------------------------------
-# 9. 固件镜像：每块板各取最新一版，把 .jic / .rpd / .sof 带进交付包
+# 9. 固件镜像：取最新一版，把 .jic / .rpd / .sof 带进交付包
 # ---------------------------------------------------------------------------
 # 交付包里带上烧写镜像，客户拿到包就能自己把卡烧到与本文档栈配套的 RTL 版本，
 # 不用再回开发机取固件。镜像名形如
@@ -918,9 +917,7 @@ done
 #        B = Boot / Factory（.rpd）
 # 「最新」按「日期，再按 Build 号」比：Build 号换版本序列时会重新起数，单看它会把
 # 旧序列排在前面；也不用 mtime——拷贝/重新归档会刷新 mtime。
-# 每块板（型号段 A / C …）各选各的，互不比较。
 #   YUANNIC_FW_DIR     镜像目录，默认仓库根 firmware/
-#   YUANNIC_FW_BOARDS  只带指定板卡，空格分隔的型号或末位字母（如 "C" 或 "YN400GA7B027C"）；默认全部
 log "9. 收集固件镜像"
 
 FW_SRC="${YUANNIC_FW_DIR:-$ROOT/firmware}"
@@ -931,14 +928,7 @@ fw_count=0
 if [ -d "$FW_SRC" ]; then
     # 找出目录里出现过的型号（只认带版本号的正规镜像，固定名的 *_Release.sof 之类不算）
     models=$(ls "$FW_SRC" 2>/dev/null \
-        | sed -n 's/^\(YN400GA7B027[A-Z]\)-[ABR][0-9][0-9.]*-B[0-9][0-9]*-[0-9]\{8\}-.*\.\(jic\|rpd\|sof\)$/\1/p' | sort -u)
-    if [ -n "${YUANNIC_FW_BOARDS:-}" ]; then
-        wanted=""
-        for w in $YUANNIC_FW_BOARDS; do
-            case "$w" in YN400GA7B027?) wanted="$wanted $w" ;; ?) wanted="$wanted YN400GA7B027$w" ;; *) die "YUANNIC_FW_BOARDS 里的 $w 不是型号也不是板卡字母" ;; esac
-        done
-        models=$(for m in $models; do case " $wanted " in *" $m "*) echo "$m" ;; esac; done)
-    fi
+        | sed -n 's/^\(YN400GA7B041C\)-[ABR][0-9][0-9.]*-B[0-9][0-9]*-[0-9]\{8\}-.*\.\(jic\|rpd\|sof\)$/\1/p' | sort -u)
     for model in $models; do
         # 版本键 = 类型字母之后的全部（<版本>-B<build>-<日期>-<速率>-<githash>），A/B/R 三类共用
         best_key=""; best_rank=""
@@ -974,17 +964,17 @@ if [ -d "$FW_SRC" ]; then
         cat > "$FW_OUT/README.md" <<'FWEOF'
 # 固件镜像
 
-每块板一组，文件名里的型号段区分板卡（`YN400GA7B027A` = NH400-A，`YN400GA7B027C` = NH400-C），
+文件名以型号段 `YN400GA7B041C`（YuanNIC-NH400-C）开头，
 `B<build>-<日期>` 是版本，与 `ynictrl -q` 读回的 VERSION 对应。烧之前先核对 `SHA256SUMS`。
 
 | 文件 | 用途 | 怎么烧 |
 |---|---|---|
-| `<型号>-A….jic` | 整片 flash 镜像（Factory boot + active） | JTAG：`tools/flash_and_init.sh --flash <文件名>`（掉电保持，配置器件按型号自动选） |
+| `<型号>-A….jic` | 整片 flash 镜像（Factory boot + active） | JTAG：`tools/flash_and_init.sh --flash <文件名>`（掉电保持，配置器件 MX66U2G） |
 | `<型号>-R….rpd` | active 镜像 | 在线升级：`bin/ynictrl -c <型号> -a 0 -p <文件>`（`-a` 是网卡序号；只写 active 区，Factory 区不动） |
 | `<型号>-B….rpd` | Factory boot 镜像 | 一般不需要单独烧（`ynictrl -b` 写备份区）；整片恢复用 `.jic` |
 | `<型号>-R….sof` | active 镜像（易失） | JTAG 临时加载：`tools/flash_and_init.sh --sram <文件名>`，掉电恢复 flash 里的版本 |
 
-型号必须与板卡一致。`flash_and_init.sh` 按文件名里的型号段选择配置 flash 器件，`ynictrl` 按 `-c` 走流程，
+`flash_and_init.sh` 只认型号段为 `YN400GA7B041C` 的镜像名，`ynictrl` 按 `-c` 走流程，
 **两者都不读取板卡的实际型号来核对**——烧之前请自己确认（`ynictrl -q` 的型号、卡上标签）。
 FWEOF
         echo "  共 $fw_count 个镜像，校验和写入 firmware/SHA256SUMS"

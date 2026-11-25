@@ -1,4 +1,4 @@
-# RoCE 引擎 core 时钟（U_clk200m|iopll_0_outclk1，A 型板 250 MHz，C 卡 125 MHz）与其他时钟之间
+# RoCE 引擎 core 时钟（U_clk200m|iopll_0_outclk1，250 MHz）与其他时钟之间
 # 全部经异步 FIFO / 同步器，按原工程 YuanRDMA.sdc 的做法设为异步时钟组。
 set roce_core_clock [get_clocks {U_clk200m|iopll_0_outclk1}]
 set_clock_groups -asynchronous -group $roce_core_clock -group [get_clocks {U_clk200m|iopll_0_outclk0}]

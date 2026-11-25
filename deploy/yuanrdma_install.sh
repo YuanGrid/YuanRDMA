@@ -363,6 +363,6 @@ else
 fi
 printf '  1. 编译前门禁 ：test/sim/rtl_prebuild_gate.sh\n'
 printf '  2. 编译用户态 ：cd deploy && ./yuannic_user_build.sh（产物仍出到 build/user_tools/YuanNIC_User_Package）\n'
-printf '  3. 编译固件   ：cd build/YuanNIC-NH400-A && ./yuannic_build.sh <VER> <BUILD> 1X400G all\n'
+printf '  3. 编译固件   ：cd build/YuanNIC-NH400-C && ./yuannic_build.sh <VER> <BUILD> 1X400G all\n'
 printf '  4. 上板       ：./flash_and_init.sh\n'
 exit 0

@@ -18,7 +18,7 @@ module roce_top
     parameter int USERF_W        = 7,
     parameter int CORE_CLOCK_MHZ = 250,
     // eth_mac_clk（F-tile o_clk_pll）频率，只用于 roce_pfc 的 µs tick（看门狗 / 最短保持）。
-    // A 卡 B6420 STA：tx_clkout|ch23 = 415.04 MHz。仿真台 mac_clk 2.4 ns ≈ 417 MHz，同取 415。
+    // STA：tx_clkout|ch23 = 415.04 MHz。仿真台 mac_clk 2.4 ns ≈ 417 MHz，同取 415。
     parameter int MAC_CLOCK_MHZ  = 415,
     // 软复位展宽拍数。0（默认）= CORE_CLOCK_MHZ * 5243（5.243 ms，上板值）；
     // 只给仿真用：台子 core 100 MHz 下默认要 52 万拍，cocotb 跑不动，tb_roce_sys 传 1000。
@@ -106,7 +106,7 @@ module roce_top
     wire mac_rst = !mac_rst_n;
 
     // ------------------------------------------------------------ 软复位展宽与分发
-    // CSR 在 core_clk（A 型板 125 MHz，B6409 起）产生单拍 soft_rst；mac_clk（~195 MHz）和 pcie_clk
+    // CSR 在 core_clk（250 MHz）产生单拍 soft_rst；mac_clk（~415 MHz）和 pcie_clk
     // （500 MHz）都比它快，单拍脉冲跨过去同样能被采到，但为了让下游状态机看到足够宽
     // 的复位，这里统一展宽成 SOFT_RST_HOLD 个 core 周期。
     //

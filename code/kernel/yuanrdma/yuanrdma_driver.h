@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 OR BSD-2-Clause */
 /*
- * yuanrdma_driver.h - YuanNIC-NH400-B RoCEv2 引擎的 ib_core 驱动（内部定义）。
+ * yuanrdma_driver.h - YuanNIC-NH400-C RoCEv2 引擎的 ib_core 驱动（内部定义）。
  *
  * 本驱动不占用 PCI 设备：PCI 和 netdev 由 yuanmcdma.ko（code/kernel/mcdma）负责，
  * 本驱动找到同一个 pci_dev 和它的 netdev，映射 BAR2 中的 RoCE 窗口，注册 ib_device。
