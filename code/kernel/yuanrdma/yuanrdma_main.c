@@ -255,6 +255,10 @@ static int __init yuanrdma_init(void)
 		BIT_ULL(IB_USER_VERBS_CMD_DEALLOC_PD) |
 		BIT_ULL(IB_USER_VERBS_CMD_CREATE_CQ) |
 		BIT_ULL(IB_USER_VERBS_CMD_DESTROY_CQ) |
+		/* 完成事件链：comp channel + req_notify_cq（yuanrdma_cq_event.c）。ib_core 的默认掩码里
+		 * 本来就有这两条，但上面是整体赋值，不列出来就被覆盖掉，ibv_create_comp_channel 会 EOPNOTSUPP。 */
+		BIT_ULL(IB_USER_VERBS_CMD_CREATE_COMP_CHANNEL) |
+		BIT_ULL(IB_USER_VERBS_CMD_REQ_NOTIFY_CQ) |
 		BIT_ULL(IB_USER_VERBS_CMD_CREATE_QP) |
 		BIT_ULL(IB_USER_VERBS_CMD_DESTROY_QP) |
 		BIT_ULL(IB_USER_VERBS_CMD_MODIFY_QP) |
@@ -268,12 +272,14 @@ static int __init yuanrdma_init(void)
 		goto disable;
 	/* 软件 GSI（QP1）：eth0 收包挂钩 + 发包 workqueue。必须在 ib_register_device 之前就位，
 	 * 因为 mad 客户端在注册过程中就会创建 QP1 并立即开始收包。 */
+	yuanrdma_cq_event_init(dev);
 	ret = yuanrdma_gsi_init(dev);
 	if (ret)
 		goto disable;
 	ret = ib_register_device(&dev->ibdev, "yuanrdma%d", &pdev->dev);
 	if (ret) {
 		yuanrdma_gsi_cleanup(dev);
+		yuanrdma_cq_event_cleanup(dev);
 		goto disable;
 	}
 	yuanrdma_device = dev;
@@ -306,6 +312,7 @@ static void __exit yuanrdma_exit(void)
 	csr = dev->csr;
 	ib_unregister_device(&dev->ibdev);
 	yuanrdma_gsi_cleanup(dev);		/* QP1 已随 ib_unregister_device 销毁，这里摘 rx_handler 与 wq */
+	yuanrdma_cq_event_cleanup(dev);		/* CQ 已全部销毁，确保轮询定时器停止 */
 	yuanrdma_write(dev, YNRDMA_REG_CTRL, 0);	/* 必须走 yuanrdma_write：PCIe5 下要 <<1 */
 	iounmap(csr);
 	dev_put(netdev);

@@ -3,7 +3,7 @@
 
 ifneq ($(KERNELRELEASE),)
 obj-m := yuanrdma.o
-yuanrdma-y := yuanrdma_main.o yuanrdma_verbs.o yuanrdma_gsi.o
+yuanrdma-y := yuanrdma_main.o yuanrdma_verbs.o yuanrdma_gsi.o yuanrdma_cq_event.o
 ccflags-y += -I$(src)/../../rdmasw/include -Wall
 else
 KVER ?= $(shell uname -r)

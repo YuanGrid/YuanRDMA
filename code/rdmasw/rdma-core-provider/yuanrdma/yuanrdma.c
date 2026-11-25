@@ -14,7 +14,8 @@ static const struct verbs_context_ops yuanrdma_context_ops = {
 	 * libibverbs 的 _compat 桩（ENOSYS/EINVAL）更容易定位。G2.1 Step 2 起是真实现
 	 * （RoCEv2 v4-mapped AH → dgid/sgid_index），但能否真发 UD 还取决于内核
 	 * create_qp 是否放行 IB_QPT_UD，见 yuanrdma_verbs.c 的注释。
-	 * req_notify_cq 不注册（未实现，且没有中断通路），理由见那边。 */
+	 * req_notify_cq 走内核命令：内核软件监视 CQ 环的 owner 位并投递完成事件
+	 * （内核 yuanrdma_cq_event.c），rdma_cm 的 comp channel 靠它。 */
 	.create_ah = yuanrdma_create_ah,
 	.destroy_ah = yuanrdma_destroy_ah,
 	.create_cq = yuanrdma_create_cq,
@@ -27,6 +28,7 @@ static const struct verbs_context_ops yuanrdma_context_ops = {
 	.poll_cq = yuanrdma_poll_cq,
 	.post_recv = yuanrdma_post_recv,
 	.post_send = yuanrdma_post_send,
+	.req_notify_cq = yuanrdma_req_notify_cq,
 	.query_device_ex = yuanrdma_query_device,
 	.query_port = yuanrdma_query_port,
 	.query_qp = yuanrdma_query_qp,

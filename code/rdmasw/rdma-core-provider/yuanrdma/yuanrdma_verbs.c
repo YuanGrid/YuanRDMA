@@ -163,6 +163,7 @@ struct ibv_qp *yuanrdma_create_qp(struct ibv_pd *pd, struct ibv_qp_init_attr *at
 	struct yuanrdma_create_qp_cmd_resp response = {};
 	struct ibv_create_qp command = {};
 	struct yuanrdma_qp *qp;
+	uint32_t want_inline;
 	void *ring;
 
 	/* UD（G2.1 Step 2）：provider 侧放行 IBV_QPT_UD。内核 create_qp
@@ -176,9 +177,16 @@ struct ibv_qp *yuanrdma_create_qp(struct ibv_pd *pd, struct ibv_qp_init_attr *at
 		errno = EOPNOTSUPP;
 		return NULL;
 	}
+	want_inline = attributes->cap.max_inline_data;
+	if (want_inline > YUANRDMA_MAX_INLINE) {
+		errno = EINVAL;
+		return NULL;
+	}
 	qp = calloc(1, sizeof(*qp));
 	if (!qp)
 		return NULL;
+	/* inline 由 provider 用跳板缓冲实现，内核不知道也不需要知道（它对 max_inline_data > 0 一律拒绝） */
+	attributes->cap.max_inline_data = 0;
 	if (ibv_cmd_create_qp(pd, &qp->ibv_qp, attributes, &command, sizeof(command),
 			      &response.ibv_resp, sizeof(response)))
 		goto free_qp;
@@ -204,6 +212,20 @@ struct ibv_qp *yuanrdma_create_qp(struct ibv_pd *pd, struct ibv_qp_init_attr *at
 	qp->rq_wr_id = calloc(1u << qp->rq_log2_depth, sizeof(uint64_t));
 	if (!qp->sq_wr_id || !qp->rq_wr_id)
 		goto free_shadow;
+	if (want_inline) {
+		size_t size;
+
+		qp->inline_stride = (want_inline + 63) & ~63u;
+		size = (size_t)qp->inline_stride << qp->sq_log2_depth;
+		if (posix_memalign((void **)&qp->inline_buf, 4096, size)) {
+			qp->inline_buf = NULL;
+			goto free_shadow;
+		}
+		qp->inline_mr = ibv_reg_mr(pd, qp->inline_buf, size, IBV_ACCESS_LOCAL_WRITE);
+		if (!qp->inline_mr)
+			goto free_shadow;
+		qp->max_inline = want_inline;
+	}
 	pthread_spin_init(&qp->send_lock, PTHREAD_PROCESS_PRIVATE);
 	pthread_spin_init(&qp->recv_lock, PTHREAD_PROCESS_PRIVATE);
 	pthread_mutex_lock(&context->qp_table_lock);
@@ -211,10 +233,13 @@ struct ibv_qp *yuanrdma_create_qp(struct ibv_pd *pd, struct ibv_qp_init_attr *at
 	pthread_mutex_unlock(&context->qp_table_lock);
 	attributes->cap.max_send_wr = (1u << qp->sq_log2_depth) - 1;
 	attributes->cap.max_recv_wr = (1u << qp->rq_log2_depth) - 1;
-	attributes->cap.max_inline_data = response.max_inline_data;
+	attributes->cap.max_inline_data = qp->max_inline;
 	return &qp->ibv_qp;
 
 free_shadow:
+	if (qp->inline_mr)
+		ibv_dereg_mr(qp->inline_mr);
+	free(qp->inline_buf);
 	free(qp->sq_wr_id);
 	free(qp->rq_wr_id);
 	munmap(qp->rq_ring, qp->rq_ring_size);
@@ -233,7 +258,17 @@ int yuanrdma_modify_qp(struct ibv_qp *ibv_qp, struct ibv_qp_attr *attributes, in
 	struct ibv_modify_qp command = {};
 	int ret;
 
+	/* 进 ERR：未完成的 WQE 要以 FLUSH_ERR 完成（rdma_disconnect 走的就是这条）。硬件不写冲刷 CQE，
+	 * 由 poll_cq 末尾的 flush_queue 按 qp->error 合成。**必须在下发命令之前置位**：内核处理
+	 * 这条命令时会叫醒已 arm 的 CQ，被叫醒的线程紧接着 poll，那时就要能看到冲刷项。 */
+	bool to_error = (mask & IBV_QP_STATE) && attributes->qp_state == IBV_QPS_ERR;
+	bool was_error = qp->error;
+
+	if (to_error)
+		qp->error = true;
 	ret = ibv_cmd_modify_qp(ibv_qp, attributes, mask, &command, sizeof(command));
+	if (ret && to_error)
+		qp->error = was_error;
 	if (!ret && (mask & IBV_QP_STATE) && attributes->qp_state == IBV_QPS_RESET) {
 		pthread_spin_lock(&qp->send_lock);
 		qp->sq_producer = qp->sq_consumer = 0;
@@ -261,8 +296,14 @@ int yuanrdma_query_qp(struct ibv_qp *ibv_qp, struct ibv_qp_attr *attributes, int
 		      struct ibv_qp_init_attr *init_attributes)
 {
 	struct ibv_query_qp command = {};
+	int ret = ibv_cmd_query_qp(ibv_qp, attributes, mask, init_attributes, &command, sizeof(command));
 
-	return ibv_cmd_query_qp(ibv_qp, attributes, mask, init_attributes, &command, sizeof(command));
+	/* inline 是 provider 实现的，内核报 0，这里换成真实上限 */
+	if (!ret) {
+		attributes->cap.max_inline_data = to_yuanrdma_qp(ibv_qp)->max_inline;
+		init_attributes->cap.max_inline_data = to_yuanrdma_qp(ibv_qp)->max_inline;
+	}
+	return ret;
 }
 
 int yuanrdma_destroy_qp(struct ibv_qp *ibv_qp)
@@ -278,6 +319,9 @@ int yuanrdma_destroy_qp(struct ibv_qp *ibv_qp)
 	pthread_mutex_unlock(&context->qp_table_lock);
 	munmap(qp->sq_ring, qp->sq_ring_size);
 	munmap(qp->rq_ring, qp->rq_ring_size);
+	if (qp->inline_mr)
+		ibv_dereg_mr(qp->inline_mr);
+	free(qp->inline_buf);
 	free(qp->sq_wr_id);
 	free(qp->rq_wr_id);
 	free(qp);
@@ -353,18 +397,12 @@ int yuanrdma_destroy_ah(struct ibv_ah *ibv_ah)
 	return 0;
 }
 
-/* req_notify_cq：CQ 没有中断通路（create_cq 的 channel 参数没人接，硬件侧也不产生 MSI），
- * 所以正确做法是明确报不支持，而不是挂一个「返回 0 但永远不触发事件」的假实现——
- * 后者会让事件驱动的 ULP（包括 rdma_cm 的部分路径）永远阻塞在 comp_channel 上。
- *
- * 现状：make 层面不注册这一项，ibv_req_notify_cq 会落到 libibverbs 的 ENOSYS 桩。
- * 这里保留函数体是为了让「为什么没有」留在代码里，接上中断后再挂进 ops 表。
- * 注意 device_cap_flags 里的 N_NOTIFY_CQ / RC_RNR_NAK_GEN 因此也不能置位。 */
+/* req_notify_cq：硬件 CQ 不产生 MSI，完成事件由内核软件提供——arm 时内核记下下一个 CQE 将落的格，
+ * hrtimer 监视该格 owner 位，翻转即把事件投进本 CQ 绑定的 comp channel（内核 yuanrdma_cq_event.c）。
+ * 所以这里只需把 arm 请求交给内核；solicited_only 在内核按 NEXT_COMP 处理（可能多唤醒，不会丢事件）。 */
 int yuanrdma_req_notify_cq(struct ibv_cq *ibv_cq, int solicited_only)
 {
-	(void)ibv_cq;
-	(void)solicited_only;
-	return EOPNOTSUPP;
+	return ibv_cmd_req_notify_cq(ibv_cq, solicited_only);
 }
 
 /* ---------------------------------------------------------------- 数据面 */
@@ -425,6 +463,17 @@ static int ud_av_matches(const struct yuanrdma_qp *qp, const struct ibv_ah *ibv_
 	return 0;
 }
 
+/* inline 载荷总长：RC 拼接全部 SGE；UD 只取 SGE[0]（SGE[1] 是接收侧 GRH 影子缓冲的约定，发送不带） */
+static uint32_t inline_length(const struct ibv_send_wr *wr, bool is_ud)
+{
+	uint32_t total = 0;
+	int i, n = is_ud ? (wr->num_sge ? 1 : 0) : wr->num_sge;
+
+	for (i = 0; i < n; i++)
+		total += wr->sg_list[i].length;
+	return total;
+}
+
 int yuanrdma_post_send(struct ibv_qp *ibv_qp, struct ibv_send_wr *wr, struct ibv_send_wr **bad_wr)
 {
 	struct yuanrdma_context *context = to_yuanrdma_context(ibv_qp->context);
@@ -447,10 +496,17 @@ int yuanrdma_post_send(struct ibv_qp *ibv_qp, struct ibv_send_wr *wr, struct ibv
 		 *    缓冲（wire 上不发送，由 RTL 合成）。发送侧 perftest/rdma-core 只挂 1 个
 		 *    SGE，所以这里接受 1 或 2，第 2 个必须是 40 B 的 GRH 影子缓冲——不是的话
 		 *    报 EINVAL，绝不静默当成 payload 丢掉一段。
-		 * INLINE 不发：WQE 里没有 inline 载荷区，硬件会去 laddr 取数，必须拒绝。 */
+		 * INLINE：WQE 里没有 inline 载荷区，由 provider 拷进本槽的跳板缓冲后按普通 SGE 下发
+		 * （create_qp 没要 inline、超过 max_inline、或 RDMA READ 带 INLINE 都按 EINVAL 拒绝）。
+		 * RC 的 inline 允许多 SGE：拷贝时已拼成一段。 */
+		bool is_inline = wr->send_flags & IBV_SEND_INLINE;
+
 		if (qp->sq_producer - qp->sq_consumer >= depth - 1) {
 			ret = ENOMEM;
-		} else if (opcode < 0 || (wr->send_flags & IBV_SEND_INLINE)) {
+		} else if (opcode < 0) {
+			ret = EINVAL;
+		} else if (is_inline && (!qp->max_inline || wr->opcode == IBV_WR_RDMA_READ ||
+					 inline_length(wr, is_ud) > qp->max_inline)) {
 			ret = EINVAL;
 		} else if (is_ud) {
 			if (wr->num_sge < 1 || wr->num_sge > 2)
@@ -467,7 +523,7 @@ int yuanrdma_post_send(struct ibv_qp *ibv_qp, struct ibv_send_wr *wr, struct ibv
 							 * frame_length 组一个超长帧，对端丢包。 */
 			else
 				ret = ud_av_matches(qp, wr->wr.ud.ah);
-		} else if (wr->num_sge > 1) {
+		} else if (wr->num_sge > 1 && !is_inline) {
 			ret = EINVAL;
 		}
 		if (ret) {
@@ -481,7 +537,20 @@ int yuanrdma_post_send(struct ibv_qp *ibv_qp, struct ibv_send_wr *wr, struct ibv
 			wqe.dw0 |= YNRDMA_WQE_F_SOLICITED;
 		/* num_sge == 0 是合法的零长消息（IB 允许），此时 sg_list 可以是 NULL，
 		 * 不能无条件读 sg_list[0]。UD 分支在上面已经挡掉 num_sge < 1。 */
-		if (wr->num_sge) {
+		if (is_inline) {
+			/* 拷进本槽跳板：槽在 sq_consumer 越过它之前不会被复用，硬件取数时内容稳定 */
+			uint8_t *dst = qp->inline_buf + (size_t)slot * qp->inline_stride;
+			uint32_t total = 0;
+			int i, n = is_ud ? (wr->num_sge ? 1 : 0) : wr->num_sge;
+
+			for (i = 0; i < n; i++) {
+				memcpy(dst + total, (void *)(uintptr_t)wr->sg_list[i].addr, wr->sg_list[i].length);
+				total += wr->sg_list[i].length;
+			}
+			wqe.length = total;
+			wqe.lkey = qp->inline_mr->lkey;
+			wqe.laddr = (uintptr_t)dst;
+		} else if (wr->num_sge) {
 			wqe.length = wr->sg_list[0].length;
 			wqe.lkey = wr->sg_list[0].lkey;
 			wqe.laddr = wr->sg_list[0].addr;

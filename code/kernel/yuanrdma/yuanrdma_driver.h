@@ -12,6 +12,7 @@
 #include <linux/mutex.h>
 #include <linux/pci.h>
 #include <linux/netdevice.h>
+#include <linux/hrtimer.h>
 #include <rdma/ib_verbs.h>
 #include <rdma/ib_umem.h>
 
@@ -111,6 +112,16 @@ struct yuanrdma_dev {
 	__be32 ipv4;				/* add_gid 记下的本机 RoCEv2 IPv4，收包按它过滤 */
 	struct dentry *debugfs;
 	struct yuanrdma_gsi_stats gsi_stats;
+
+	/* 用户态 CQ 的完成事件（yuanrdma_cq_event.c）：armed CQ 链表 + 轮询 owner 位的 hrtimer */
+	spinlock_t cq_arm_lock;
+	struct list_head armed_cqs;
+	struct hrtimer cq_arm_timer;
+	bool cq_arm_timer_on;			/* 受 cq_arm_lock 保护 */
+	struct {
+		u64 arms;			/* req_notify_cq 次数 */
+		u64 events;			/* 投递给 comp_handler 的事件数 */
+	} cq_event_stats;
 };
 
 /* 物理连续的环，由 ucontext 持有，ucontext 释放时才 free（避免用户态映射还在时释放） */
@@ -155,6 +166,11 @@ struct yuanrdma_cq {
 	u32 count;
 	u32 notify;			/* IB_CQ_SOLICITED / IB_CQ_NEXT_COMP，触发一次后清零 */
 	u64 overflow;
+
+	/* 硬件 CQ 的软件完成事件（yuanrdma_cq_event.c），受 dev->cq_arm_lock 保护 */
+	struct list_head arm_node;	/* 挂在 dev->armed_cqs 上即为 armed；空节点 = 未 arm */
+	u32 watch_slot;			/* arm 时下一个 CQE 将落的格 */
+	u32 watch_owner;		/* 该格 arm 时的 owner 值，变了即触发 */
 };
 
 struct yuanrdma_qp {
@@ -226,6 +242,13 @@ int yuanrdma_kernel_create_cq(struct yuanrdma_cq *cq, const struct ib_cq_init_at
 void yuanrdma_kernel_destroy_cq(struct yuanrdma_cq *cq);
 int yuanrdma_poll_cq(struct ib_cq *ibcq, int num_entries, struct ib_wc *wc);
 int yuanrdma_req_notify_cq(struct ib_cq *ibcq, enum ib_cq_notify_flags flags);
+
+/* yuanrdma_cq_event.c：硬件 CQ 的软件完成事件 */
+void yuanrdma_cq_event_init(struct yuanrdma_dev *dev);
+void yuanrdma_cq_event_cleanup(struct yuanrdma_dev *dev);
+int yuanrdma_hw_cq_arm(struct yuanrdma_cq *cq);
+void yuanrdma_hw_cq_disarm(struct yuanrdma_cq *cq);
+void yuanrdma_hw_cq_kick(struct yuanrdma_cq *cq);
 int yuanrdma_gsi_create_qp(struct yuanrdma_qp *qp, struct ib_qp_init_attr *init);
 int yuanrdma_gsi_modify_qp(struct yuanrdma_qp *qp, struct ib_qp_attr *attr, int mask);
 int yuanrdma_gsi_query_qp(struct yuanrdma_qp *qp, struct ib_qp_attr *attr, int mask,

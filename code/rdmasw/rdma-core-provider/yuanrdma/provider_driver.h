@@ -79,7 +79,17 @@ struct yuanrdma_qp {
 	union ibv_gid av_dgid;
 	uint8_t av_sgid_index;
 	bool av_valid;
+	/* IBV_SEND_INLINE 的软件实现：WQE 里没有 inline 载荷区，所以每个 SQ 槽配一格跳板缓冲
+	 * （整块注册成一个 MR），post_send 把载荷拷进对应槽、按普通单 SGE 下发。
+	 * 只在 create_qp 要了 max_inline_data 时才分配（占 1 个 MR），不要 inline 的 QP 零开销。 */
+	uint8_t *inline_buf;
+	struct ibv_mr *inline_mr;
+	uint32_t inline_stride;			/* 每槽字节数，64 B 对齐；0 = 未启用 */
+	uint32_t max_inline;			/* 对外报的 cap.max_inline_data */
 };
+
+/* 单 QP 允许的最大 inline 载荷。跳板缓冲 = 槽数 × 对齐后长度，SQ 深 1024 时 512 B 对应 512 KB。 */
+#define YUANRDMA_MAX_INLINE 512
 
 static inline struct yuanrdma_context *to_yuanrdma_context(struct ibv_context *context)
 {

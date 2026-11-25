@@ -99,8 +99,8 @@ static int yuanrdma_query_device(struct ib_device *ibdev, struct ib_device_attr 
 	 *   BAD_PKEY_CNTR / BAD_QKEY_CNTR —— port_attr 的 bad_pkey_cntr / qkey_viol_cntr 恒 0，
 	 *     硬件不做 P_Key / Q_Key 校验，没有计数器可报。
 	 *   UD_AV_PORT_ENFORCE —— 只有 1 个端口，这道闸门没有可判的内容。
-	 *   N_NOTIFY_CQ —— req_notify_cq 没有可用的完成事件通路：CQ 环在主机内存里，
-	 *     内核看不见 producer，硬件也不产生 MSI。见 provider 侧同一条注释。
+	 *   N_NOTIFY_CQ —— 「攒够 N 个完成再通知」（req_ncomp_notif）没有实现。单次通知
+	 *     （req_notify_cq）由 yuanrdma_cq_event.c 软件监视 owner 位提供，不依赖这一位。
 	 *   SHUTDOWN_PORT / MEM_MGT_EXTENSIONS —— 无对应实现（无 SHUTDOWN 端口操作、无 MW/FRMR）。
 	 */
 	attributes->device_cap_flags = IB_DEVICE_CURR_QP_STATE_MOD | IB_DEVICE_RC_RNR_NAK_GEN;
@@ -120,36 +120,16 @@ static int yuanrdma_query_port(struct ib_device *ibdev, u32 port, struct ib_port
 	attributes->gid_tbl_len = 16;
 	attributes->pkey_tbl_len = 1;
 	/*
-	 * IB_PORT_CM_SUP 不上报。
+	 * IB_PORT_CM_SUP：端口支持 RDMA CM。上报它，rdma_cm 客户端才会在本端口上建连。
 	 *
-	 * 这一位是「端口支持 RDMA CM」的对外能力位。上报它，rdma_cm 的客户端才会走到
-	 * cma_alloc_port 之后；不上报，rdma_create_ep() 直接 EOPNOTSUPP。所以它不是可有
-	 * 可无的装饰，而是「CM 能用」的承诺。
-	 *
-	 * 2026-11-22 B6462 上板实测（enable_cm_sup 打开后）：rping 客户端在
-	 * `ibv_create_comp_channel` 失败。三条链路各自独立，缺一条就走不通：
-	 *   1) librdmacm 的 ucma_create_cqs() 只要 CQ 有 send/recv 深度就无条件
-	 *      ibv_create_comp_channel()——rping、ucmatose、rdma_server/client 全都走这条；
-	 *   2) comp channel 是 ib_uverbs 的通用命令，但本驱动的 uverbs_cmd_mask 没有开放
-	 *      IB_USER_VERBS_CMD_CREATE_COMP_CHANNEL，5.15 的 uverbs_uapi 把它标成 disabled
-	 *      并返回 EOPNOTSUPP（放开这一位只解决第 1 步）；
-	 *   3) 真正的缺口是**没有完成事件通路**：CQ 环在主机内存里、硬件直接写 CQE，内核
-	 *      看不见 producer，硬件也不产生 MSI，所以 req_notify_cq 只能返回 EOPNOTSUPP，
-	 *      即使建出 channel 也永远收不到事件（rdma_get_recv_comp 会卡在
-	 *      read(channel->fd)）。
-	 *
-	 * 第 3 条是硬件能力缺口，不是开关能补的。因此不做模块参数、不留「打开就能用」的
-	 * 假入口：`ibv_devinfo -v` 的 port_cap_flags 里不会有这一位，ULP 会按「无 CM」处理，
-	 * 这正是当前的真实状态。
-	 *
-	 * QP1 的 CM MAD 数据通路本身是就绪的（软件 GSI 收发整帧、交付 40 B GRH，
-	 * 见 yuanrdma_gsi.c），缺的是完成事件，不涉及 CM 报文语义。
-	 *
-	 * 恢位条件（写清楚，别靠记忆）：硬件提供 CQ 完成中断（或内核侧能拿到 per-CQ
-	 * producer 计数），req_notify_cq 真正投递事件，且 rping、ucmatose 各成功一次。
-	 * 届时把这一行改成 IB_PORT_CM_SUP 并附上板日期与镜像版本。
+	 * CM 需要三条链路，现在都在：
+	 *   1) QP1 的 CM MAD 收发：软件 GSI（yuanrdma_gsi.c），整帧经 eth0 收发、交付 40 B GRH；
+	 *   2) comp channel：uverbs_cmd_mask 开放 CREATE_COMP_CHANNEL / REQ_NOTIFY_CQ
+	 *      （librdmacm 的 ucma_create_cqs() 无条件建 comp channel，rping/ucmatose/rdma_server 都走它）；
+	 *   3) 完成事件：硬件 CQ 不产生 MSI，由 yuanrdma_cq_event.c 在 arm 后用 hrtimer 监视
+	 *      下一格 CQE 的 owner 位，翻转即调 comp_handler。事件延迟约一个轮询周期（默认 20 µs）。
 	 */
-	attributes->port_cap_flags = 0;
+	attributes->port_cap_flags = IB_PORT_CM_SUP;
 	attributes->max_msg_sz = 0x80000000;
 	attributes->bad_pkey_cntr = 0;
 	attributes->qkey_viol_cntr = 0;
@@ -668,6 +648,7 @@ static int yuanrdma_create_cq(struct ib_cq *ibcq, const struct ib_cq_init_attr *
 	struct yuanrdma_ring *ring;
 	int index, ret;
 
+	INIT_LIST_HEAD(&cq->arm_node);
 	if (!udata)
 		return yuanrdma_kernel_create_cq(cq, attr);	/* 内核 CQ（MAD 层 QP1）：纯软件，不占硬件槽 */
 	if (attr->flags || attr->cqe < 1 || attr->cqe >= YUANRDMA_MAX_CQ_DEPTH)
@@ -715,6 +696,7 @@ static int yuanrdma_destroy_cq(struct ib_cq *ibcq, struct ib_udata *udata)
 		yuanrdma_kernel_destroy_cq(cq);
 		return 0;
 	}
+	yuanrdma_hw_cq_disarm(cq);		/* 先摘出轮询链表，再让硬件停写、释放环 */
 	yuanrdma_write_table(dev, YNRDMA_CMD_TBL_CQC, cq->cq_index, &cqc, sizeof(cqc));
 	yuanrdma_release_ring(cq->ring);
 	yuanrdma_free_index(dev, dev->cq_used, cq->cq_index);
@@ -987,6 +969,15 @@ static int yuanrdma_modify_qp(struct ib_qp *ibqp, struct ib_qp_attr *attr, int m
 		qp->attributes.max_rd_atomic = attr->max_rd_atomic;
 	if (mask & IB_QP_MAX_DEST_RD_ATOMIC)
 		qp->attributes.max_dest_rd_atomic = attr->max_dest_rd_atomic;
+	/* 进 ERR：IB 规定未完成的 WQE 要以 FLUSH_ERR 完成。硬件不写冲刷 CQE，由 provider 在
+	 * poll_cq 里补（qp->error，provider 在下发本命令前已置位）；这里负责「叫醒」——
+	 * 已 arm 的 send/recv CQ 立即投递一次事件，否则阻塞在 ibv_get_cq_event 的线程
+	 * （rping 的 cq_thread、librdmacm 的 rdma_get_*_comp）永远等不到冲刷完成。 */
+	if (new_state == IB_QPS_ERR && current_state != IB_QPS_ERR) {
+		yuanrdma_hw_cq_kick(to_yuanrdma_cq(ibqp->send_cq));
+		if (ibqp->recv_cq && ibqp->recv_cq != ibqp->send_cq)
+			yuanrdma_hw_cq_kick(to_yuanrdma_cq(ibqp->recv_cq));
+	}
 	return 0;
 }
 

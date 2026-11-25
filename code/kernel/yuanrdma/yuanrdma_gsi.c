@@ -193,6 +193,11 @@ int yuanrdma_req_notify_cq(struct ib_cq *ibcq, enum ib_cq_notify_flags flags)
 	struct yuanrdma_cq *cq = to_yuanrdma_cq(ibcq);
 	int ret = 0;
 
+	/* 用户态 CQ（硬件写主机内存环）：软件监视 owner 位，见 yuanrdma_cq_event.c。
+	 * 拿不到 consumer 位置，IB_CQ_REPORT_MISSED_EVENTS 无从判断，按 0 返回（uverbs 本就忽略返回值）。 */
+	if (!cq->software)
+		return yuanrdma_hw_cq_arm(cq);
+
 	spin_lock_bh(&cq->lock);
 	if (cq->count)
 		ret = 1;		/* 有遗留完成：poll 方靠这个返回值决定是否重新排队 */
@@ -879,6 +884,8 @@ static int yuanrdma_gsi_stats_show(struct seq_file *s, void *unused)
 	seq_printf(s, "cm_rx_lap      %llu\n", g->cm_rx[FGCM_ATTR_LAP - FGCM_ATTR_REQ]);
 	seq_printf(s, "cm_rx_apr      %llu\n", g->cm_rx[FGCM_ATTR_APR - FGCM_ATTR_REQ]);
 	seq_printf(s, "cm_rx_bad      %llu\n", g->cm_rx_bad);
+	seq_printf(s, "cq_arms        %llu\n", dev->cq_event_stats.arms);
+	seq_printf(s, "cq_events      %llu\n", dev->cq_event_stats.events);
 	return 0;
 }
 
