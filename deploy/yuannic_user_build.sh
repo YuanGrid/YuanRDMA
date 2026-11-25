@@ -275,6 +275,25 @@ grep -q 'add_subdirectory(providers/yuanrdma)' "$RC/CMakeLists.txt" \
 grep -q 'rdma/yuanrdma-abi.h' "$RC/kernel-headers/CMakeLists.txt" \
     || die "ABI 头注册失败"
 
+# libibverbs 的 provider 配置目录 IBV_CONFIG_DIR 是编译期常量，没有环境变量能改。
+# 交付包解压到哪儿都不确定，固化任何绝对路径都不对：固化成构建机的包目录，客户机器上每条 ibv 命令都报
+# "couldn't open config directory '/home/…'"（还暴露构建机路径）；固化成 /etc/libibverbs.d，又会读到
+# 系统 DOCA/OFED 的 driver 配置。所以在副本里给 read_config() 加一个环境变量覆盖：IBV_CONFIG_DIR 有值就用它，
+# env.sh 把它指到包内 etc/libibverbs.d；没 source env.sh 时退回编译期默认 /etc/yuannic/libibverbs.d。
+DD="$RC/libibverbs/dynamic_driver.c"
+grep -q '^static void read_config(void)$' "$DD" || die "libibverbs/dynamic_driver.c 里找不到 read_config()，rdma-core 版本变了？"
+sed -i '/^static void read_config(void)$/i\
+static const char *ibv_config_dir(void)\
+{\
+\tconst char *dir = getenv("IBV_CONFIG_DIR");\
+\
+\treturn (dir \&\& *dir) ? dir : IBV_CONFIG_DIR;\
+}\
+' "$DD"
+sed -i '/^static void read_config(void)$/,/^}$/ s/IBV_CONFIG_DIR/ibv_config_dir()/g' "$DD"
+[ "$(sed -n '/^static void read_config(void)$/,/^}$/p' "$DD" | grep -c 'ibv_config_dir()')" -ge 4 ] \
+    || die "read_config() 的 IBV_CONFIG_DIR 覆盖补丁没打上"
+
 # ---------------------------------------------------------------------------
 # 2. 编译 rdma-core（含 yuanrdma provider）
 # ---------------------------------------------------------------------------
@@ -283,17 +302,20 @@ log "2. 编译 rdma-core + yuanrdma provider"
 mkdir -p "$RC/build"
 (
     cd "$RC/build"
-    # CMAKE_INSTALL_SYSCONFDIR 指到 YuanNIC_User_Package/etc：libibverbs 编译期会把
-    # IBV_CONFIG_DIR 固化成 <这个目录>/libibverbs.d。这样运行期即使没有
-    # RDMAV_DRIVERS，也只会从本目录读 provider 配置，不会去碰系统的
-    # /etc/libibverbs.d（那是 DOCA/OFED 的地盘），也不会报 "couldn't open" 警告。
+    # RUNPATH 统一写成 $ORIGIN/../lib：构建树里 build/bin → build/lib，包里 bin/ → lib/、lib/ → lib/ 都成立；
+    # 默认会写构建机的绝对路径（work/rdma-core/build/lib），交付件里不能留。
+    # CMAKE_INSTALL_SYSCONFDIR=/etc/yuannic：编译期默认 IBV_CONFIG_DIR = /etc/yuannic/libibverbs.d，
+    # 只在没 source env.sh 时才用到（env.sh 用环境变量 IBV_CONFIG_DIR 指到包内 etc/libibverbs.d，见上面的补丁）。
+    # 不指 /etc：那是系统 DOCA/OFED 的 provider 配置；也不指构建机的包目录：客户机器上不存在。
     "$CMAKE" -GNinja \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo \
         -DNO_MAN_PAGES=1 \
         -DNO_PYVERBS=1 \
         -DENABLE_RESOLVE_NEIGH=0 \
         -DENABLE_STATIC=0 \
-        -DCMAKE_INSTALL_SYSCONFDIR="$OUT/etc" \
+        -DCMAKE_INSTALL_SYSCONFDIR=/etc/yuannic \
+        -DCMAKE_C_FLAGS="-ffile-prefix-map=$WORK/=" \
+        -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON -DCMAKE_INSTALL_RPATH='$ORIGIN/../lib' \
         .. > "$WORK/cmake.log" 2>&1
     ninja -j "$JOBS" > "$WORK/ninja.log" 2>&1
 ) || {
@@ -322,6 +344,8 @@ RC_BUILD="$RC/build"
     # make 展开 $$ -> $，最终 gcc 拿到 $ORIGIN，运行期按可执行文件位置找 lib/。
     # 注意是 ../lib：perftest 程序最终放在 bin/ 里，库在 lib/ 里，是兄弟目录。
     # 写成 $ORIGIN/lib 会让程序在 bin/ 下找不到库（来源：move 到 bin/ 时的真实回归）。
+    # -ffile-prefix-map：断言串与调试信息里的源码路径去掉构建机目录前缀（交付件里不留 /home/… 路径）
+    CFLAGS="-g -O2 -ffile-prefix-map=$WORK/= ${CFLAGS:-}" \
     CPPFLAGS="-I$RC_BUILD/include ${CPPFLAGS:-}" \
     LDFLAGS="-L$RC_BUILD/lib -Wl,-rpath,'\$\$ORIGIN/../lib' ${LDFLAGS:-}" \
     LD_LIBRARY_PATH="$RC_BUILD/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
@@ -377,7 +401,8 @@ else
     # ynic_net_base.h 已在 code/ynictrl/include/，编译自包含。
     rsync -a --exclude '*.o' --exclude 'ynictrl' "$SRC_YNICTRL"/ "$YNICTRL_DIR"/
 
-    make -C "$YNICTRL_DIR" > "$WORK/ynictrl_make.log" 2>&1 || {
+    # Makefile 里是 CFLAGS +=，环境变量里的这一项会被追加上去：调试信息里的编译目录去掉构建机前缀
+    CFLAGS="-ffile-prefix-map=$YNICTRL_DIR=." make -C "$YNICTRL_DIR" > "$WORK/ynictrl_make.log" 2>&1 || {
         tail -n 40 "$WORK/ynictrl_make.log"; die "ynictrl 编译失败"; }
 
     [ -x "$YNICTRL_DIR/ynictrl" ] || die "没有生成 ynictrl"
@@ -392,7 +417,7 @@ log "5. 收集产物到 YuanNIC_User_Package/"
 rm -rf "$OUT"
 mkdir -p "$OUT/bin" "$OUT/lib" "$OUT/include" "$OUT/ko"
 # libibverbs 启动时会 opendir(IBV_CONFIG_DIR)，目录不存在就打一条 Warning。
-# 这里建一个空目录（路径已在上面的 cmake 参数里固化成 $OUT/etc），把警告消掉；
+# 这里建一个空目录（env.sh 用环境变量 IBV_CONFIG_DIR 指向它），把警告消掉；
 # provider 实际由 env.sh 的 RDMAV_DRIVERS 加载，不依赖这个目录里的配置。
 mkdir -p "$OUT/etc/libibverbs.d"
 
@@ -407,7 +432,10 @@ ls "$OUT/lib"/libyuanrdma-rdmav*.so >/dev/null 2>&1 || {
 echo "provider  : $(ls "$OUT/lib"/libyuanrdma-rdmav*.so | xargs -n1 basename)"
 
 # 头文件（编译依赖本栈的其他程序时用）
-cp -a "$RC_BUILD/include/." "$OUT/include/" 2>/dev/null || true
+# build/include 里大多是指回源码树的符号链接，必须解引用拷成真文件：保留链接的话交付包里全是断链
+#（指向构建机的 work/ 目录），客户拿去编程序一个头文件都找不到。
+cp -rL "$RC_BUILD/include/." "$OUT/include/" || die "拷贝头文件失败"
+[ -z "$(find "$OUT/include" -type l)" ] || die "include/ 里仍有符号链接"
 
 # perftest 程序：放到 bin/
 # 注意：autotools 把可执行文件生成在源码树根目录（work/perftest/），不是 src/
@@ -482,6 +510,8 @@ export LD_LIBRARY_PATH="$YUANNIC_DIR/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 # 2. 只加载本栈的 provider（绝对路径，dlopen 时会自动追加 -rdmav65.so）
 export RDMAV_DRIVERS="$YUANNIC_DIR/lib/libyuanrdma"
+#    provider 配置目录指到包内（本包的 libibverbs 认这个环境变量；编译期默认值在包外，不存在时会告警）
+export IBV_CONFIG_DIR="$YUANNIC_DIR/etc/libibverbs.d"
 
 # 若确实需要在同一进程里同时看到 ConnectX，再打开下面这行：
 #   export RDMAV_DRIVERS="$YUANNIC_DIR/lib/libyuanrdma:$YUANNIC_DIR/lib/libmlx5"
