@@ -22,6 +22,7 @@ module roce_dma_wr_align (
     input  wire  [6:0]        request_address_low,
     input  wire  [12:0]       request_length,        // 1..4096
     input  wire  [5:0]        request_first_burst_beats,
+    input  wire               request_head_split,    // 首拍单独成 burst（见 roce_dma 的头拍拆分），该拍也打 write_last
     // 输入数据（每请求 ceil(transfer_length/128) 拍）
     input  wire               write_data_in_valid,
     output wire               write_data_in_ready,
@@ -45,6 +46,7 @@ module roce_dma_wr_align (
     reg  [13:0]   start_offset, end_offset;       // 有效字节区间 [start_offset, end_offset)
     reg  [6:0]    beats_needed;         // 还需读入的输入拍数
     reg  [5:0]    first_burst_beats;
+    reg           head_split;
     reg  [1023:0] previous_beat;
 
     wire          can_advance = !write_valid || write_ready;
@@ -99,6 +101,7 @@ module roce_dma_wr_align (
                     end_offset        <= request_end_offset;
                     beats_needed      <= 7'((request_length + 13'd127) >> 7);
                     first_burst_beats <= request_first_burst_beats;
+                    head_split        <= request_head_split;
                     previous_beat     <= 1024'd0;
                 end
             end else if (produce_beat) begin
@@ -113,7 +116,8 @@ module roce_dma_wr_align (
                 // 跨页时第一个 burst 的最后一拍也要打 write_last：
                 // first_burst_beats 现在直接就是 128 B 拍数，不用再像旧版那样 *2。
                 write_last   <= (beat_index + 7'd1 == beat_count) ||
-                                ((first_burst_beats != 6'd0) && (beat_index + 7'd1 == {1'b0, first_burst_beats}));
+                                ((first_burst_beats != 6'd0) && (beat_index + 7'd1 == {1'b0, first_burst_beats})) ||
+                                (head_split && (beat_index == 7'd0));
                 if (beat_index + 7'd1 == beat_count)
                     request_active <= 1'b0;
             end

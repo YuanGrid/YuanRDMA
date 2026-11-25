@@ -258,7 +258,17 @@ module roce_dma #(
                                              (6'(((write_end_in_page + 14'd127) >> 7) - dma_write_request_address[11:7]) == 6'd0) ? 6'd1
                                            : 6'(((write_end_in_page + 14'd127) >> 7) - dma_write_request_address[11:7]);
     wire [5:0]  write_second_burst_beats    = 6'((write_end_in_page - 14'd4096 + 14'd127) >> 7);
-    reg         write_second_phase;
+    // 头拍拆分（2026-11-24）：起始地址不按 128 B 对齐、且首页不止一拍时，首拍单独发一个 1 拍 burst，
+    // 首页余下的拍再发一个对齐 burst（跨页时第二页照旧再一个）。一个请求因此最多 3 个 AW / 3 个 B。
+    // 原因（上板实测，B0116）：PCIe BAS 对「多拍 burst 的首拍 wstrb 低位为 0」不按 wstrb 屏蔽，
+    // 把首拍里地址之前的 addr[6:0] 个字节用它内部缓冲的旧数据一并写出——接收缓冲之前的主机内存被改写
+    // （malloc 的块头被冲掉，ucmatose 在 free 时崩）。单拍 burst 的部分 wstrb、多拍 burst 末拍的部分
+    // wstrb 上板都正确，所以只把首拍拆出去。地址对齐的写（perftest/NCCL 缓冲、CQE）完全不受影响。
+    wire        write_head_split = (dma_write_request_address[6:0] != 7'd0) && (write_first_burst_beats > 6'd1);
+    // 0 = 首个 burst（头拍，或不拆分时的整段首页）；1 = 首页余下（只在头拍拆分时有）；2 = 第二页
+    reg  [1:0]  write_phase;
+    wire        write_last_burst = (write_phase == 2'd2) ||
+                                   (!write_crosses_page && ((write_phase == 2'd1) || !write_head_split));
     wire        aw_fifo_ready, write_align_ready, bresp_count_fifo_ready;
     // B6420：AW FIFO 的「可写」改用寄存器（aw_space_q）。B6418 core 时钟最差路径之一（+0.020）：
     // u_aw_fifo 写指针格雷码 → full 比较 → s_axis_tready → write_aw_push → 请求 ready → engine 的 u_write_request_skid。
@@ -270,17 +280,22 @@ module roce_dma #(
         if (rst) aw_space_q <= 1'b0;
         else     aw_space_q <= aw_fifo_ready && (aw_fifo_depth < ($clog2(WRITE_AW_FIFO_DEPTH)+1)'(WRITE_AW_FIFO_DEPTH - 8));
     end
-    wire        write_aw_push = dma_write_request_valid && aw_space_q && (write_second_phase || (write_align_ready && bresp_count_fifo_ready));
-    wire        write_request_done    = write_aw_push && (!write_crosses_page || write_second_phase);
-    wire        write_request_start   = write_aw_push && !write_second_phase;          // 对齐模块与 B 计数在首个 burst 时入队
+    wire        write_aw_push = dma_write_request_valid && aw_space_q && ((write_phase != 2'd0) || (write_align_ready && bresp_count_fifo_ready));
+    wire        write_request_done    = write_aw_push && write_last_burst;
+    wire        write_request_start   = write_aw_push && (write_phase == 2'd0);    // 对齐模块与 B 计数在首个 burst 时入队
     assign dma_write_request_ready    = write_request_done;
-    wire [63:0] write_aw_address  = write_second_phase ? {dma_write_request_page1[63:12], 12'd0} : {dma_write_request_address[63:7], 7'd0};
-    wire [5:0]  write_aw_beats = write_second_phase ? write_second_burst_beats : write_first_burst_beats;
+    // 首页余下那段从下一个 128 B 块开始：头拍拆分要求首页 > 1 拍，所以 addr[11:7] != 31，5 位加 1 不会进位出页
+    wire [63:0] write_aw_address  = (write_phase == 2'd2) ? {dma_write_request_page1[63:12], 12'd0} :
+                                    (write_phase == 2'd1) ? {dma_write_request_address[63:12], dma_write_request_address[11:7] + 5'd1, 7'd0} :
+                                                            {dma_write_request_address[63:7], 7'd0};
+    wire [5:0]  write_aw_beats = (write_phase == 2'd2) ? write_second_burst_beats :
+                                 (write_phase == 2'd1) ? write_first_burst_beats - 6'd1 :
+                                 write_head_split      ? 6'd1 : write_first_burst_beats;
 
     always @(posedge clk) begin
-        if (rst)             write_second_phase <= 1'b0;
-        else if (write_request_done)    write_second_phase <= 1'b0;
-        else if (write_aw_push) write_second_phase <= 1'b1;
+        if (rst)                     write_phase <= 2'd0;
+        else if (write_request_done) write_phase <= 2'd0;
+        else if (write_aw_push)      write_phase <= ((write_phase == 2'd0) && write_head_split) ? 2'd1 : 2'd2;
     end
 
     wire [71:0] aw_fifo_data;
@@ -311,6 +326,7 @@ module roce_dma #(
         .clk(clk), .rst(rst),
         .request_valid(write_request_start), .request_ready(write_align_ready), .request_address_low(dma_write_request_address[6:0]), .request_length(dma_write_request_length),
         .request_first_burst_beats(write_crosses_page ? write_first_burst_beats : 6'd0),
+        .request_head_split(write_head_split),
         .write_data_in_valid(dma_write_valid), .write_data_in_ready(dma_write_ready), .write_data_in(dma_write_data),
         .write_valid(aligned_write_valid), .write_ready(aligned_write_ready), .write_data(aligned_write_data), .write_strobe(aligned_write_strobe), .write_last(aligned_write_last)
     );
@@ -358,18 +374,22 @@ module roce_dma #(
         .m_status_depth(), .m_status_depth_commit(), .m_status_overflow(),
         .m_status_bad_frame(), .m_status_good_frame()
     );
-    // 每请求期望的 B 个数（1 或 2），与 AW 同序
-    wire bresp_count_valid, bresp_expect_two;
-    reg  bresp_first_seen, bresp_error_accumulated;
+    // 每请求期望的 B 个数减 1（0..2 = 头拍拆分 + 跨页），与 AW 同序
+    wire       bresp_count_valid;
+    wire [1:0] bresp_expect_m1;
+    wire [1:0] write_bursts_m1 = {1'b0, write_head_split} + {1'b0, write_crosses_page};
+    reg  [1:0] bresp_seen;
+    reg        bresp_error_accumulated;
+    wire       bresp_request_last = (bresp_seen == bresp_expect_m1);
     axis_async_fifo #(
-        .DEPTH(WRITE_B_FIFO_DEPTH), .DATA_WIDTH(1), .KEEP_ENABLE(0), .LAST_ENABLE(0), .USER_ENABLE(0)
+        .DEPTH(WRITE_B_FIFO_DEPTH), .DATA_WIDTH(2), .KEEP_ENABLE(0), .LAST_ENABLE(0), .USER_ENABLE(0)
     ) u_bresp_count_fifo (
         .s_clk(clk), .s_rst(rst),
-        .s_axis_tdata(write_crosses_page), .s_axis_tkeep('0), .s_axis_tvalid(write_request_start), .s_axis_tready(bresp_count_fifo_ready),
+        .s_axis_tdata(write_bursts_m1), .s_axis_tkeep('0), .s_axis_tvalid(write_request_start), .s_axis_tready(bresp_count_fifo_ready),
         .s_axis_tlast(1'b1), .s_axis_tid(8'd0), .s_axis_tdest(8'd0), .s_axis_tuser(1'b0),
         .m_clk(clk), .m_rst(rst),
-        .m_axis_tdata(bresp_expect_two), .m_axis_tkeep(), .m_axis_tvalid(bresp_count_valid),
-        .m_axis_tready(bresp_valid && (!bresp_expect_two || bresp_first_seen)), .m_axis_tlast(), .m_axis_tid(),
+        .m_axis_tdata(bresp_expect_m1), .m_axis_tkeep(), .m_axis_tvalid(bresp_count_valid),
+        .m_axis_tready(bresp_valid && bresp_request_last), .m_axis_tlast(), .m_axis_tid(),
         .m_axis_tdest(), .m_axis_tuser(),
         .s_pause_req(1'b0), .s_pause_ack(), .m_pause_req(1'b0), .m_pause_ack(),
         .s_status_depth(), .s_status_depth_commit(), .s_status_overflow(),
@@ -379,21 +399,21 @@ module roce_dma #(
     );
     always @(posedge clk) begin
         if (rst) begin
-            bresp_first_seen    <= 1'b0;
+            bresp_seen              <= 2'd0;
             bresp_error_accumulated <= 1'b0;
         end else if (bresp_valid) begin
-            if (bresp_expect_two && !bresp_first_seen) begin
-                bresp_first_seen    <= 1'b1;
-                bresp_error_accumulated <= bresp_error;
-            end else begin
-                bresp_first_seen    <= 1'b0;
+            if (bresp_request_last) begin
+                bresp_seen              <= 2'd0;
                 bresp_error_accumulated <= 1'b0;
+            end else begin
+                bresp_seen              <= bresp_seen + 2'd1;
+                bresp_error_accumulated <= bresp_error_accumulated | bresp_error;
             end
         end
     end
-    // B 一定晚于对应 AW 入队，bresp_count_valid 此时必为 1
-    assign dma_write_complete     = bresp_valid && (!bresp_expect_two || bresp_first_seen);
-    assign dma_write_complete_error = bresp_error || (bresp_expect_two && bresp_error_accumulated);
+    // B 一定晚于对应 AW 入队，bresp_count_valid 此时必为 1；一个请求的最后一个 B 到达才算完成
+    assign dma_write_complete     = bresp_valid && bresp_request_last;
+    assign dma_write_complete_error = bresp_error || bresp_error_accumulated;
 
     // ------------------------------------------------------------ BAS 打包
     assign bas_m2s[`BAS_M2S_AWVALID] = aw_fifo_valid;
