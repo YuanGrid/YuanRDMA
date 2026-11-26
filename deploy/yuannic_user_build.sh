@@ -9,7 +9,7 @@
 #   YuanNIC_User_Package/lib/       libibverbs / librdmacm / libyuanrdma-rdmav65.so ...
 #   YuanNIC_User_Package/include/   头文件（编译依赖本栈的其他程序时用）
 #   YuanNIC_User_Package/ko/        内核模块：yuanrdma.ko / yuanmcdma.ko / yuannic.ko
-#   YuanNIC_User_Package/doc/       用户手册
+#   YuanNIC_User_Package/doc/       用户手册：user-guide.md / perftest-guide.md + 《YuanNIC-NH400网卡使用手册》.pdf/.docx（取自 docs/manual/）
 #   YuanNIC_User_Package/tools/     运维脚本（flash_and_init.sh / roce_perf_test.sh）
 #   YuanNIC_User_Package/firmware/  最新一版烧写镜像（.jic + .rpd + .sof），取自 firmware/
 #   YuanNIC_User_Package-<版本>-<YYYYMMDD>.tgz
@@ -98,6 +98,7 @@ usage()
   CC_KERN        编内核模块用的编译器，默认自动找 gcc-12，找不到则用 gcc。
                  必须与编译当前内核的编译器一致（Ubuntu 22.04 HWE 6.8 是 gcc-12）。
   YUANNIC_FW_DIR    固件镜像目录，默认仓库根 firmware/。
+  YUANNIC_MANUAL_DIR 使用手册（.pdf / .docx）所在目录，默认仓库根 docs/manual/；找不到手册时报错退出。
 
 做什么：
   1. 复制 code/github/rdma-core（v66）到 work/，注入 code/rdmasw/rdma-core-provider/yuanrdma，
@@ -106,7 +107,7 @@ usage()
   3. （未加 --no-ko 时）编 code/kernel 下的 yuanrdma.ko、yuanmcdma.ko、yuannic.ko。
   4. 编 code/ynictrl 下的 ynictrl（FPGA 网卡固件更新工具）。
   5. 把程序、库、头文件、ko、yuancli、手册全部收集到 YuanNIC_User_Package/。
-  6. 生成 VERSION / README.md / doc/ 两份手册。
+  6. 生成 VERSION / README.md / doc/ 两份 markdown 指南，并拷入 docs/manual/ 下的使用手册（.pdf / .docx）。
   7. 打包成 YuanNIC_User_Package-<版本>-<YYYYMMDD>.tgz（--no-tgz 可跳过），
      放在本脚本所在目录；包内顶层目录名固定为 YuanNIC_User_Package/。
 
@@ -117,7 +118,7 @@ usage()
   YuanNIC_User_Package/include/    头文件
   YuanNIC_User_Package/ko/         yuanrdma.ko / yuanmcdma.ko / yuannic.ko
   YuanNIC_User_Package/etc/libibverbs.d/  空目录，libibverbs 启动时 opendir 用（消除 Warning）
-  YuanNIC_User_Package/doc/        用户手册
+  YuanNIC_User_Package/doc/        user-guide.md / perftest-guide.md / 使用手册 .pdf + .docx
   YuanNIC_User_Package/firmware/   最新一版烧写镜像（.jic / .rpd / .sof + SHA256SUMS）
   YuanNIC_User_Package-<版本>-<YYYYMMDD>.tgz   可直接交付的压缩包
 
@@ -576,8 +577,10 @@ YuanNIC_User_Package/
 ├── tools/             flash_and_init.sh（烧写 + 环境初始化）/ roce_perf_test.sh
 ├── firmware/          最新一版固件（.jic / .rpd / .sof，见 firmware/README.md）
 └── doc/
-    ├── user-guide.md      完整使用手册
-    └── perftest-guide.md  perftest 测试指南
+    ├── user-guide.md      完整使用说明
+    ├── perftest-guide.md  perftest 测试指南
+    ├── YuanNIC-NH400网卡使用手册.pdf   使用手册（固件烧写、在线升级、perftest 基线测试）
+    └── YuanNIC-NH400网卡使用手册.docx  同上，可编辑版
 ```
 
 ## 三步跑起来
@@ -717,6 +720,12 @@ done
 `-c` 写板卡型号 `YN400GA7B041C`，`-a` 是网卡序号（`-q` 输出里的 Adapter 编号）。
 镜像用包内 `firmware/` 里 `YN400GA7B041C-` 开头的文件；**ynictrl 不读取板卡的实际型号来核对**，烧之前先确认是这块卡。
 
+> **ynictrl 在线升级只能烧 `.rpd` 文件：`firmware/YN400GA7B041C-R<版本>-….rpd`。**
+> `firmware/` 里同一版本还有 `.jic`（整片 flash 镜像，只能用 Quartus Programmer 经 JTAG 烧）和
+> `.sof`（JTAG 临时加载，掉电即失），**这两种都不能交给 ynictrl**，写进 flash 会把 active 区写坏、网卡起不来。
+> 也不要把别的文件改名成 `.rpd`。本包的 ynictrl 会按扩展名和文件头拒绝非 .rpd 文件（报 `Only .rpd files can be written to flash`
+> 或 `is not an Agilex .rpd image`），旧版 ynictrl 没有这道检查。
+
 ```bash
 sudo ./bin/ynictrl -c <型号> -a 0 -q                                              # 查询当前版本
 sudo ./bin/ynictrl -c <型号> -a 0 -n MD400G260713002                              # 只改序列号（不切镜像，不用重启）
@@ -724,7 +733,9 @@ sudo ./bin/ynictrl -c <型号> -a 0 -p firmware/<型号>-R<版本>-….rpd      
 sudo ./bin/ynictrl -c <型号> -a 0 -p firmware/<型号>-R<版本>-….rpd -n MD400G260713002  # 升级并同时写序列号
 ```
 
-固件更新需要 `yuannic.ko` 已加载。
+ynictrl 通过 `yuannic.ko` 提供的 `/dev/ynic_netdev` 访问网卡，**必须先加载 `ko/yuanmcdma.ko`、再加载 `ko/yuannic.ko`**
+（`lsmod | grep yuannic` 有输出即可）；不需要 `yuanrdma.ko`。命令都在解压后的 `YuanNIC_User_Package/` 目录下执行。
+完整的升级步骤（含核对 SHA256、升级后核对 VERSION）见 `doc/` 下的《YuanNIC-NH400网卡使用手册》第六章。
 
 - `-q` 的 `BANK` 是当前运行的镜像：`Active`（升级区）或 `Boot`（出厂回退镜像）；`TYPE` 是产品型号。
 - `-p` 依次显示 `erase` / `program` / `verify` 三行，每行都到 `100%` 才算完成；**整个过程约 14 分钟**，
@@ -854,6 +865,19 @@ if grep -n '@[A-Z_]*@' "$OUT/README.md" "$OUT/doc/user-guide.md" "$OUT/doc/perft
     die "文档里还有没替换的占位符（见上）"
 fi
 
+# 使用手册（.pdf 给用户看，.docx 是可编辑版）取自仓库 docs/manual/，原样拷进 doc/。
+# 交付包必须带手册，缺了直接报错；先删掉 doc/ 里上一次留下的旧手册，手册改名后不会留下两份。
+MANUAL_SRC="${YUANNIC_MANUAL_DIR:-$ROOT/docs/manual}"
+rm -f "$OUT/doc"/*.pdf "$OUT/doc"/*.docx
+manual_n=0
+for f in "$MANUAL_SRC"/*.pdf "$MANUAL_SRC"/*.docx; do
+    [ -f "$f" ] || continue
+    cp "$f" "$OUT/doc/" || die "拷贝 $f 失败"
+    echo "  使用手册：doc/$(basename "$f")（$(du -h "$f" | cut -f1)）"
+    manual_n=$((manual_n + 1))
+done
+[ "$manual_n" -gt 0 ] || die "$MANUAL_SRC 下没有使用手册（.pdf / .docx），可用 YUANNIC_MANUAL_DIR 指定"
+
 
 # ---------------------------------------------------------------------------
 # 7. 自检
@@ -970,7 +994,7 @@ if [ -d "$FW_SRC" ]; then
 | 文件 | 用途 | 怎么烧 |
 |---|---|---|
 | `<型号>-A….jic` | 整片 flash 镜像（Factory boot + active） | JTAG：`tools/flash_and_init.sh --flash <文件名>`（掉电保持，配置器件 MX66U2G） |
-| `<型号>-R….rpd` | active 镜像 | 在线升级：`bin/ynictrl -c <型号> -a 0 -p <文件>`（`-a` 是网卡序号；只写 active 区，Factory 区不动） |
+| `<型号>-R….rpd` | active 镜像 | 在线升级：`bin/ynictrl -c <型号> -a 0 -p <文件>`（`-a` 是网卡序号；只写 active 区，Factory 区不动）。**ynictrl 只能烧这个 .rpd** |
 | `<型号>-B….rpd` | Factory boot 镜像 | 一般不需要单独烧（`ynictrl -b` 写备份区）；整片恢复用 `.jic` |
 | `<型号>-R….sof` | active 镜像（易失） | JTAG 临时加载：`tools/flash_and_init.sh --sram <文件名>`，掉电恢复 flash 里的版本 |
 
