@@ -21,6 +21,7 @@
 #include "ynictrl_main.h"
 #include "build_version.h"
 #include "altera_flash.h"
+#include "rpd_check.h"
 
 
 #define IS_POSITIVE_INTEGER(num) ((num) > 0 && (num) == (int)(num))
@@ -150,7 +151,9 @@ void usage(void)
 	printf("  -i, --interface <num>           Select the Interface to be operated,Use with -s/-r\n");
 	printf("  -p, --program <file>            Upargde/downgrade an adapter; add -n <SN> to also set the\n");
 	printf("                                  serial number, otherwise the serial number in flash is kept\n");
-	printf("  -b, --backup <file>             Upargde/downgrade an backup adapter\n");
+	printf("                                  400G: <file> must be the release .rpd (<model>-R...rpd);\n");
+	printf("                                  .jic / .sof are rejected (JTAG only, never write them to flash)\n");
+	printf("  -b, --backup <file>             Upargde/downgrade an backup adapter (400G: <model>-B...rpd only)\n");
 	printf("  -s, --set <address>             Set an adapter mac address\n");
 	printf("  -r, --read                      Read an adapter mac address\n");
 	printf("  -e, --erase <file>              Erase image!\n");
@@ -626,6 +629,15 @@ int neti_program_update(int model, char cmd, const char *name, u32 addr, const c
 	if(ret == XST_FAILURE) {
 		goto neti_quit;
 	}
+	/*
+	 * 400G 只认 .rpd。上面的文件名校验不限扩展名：-p 给 <型号>-R….sof、-b 给 <型号>-A….jic
+	 * 都能通过，而且 -b 不查大小，268 MB 的 .jic 会从 boot 区一路写下去。打开文件前先查扩展名，
+	 * 读进来之后再查文件头（rpd_check.h）。
+	 */
+	if(model == MODEL_400G && rpd_name_check(name) != 0) {
+		ret = XST_FAILURE;
+		goto neti_quit;
+	}
 
 	file_fd = open(name, O_RDONLY | O_BINARY);
 	if (file_fd < 0)
@@ -673,6 +685,10 @@ int neti_program_update(int model, char cmd, const char *name, u32 addr, const c
 	if (read(file_fd, src, size) < size)
 	{
 		printf("Read file failed\n");
+		ret = XST_FAILURE;
+		goto neti_quit;
+	}
+	if(model == MODEL_400G && rpd_data_check(name, src, size) != 0) {
 		ret = XST_FAILURE;
 		goto neti_quit;
 	}
