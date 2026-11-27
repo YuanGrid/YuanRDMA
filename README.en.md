@@ -67,7 +67,7 @@ Organisations and individuals interested in taking part are welcome to reach us 
 
 1. **Operators building their own AI clusters → the interconnect layer of training and inference clusters → standard verbs plus programmable congestion control.** Multi-node communication in large-model training (AllReduce / AllGather / ReduceScatter) is bulk GPU-memory movement, and the variable that decides a cluster's effective compute. YuanNIC speaks standard verbs, so NCCL's built-in IB verbs plugin runs unmodified; multiple QPs in parallel push the transmit direction to 88% of line rate, while PFC lossless plus DCQCN hold collective bandwidth deterministic across a shared Ethernet fabric. Once a cluster passes a hundred GPUs, congestion parameters and retransmission behaviour have to follow its scale — programmability is what turns the network from an unpredictable bottleneck into a plannable extension of compute.
 
-2. **Distributed and object storage vendors → NVMe-oF front ends and the data plane of KV / object stores → low latency plus MR capacity.** RDMA Read / Write bypass the kernel stack, with a single write at roughly 2.2 µs; 128 QPs and up to 512 MiB per MR carry NVMe-oF front ends and the data plane of distributed KV / object stores. Workloads that repeatedly write one large buffer to a remote node — KVCache offload, parameter servers — are exactly the shape Write with Immediate plus asynchronous completion was built for. The boundary between storage and compute is redrawn: remote memory costs almost as little to reach as local memory.
+2. **Distributed and object storage vendors → NVMe-oF front ends and the data plane of KV / object stores → low latency plus MR capacity.** RDMA Read / Write bypass the kernel stack, with a single write at roughly 2.5 µs; 128 QPs and up to 512 MiB per MR carry NVMe-oF front ends and the data plane of distributed KV / object stores. Workloads that repeatedly write one large buffer to a remote node — KVCache offload, parameter servers — are exactly the shape Write with Immediate plus asynchronous completion was built for. The boundary between storage and compute is redrawn: remote memory costs almost as little to reach as local memory.
 
 3. **Inference service providers → KV-cache transfer between nodes under prefill/decode disaggregation → direct GPU-memory access with no staging copies.** GPUDirect RDMA (dma-buf MR registration) carries data straight to GPU memory without staging through host memory, removing two copies when KV cache moves between nodes; IBGDA lets the GPU ring the doorbell itself, lifting the CPU off the submission path. Both are implemented, with on-board validation in progress — communication moving from "the CPU does it on our behalf" to "the device does it itself" is the precondition for inference clusters at ten-thousand-GPU scale.
 
@@ -106,7 +106,7 @@ The full path of one RDMA operation, from application submission to usable data 
 - **Native stack**: RoCEv2 RC / UD in RTL; assembly and parsing happen on the card, off the host software stack.
 - **RC semantics**: Write / Write with Immediate / Read / Send / Send with Immediate; PSN, ACK / NAK, Go-back-N retransmission and timeouts, and ICRC all in hardware.
 - **UD semantics**: Send / Send with Immediate (with DETH); the CQE reports the source QPN.
-- **Multi-QP**: one QP is capped near 49.5% of line rate by per-packet assembly; 4 QPs reach 88% (352.1 Gb/s). `QP_NUM` defaults to 128, scalable to 4096.
+- **Single-QP line rate**: one QP transmits at 353 Gb/s (88% of line rate), on par with 4 QPs — the transmit direction is now capped by port bandwidth. `QP_NUM` defaults to 128, scalable to 4096.
 - **Two connection setups**: RoCE CM (CM MADs over QP1 / GSI, the standard `rdma_cm` route), or TCP-based exchange (NCCL and perftest trade QP information over verbs, no CM needed).
 - **QPN window**: QPNs sit in a base-aligned contiguous window; `FORCE_MAX_QP` / `FORCE_QPN_BASE` stay in sync between software and RTL.
 - **PFC lossless**: per-priority transmit admission per IEEE 802.1Qbb, PFC frames handled by the F-tile hard MAC.
@@ -184,24 +184,24 @@ Queues, tables and memory translation are consolidated below; the figures follow
 
 ## 6 Performance
 
-Setup: YuanNIC-NH400-C, peer NVIDIA ConnectX-7, 400GbE direct link, upstream perftest. Bandwidth cases use 1 MiB messages, 30 s each; latency cases use 2 B messages, 30 s each, and the tables list perftest's typical (median) values. Figures from image `R26.12.02-B0116-20261123-1X400G`.
+Setup: YuanNIC-NH400-C, peer NVIDIA ConnectX-7, 400GbE direct link, upstream perftest. Bandwidth cases use 1 MiB messages, 30 s each; latency cases use 2 B messages, 5000 iterations each, and the tables list perftest's typical (median) values. Figures from image `R26.12.03-B0122-20261126-1X400G`.
 
 <table width="100%" style="width:100%;border:0;border-collapse:collapse">
 <tr><td style="border:0;padding:0">
 
 <table width="100%" style="width:100%">
 <tr><th style="width:26%">Test</th><th style="width:37%">YuanNIC as client</th><th style="width:37%">YuanNIC as server</th></tr>
-<tr><td style="width:26%"><code>ib_write_bw</code> (1 QP)</td><td style="width:37%"><strong>198.1 Gb/s (49.5%)</strong></td><td style="width:37%">98.2 Gb/s (24.5%)</td></tr>
-<tr><td style="width:26%"><code>ib_read_bw</code> (1 QP)</td><td style="width:37%">74.4 Gb/s (18.6%)</td><td style="width:37%">89.8 Gb/s (22.5%)</td></tr>
-<tr><td style="width:26%"><code>ib_send_bw</code> (1 QP)</td><td style="width:37%"><strong>198.1 Gb/s (49.5%)</strong></td><td style="width:37%">97.4 Gb/s (24.4%)</td></tr>
-<tr><td style="width:26%"><code>ib_write_bw</code> (4 QP)</td><td style="width:37%"><strong>351.9 Gb/s (88.0%)</strong></td><td style="width:37%">96.9 Gb/s (24.2%)</td></tr>
+<tr><td style="width:26%"><code>ib_write_bw</code> (1 QP)</td><td style="width:37%"><strong>352.0 Gb/s (88.0%)</strong></td><td style="width:37%">98.5 Gb/s (24.6%)</td></tr>
+<tr><td style="width:26%"><code>ib_read_bw</code> (1 QP)</td><td style="width:37%">91.8 Gb/s (22.9%)</td><td style="width:37%">89.7 Gb/s (22.4%)</td></tr>
+<tr><td style="width:26%"><code>ib_send_bw</code> (1 QP)</td><td style="width:37%"><strong>353.0 Gb/s (88.2%)</strong></td><td style="width:37%">98.3 Gb/s (24.6%)</td></tr>
+<tr><td style="width:26%"><code>ib_write_bw</code> (4 QP)</td><td style="width:37%"><strong>351.8 Gb/s (88.0%)</strong></td><td style="width:37%">97.5 Gb/s (24.4%)</td></tr>
 <tr><td style="width:26%"><code>ib_read_bw</code> (4 QP)</td><td style="width:37%">99.6 Gb/s (24.9%)</td><td style="width:37%"><strong>328.2 Gb/s (82.1%)</strong></td></tr>
 </table>
 
 </td></tr>
 </table>
 
-Percentages are of the 400 Gb/s line rate. With 4 QPs the transmit direction reaches 88% of line rate and the receive direction 82%; a single QP is limited to about 49.5% by per-packet assembly overhead, which is the main reason to run multiple QPs in parallel.
+Percentages are of the 400 Gb/s line rate. A single QP transmits at 88%, on par with 4 QPs: with MTU 1024 the payload ceiling of a 400GbE port is about 370 Gb/s, and both reach 95% of it, so the transmit direction is capped by port bandwidth. With multiple QPs the receive direction (`ib_read_bw` with YuanNIC as server) reaches 82%. The three single-QP cases with YuanNIC as server are limited by the peer host to about 100 Gb/s in this setup.
 
 Latency (2 B messages, one-way, typical / p99):
 
@@ -210,15 +210,15 @@ Latency (2 B messages, one-way, typical / p99):
 
 <table width="100%" style="width:100%">
 <tr><th style="width:26%">Test</th><th style="width:37%">YuanNIC as client</th><th style="width:37%">YuanNIC as server</th></tr>
-<tr><td style="width:26%"><code>ib_write_lat</code></td><td style="width:37%"><strong>2.53 / 2.75 µs</strong></td><td style="width:37%"><strong>2.45 / 2.65 µs</strong></td></tr>
-<tr><td style="width:26%"><code>ib_read_lat</code></td><td style="width:37%">4.25 / 4.50 µs</td><td style="width:37%">2.83 / 3.15 µs</td></tr>
-<tr><td style="width:26%"><code>ib_send_lat</code></td><td style="width:37%">2.75 / 2.92 µs</td><td style="width:37%">2.66 / 2.88 µs</td></tr>
+<tr><td style="width:26%"><code>ib_write_lat</code></td><td style="width:37%"><strong>2.60 / 2.81 µs</strong></td><td style="width:37%"><strong>2.48 / 2.71 µs</strong></td></tr>
+<tr><td style="width:26%"><code>ib_read_lat</code></td><td style="width:37%">4.32 / 4.64 µs</td><td style="width:37%">3.04 / 3.32 µs</td></tr>
+<tr><td style="width:26%"><code>ib_send_lat</code></td><td style="width:37%">2.83 / 2.99 µs</td><td style="width:37%">2.79 / 2.96 µs</td></tr>
 </table>
 
 </td></tr>
 </table>
 
-Write latency sits near 2.5 µs on both ends and barely moves with message size. Read latency is higher — 4.3 µs in the client direction — the cost of the responding data being copied serially on the receive side. p99 runs 0.2–0.3 µs above typical, most of it host-side interrupt and scheduling jitter; use typical when judging regressions across versions.
+Write latency is 2.5–2.6 µs on both ends and send latency about 2.8 µs; read latency is 4.3 µs as client and 3.0 µs as server. p99 runs about 0.2–0.3 µs above typical. Latency is sensitive to the host CPU's power state — reruns on the same image a few minutes apart can differ by about 0.3 µs in typical — so the client-side `ib_write_lat` / `ib_send_lat` figures are the median of 4 runs and the rest are single runs; judge regressions across versions by the typical of repeated runs.
 
 ## 7 Supported Hardware
 
@@ -311,21 +311,24 @@ Step-by-step instructions for JTAG flashing, online firmware upgrade, MAC/SN pro
 Done:
 
 - [x] RoCEv2 RC engine, bidirectional perftest interop with ConnectX-7
+- [x] Single QP transmits at 353 Gb/s (88% of line rate), on par with 4 QPs; the RoCE engine stays at 250 MHz with timing fully closed
 - [x] Per-priority PFC gating
 - [x] 128 QPs / 64 CQs / 131072 MTT entries; DCQCN across all 128 QPs
-- [x] UD transport and RoCE CM (RTL and driver complete; simulation and unit tests pass)
+- [x] UD transport validated on board
+- [x] RoCE CM validated on board: `rping`, `ucmatose` (including multiple connections), `rdma_server` / `rdma_client` and perftest `-R` all pass in both directions
+- [x] NCCL across two nodes: six collective types run over RoCE with all data checks passing
 - [x] 1x400G / 1x200G / 1x100G / 1x40G port modes, and a software stack on both X86_64 and ARM_64
-- [x] GPUDirect RDMA and NCCL integration (software stack complete, on-board validation in progress)
+- [x] GPUDirect RDMA software stack (`dma-buf` MR registration); on-board validation in progress
 
 In progress and beyond, along three tracks:
 
 ### 10.1 400G performance work and a collective communication library
 
-A single QP reaches only 49.5% of line rate, limited by per-packet assembly overhead; multi-QP concurrency currently reaches 88%. The next step is to push the assembly and flow-control path toward line rate, and to consolidate multi-QP dispatch, congestion feedback and retransmission into reusable communication primitives. A collective communication library (AllReduce / AllGather / ReduceScatter) is built on top, so upper layers no longer manage QP parallelism themselves.
+A single QP now transmits at 353 Gb/s (88% of line rate), on par with 4 QPs and at 95% of the port's payload ceiling with MTU 1024 (about 370 Gb/s); the transmit direction is capped by port bandwidth. Next: DMA read credits are already about 94% utilized and are the next wall; harden the timing margin of the RoCE engine's 250 MHz clock; and extend the single-QP work to RDMA Read and the receive direction. On that basis, consolidate multi-QP dispatch, congestion feedback and retransmission into reusable communication primitives. A collective communication library (AllReduce / AllGather / ReduceScatter) is built on top, so upper layers no longer manage QP parallelism themselves.
 
 ### 10.2 Broader workload coverage
 
-Building on the validated GPUDirect RDMA and NCCL path, cover more real workload shapes: cross-node KV Cache transfer under prefill/decode disaggregation, the communication patterns of hybrid parallelism in training, and an interop matrix spanning multiple NIC and switch vendors.
+Building on the RoCE CM and NCCL support now working on board: complete UD connection setup over `rdma_cm` (`udaddy`, which needs the destination address carried per work request); complete on-board validation of GPUDirect RDMA (`dma-buf`) so NCCL data lands directly in GPU memory; complete on-board validation of PFC and DCQCN congestion control; and cover more real workload shapes: cross-node KV Cache transfer under prefill/decode disaggregation, the communication patterns of hybrid parallelism in training, and an interop matrix spanning multiple NIC and switch vendors.
 
 ### 10.3 800G (2027 target)
 
