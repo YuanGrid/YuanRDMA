@@ -296,6 +296,7 @@ cd build/YuanNIC-NH400-C
 ### 9.4 烧写、加载驱动与测试
 
 ```bash
+cd deploy                                  # 在仓库根目录下进入
 ./flash_and_init.sh --flash <镜像版本>     # 烧写固件 → PCIe 重枚举 → 加载驱动 → 配网 → 自检
 ./flash_and_init.sh                        # 不烧写，只重新拉起驱动与网络
 ibv_devinfo -d yuanrdma0                   # 应看到 PORT_ACTIVE

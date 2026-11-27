@@ -298,7 +298,7 @@ C 卡同理，在 `build/YuanNIC-NH400-C/` 下执行。
 > ⚠️ 烧写会覆盖板上镜像，且可能让卡掉出 PCIe 总线需要冷断电。脚本要求**显式加开关**才烧写。
 
 ```bash
-cd build/user_tools
+cd deploy
 
 # 不烧写，只重新拉起驱动与网络（日常最常用）
 ./flash_and_init.sh
@@ -327,7 +327,7 @@ ping -c 3 <对端 IP>
 ### 跑性能测试
 
 ```bash
-cd build/user_tools
+cd deploy
 PEER_PASS=<对端密码> ./roce_perf_test.sh --label B6457
 ```
 

@@ -296,6 +296,7 @@ cd build/YuanNIC-NH400-C
 ### 9.4 Flash, load drivers and test
 
 ```bash
+cd deploy                                  # from the repository root
 ./flash_and_init.sh --flash <image>        # flash → PCIe re-enumerate → load drivers → configure network → self-check
 ./flash_and_init.sh                        # no flashing; just bring drivers and network back up
 ibv_devinfo -d yuanrdma0                   # expect PORT_ACTIVE

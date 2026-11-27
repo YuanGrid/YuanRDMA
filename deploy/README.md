@@ -7,7 +7,9 @@
 | 文件 | 说明 |
 |---|---|
 | `yuanrdma_install.sh` | 环境一键安装（apt / Python / Verilator / DPDK 依赖 / CUDA），按 `INSTALL.md` 第 2~6 节。`ROOT=$HERE/..` 指向仓库根 |
-| `yuannic_user_build.sh` | 用户态栈构建与打包。产物默认出到 `build/user_tools/YuanNIC_User_Package`（`flash_and_init.sh` / `roce_perf_test.sh` 按同级目录定位包，跟着挪会打断上板流程）；要改存放位置用 `YUANNIC_PKG_OUT` 覆盖，并同步改那两个脚本 |
+| `yuannic_user_build.sh` | 用户态栈构建与打包。产物默认出到 `build/user_tools/YuanNIC_User_Package`，要改存放位置用 `YUANNIC_PKG_OUT` 覆盖（下面两个脚本认同一个变量） |
+| `flash_and_init.sh` | 上板：清理 → 卸驱动 → [可选烧写] → PCIe 重枚举 → 装驱动 → 配网 → 自检。**默认不烧写**，烧写要显式加 `--flash` / `--sram`。在本目录运行时使用 `build/user_tools/YuanNIC_User_Package`，GID 缓存写在 `build/user_tools/.gid_local`；打包时原样放进包内 `tools/` |
+| `roce_perf_test.sh` | perftest 六项 + 4 QP，双向；含 UD（`--ud`）、失败自动诊断。在本目录运行时诊断输出落 `build/user_tools/work/`；打包时原样放进包内 `tools/` |
 
 ## 约定
 

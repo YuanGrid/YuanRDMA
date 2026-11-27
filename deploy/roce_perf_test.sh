@@ -57,7 +57,7 @@
 #   GID_LOCAL   本机 GID 索引，默认现场探测 192.168.50.1 的 v2 那条
 #   GID_REMOTE  对端 GID 索引，默认 3（192.168.50.2 v2）
 #   BDF         卡在 PCIe 上的地址，yuancli 用，默认 0000:6f:00.0
-#   DIAG_DIR    诊断输出目录，默认 <脚本目录>/work/diag
+#   DIAG_DIR    诊断输出目录，默认 build/user_tools/work/diag（开发期）或 <脚本目录>/work/diag（包内）
 
 set -uo pipefail
 # 判断模块是否已加载：直接读 /proc/modules，不要写成 `lsmod | grep -q`。
@@ -69,16 +69,24 @@ mod_loaded() { grep -q "^$1 " /proc/modules; }
 HERE=$(cd "$(dirname "$0")" && pwd)
 
 # 本脚本有三个合法的放置位置：
-#   1) build/user_tools/        —— 开发期，包在同级 YuanNIC_User_Package/
+#   1) deploy/                      —— 开发期（2026-11-27 从 build/user_tools/ 移来），
+#                                      包与运行期产物（.gid_local、work/）仍在 build/user_tools/
 #   2) YuanNIC_User_Package/        —— 早期位置，包就是当前目录
 #   3) YuanNIC_User_Package/tools/  —— 当前交付布局，包在上一级
 # 用 env.sh + bin/ 是否存在来判定，比猜路径可靠。
+UT=""
 if [ -f "$HERE/env.sh" ] && [ -d "$HERE/bin" ]; then
     NIC="$HERE"                                   # 位置 2
+    WORK_BASE="$HERE/work"
 elif [ -f "$HERE/../env.sh" ] && [ -d "$HERE/../bin" ]; then
     NIC=$(cd "$HERE/.." && pwd)                   # 位置 3
+    WORK_BASE="$HERE/work"
 else
-    NIC="$HERE/YuanNIC_User_Package"              # 位置 1
+    # 位置 1：包由 yuannic_user_build.sh 出到 build/user_tools/YuanNIC_User_Package，
+    # 构建时用 YUANNIC_PKG_OUT 改了位置的，这里跟着同一个变量走。
+    UT="$(cd "$HERE/.." && pwd)/build/user_tools"
+    NIC="${YUANNIC_PKG_OUT:-$UT/YuanNIC_User_Package}"
+    WORK_BASE="$UT/work"
 fi
 
 # 结果日志：默认不写；需要留档时用 ROCE_PERF_LOG=<路径> 指定。
@@ -97,11 +105,12 @@ SIDES=${SIDES:-"client server"}
 # 本机 GID 索引会随 IP 增减和驱动重载漂移（实测 192.168.50.1 在 2/3/5 之间变过）。
 # 缓存文件由 flash_and_init.sh 写，可能在这几处，按顺序找：
 #   $NIC/.gid_local   交付包内的位置（客户机器上）
+#   $UT/.gid_local    开发期（脚本在 deploy/，flash_and_init.sh 写在 build/user_tools/）
 #   $HERE/.gid_local  脚本就在包根目录时
-#   $HERE/../.gid_local  脚本在 tools/ 里的开发期布局
+#   $HERE/../.gid_local  早期布局
 # 都没有才退回现场探测（见下面的 probe_gid），最后才是默认值。
 GID_CACHE=""
-for c in "$NIC/.gid_local" "$HERE/.gid_local" "$HERE/../.gid_local"; do
+for c in "$NIC/.gid_local" "${UT:+$UT/.gid_local}" "$HERE/.gid_local" "$HERE/../.gid_local"; do
     [ -f "$c" ] && { GID_CACHE=$c; break; }
 done
 if [ -z "${GID_LOCAL:-}" ] && [ -n "$GID_CACHE" ]; then
@@ -149,11 +158,11 @@ ONLY=""
 KEEP_GOING=0      # 默认失败即停，见文件头
 NO_DIAG=0
 BDF=${BDF:-0000:6f:00.0}
-DIAG_DIR=${DIAG_DIR:-$HERE/work/diag}
+DIAG_DIR=${DIAG_DIR:-$WORK_BASE/diag}
 # FPGA 当服务端时服务端日志落这里（原来服务端在 CX7，日志在对端 /tmp）。
-SRV_LOG_DIR=${SRV_LOG_DIR:-$HERE/work/srv}
+SRV_LOG_DIR=${SRV_LOG_DIR:-$WORK_BASE/srv}
 mkdir -p "$SRV_LOG_DIR" 2>/dev/null || SRV_LOG_DIR=/tmp
-UD_LOG_DIR=${UD_LOG_DIR:-$HERE/work/ud}
+UD_LOG_DIR=${UD_LOG_DIR:-$WORK_BASE/ud}
 mkdir -p "$UD_LOG_DIR" 2>/dev/null || UD_LOG_DIR=/tmp
 MSG_SIZE=${MSG_SIZE:-65536}
 ITERS=${ITERS:-5000}
@@ -255,7 +264,7 @@ die()  { printf '\033[31m%s\033[0m\n' "$*" >&2; exit 1; }
 if [ "$DO_BUILD" = 1 ]; then
     # --build 只在开发期有意义：包内没有源码和构建脚本
     [ -x "$HERE/yuannic_user_build.sh" ] \
-        || die "--build 需要在 build/user_tools/ 下运行（包内只有二进制，无法重编）"
+        || die "--build 需要在仓库的 deploy/ 下运行（包内只有二进制，无法重编）"
     say "== 重编 RDMA 用户态栈（yuannic_user_build.sh --no-ko）=="
     "$HERE/yuannic_user_build.sh" --no-ko || die "yuannic_user_build.sh 失败"
 fi

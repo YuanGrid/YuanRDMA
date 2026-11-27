@@ -51,7 +51,7 @@
 #   PEER_IP       对端数据面地址，默认 192.168.50.2
 #   RMMOD_TIMEOUT 单个模块卸载超时秒数，默认 20
 #   BDF           PCI 地址，默认 0000:6f:00.0
-#   BUILD_ROOT    镜像根目录，默认 $HERE/..（即 build），测试时指向假的目录树
+#   BUILD_ROOT    镜像根目录，默认仓库根（镜像在其下 firmware/），测试时指向假的目录树
 #   KO_SRC        驱动来源：build（默认，从 code/kernel 编译产物同步进包）/ package（直接用包里现有 ko）/
 #                 <目录>（从该目录拷 yuanmcdma/yuannic/yuanrdma.ko）。换镜像和换驱动要分开验证时用
 #                 UD 与 RC 自 2026-11-21 起同时支持，不再有 ENABLE_UD / ENABLE_CM_SUP 开关。
@@ -70,7 +70,8 @@ mod_loaded() { grep -q "^$1 " /proc/modules; }
 HERE=$(cd "$(dirname "$0")" && pwd)
 
 # 本脚本有两个合法的放置位置：
-#   1) build/user_tools/        —— 开发期
+#   1) deploy/                  —— 开发期（2026-11-27 从 build/user_tools/ 移来）。脚本在 deploy/，
+#                                  包与运行期状态（.gid_local）仍在 build/user_tools/
 #   2) 包内 tools/                  —— 交付后在 YuanNIC_User_Package/tools/
 # 用「同目录下有没有 ../bin + ../env.sh」判定是不是在包内，比猜路径更可靠。
 if [ -d "$HERE/../bin" ] && [ -f "$HERE/../env.sh" ]; then
@@ -78,14 +79,17 @@ if [ -d "$HERE/../bin" ] && [ -f "$HERE/../env.sh" ]; then
     NIC=$(cd "$HERE/.." && pwd)
 else
     IN_PACKAGE=0
-    NIC="$HERE/YuanNIC_User_Package"
+    # 包仍由 yuannic_user_build.sh 出到 build/user_tools/YuanNIC_User_Package；
+    # 构建时用 YUANNIC_PKG_OUT 改了产物位置的，这里跟着同一个变量走。
+    UT="$(cd "$HERE/.." && pwd)/build/user_tools"
+    NIC="${YUANNIC_PKG_OUT:-$UT/YuanNIC_User_Package}"
 fi
 
-KERNEL_OUT="$HERE/../../code/kernel"
+KERNEL_OUT="$HERE/../code/kernel"
 # 镜像归档目录在仓库根 firmware/（2026-11-19 从 firmware/ 上移）。
-# BUILD_ROOT 保留给测试指向假的目录树：给了就以它为准，否则用 $HERE/../..
+# BUILD_ROOT 保留给测试指向假的目录树：给了就以它为准，否则用仓库根（$HERE/..）
 BUILD_ROOT_SET=${BUILD_ROOT:+1}
-BUILD_ROOT=${BUILD_ROOT:-$HERE/../..}
+BUILD_ROOT=${BUILD_ROOT:-$HERE/..}
 FW_BACKUP="$BUILD_ROOT/firmware"
 # 在交付包里（tools/）时镜像就在包内 firmware/，不往包外找；显式给了 BUILD_ROOT 仍以它为准
 if [ "$IN_PACKAGE" = 1 ] && [ -z "${BUILD_ROOT_SET:-}" ] && [ -d "$NIC/firmware" ]; then
@@ -111,7 +115,7 @@ SRAM_TIMEOUT=${SRAM_TIMEOUT:-900}
 if [ "$IN_PACKAGE" = 1 ]; then
     GID_CACHE="$NIC/.gid_local"
 else
-    GID_CACHE="$HERE/.gid_local"
+    GID_CACHE="$UT/.gid_local"
 fi
 
 IMG=""

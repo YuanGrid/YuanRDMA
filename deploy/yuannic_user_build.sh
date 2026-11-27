@@ -1,7 +1,7 @@
 #!/bin/bash
 # YuanNIC 用户态软件包构建：rdma-core(v66) + yuanrdma provider + perftest + 内核 ko
 #                          + yuancli 诊断工具 + 手册，最后打包成
-#                          YuanNIC_User_Package-<版本>-<YYYYMMDD>.tgz（版本用 --version 给）。
+#                          YuanNIC_User_Package-V<版本>-B<Build>-<YYYYMMDD>.tgz（版本用 --version、Build 号用 --build 给）。
 #
 # 产物全部收集到 YuanNIC_User_Package/，与系统 doca-host / MLNX_OFED 的 RDMA 栈完全隔离：
 #   YuanNIC_User_Package/bin/       perftest 程序 + ibv_* 工具 + yuancli + ynictrl
@@ -13,7 +13,7 @@
 #                                   + 《YuanNIC-400G-C板卡资源和引脚手册》.xlsx（都取自 docs/manual/）
 #   YuanNIC_User_Package/tools/     运维脚本（flash_and_init.sh / roce_perf_test.sh）
 #   YuanNIC_User_Package/firmware/  最新一版烧写镜像（.jic + .rpd + .sof），取自 firmware/
-#   YuanNIC_User_Package-<版本>-<YYYYMMDD>.tgz
+#   YuanNIC_User_Package-V<版本>-B<Build>-<YYYYMMDD>.tgz
 #                                   整个目录的打包，可直接交给最终用户（包内顶层目录名不带版本）
 #
 # 关键点：系统里装了 doca-host 3.5.0（OFED 26.07），它的 libibverbs 是 PABI 64，
@@ -23,13 +23,14 @@
 # （mlx5_ib / ib_uverbs / rdma_cm 由系统或 DOCA 提供）。
 #
 # 用法：
-#   ./yuannic_user_build.sh --version 26.12.02   # 全量编译 + 打包成 YuanNIC_User_Package-26.12.02-<今天>.tgz
+#   ./yuannic_user_build.sh --version 26.12.03 --build 0122   # 全量编译 + 打包成 YuanNIC_User_Package-V26.12.03-B0122-<今天>.tgz
 #   ./yuannic_user_build.sh        # 不给版本：版本记为 dev（交付前务必带 --version）
 #   ./yuannic_user_build.sh --no-ko   # 只编用户态
 #   ./yuannic_user_build.sh --clean   # 清理中间目录后重新编译
 #
 # 环境变量：
 #   YUANNIC_VERSION 同 --version（命令行优先）
+#   YUANNIC_BUILD   同 --build（命令行优先）
 #   CMAKE   指定 cmake（默认自动找）
 #   JOBS    并行度（默认 nproc）
 #   CC_KERN 内核模块编译器（默认自动找 gcc-12/gcc）
@@ -64,11 +65,10 @@ SRC_YNICTRL="$ROOT/code/ynictrl"
 # 仓库保持干净，临时件统一落 /home/roce_build 下。
 # 换机器或要回到仓库内编译时用 YUANNIC_BUILD_WORK 覆盖。
 WORK="${YUANNIC_BUILD_WORK:-/home/roce_build/yuannic_build/work}"
-# 产物默认仍落在 build/user_tools/YuanNIC_User_Package（2026-11-20）：
-# 脚本本身挪到了 deploy/，但**消费方没挪**——build/user_tools/flash_and_init.sh
-# 与 roce_perf_test.sh 都按「同级目录下有 YuanNIC_User_Package/」来定位包，
-# 产物跟着挪会把上板流程直接打断。要改存放位置，用环境变量覆盖这行，
-# 并同步改那两个脚本，不要只改一处。
+# 产物默认落在 build/user_tools/YuanNIC_User_Package。脚本都在 deploy/（本脚本 2026-11-20，
+# flash_and_init.sh 与 roce_perf_test.sh 2026-11-27），后两者在 deploy/ 下运行时按仓库根
+# 找 build/user_tools/YuanNIC_User_Package。要改存放位置就设 YUANNIC_PKG_OUT，
+# 三个脚本认同一个变量，不用再改脚本。
 OUT="${YUANNIC_PKG_OUT:-$ROOT/build/user_tools/YuanNIC_User_Package}"
 
 BUILD_KO=1
@@ -84,15 +84,20 @@ usage()
   -h, --help     显示本帮助并退出
                      默认行为（不加 --clean/--no-ko 时即"全量编译"）
   -v, --version <版本>
-                 交付包版本，形如 26.12.02（可带后缀，如 26.12.02-rc1）。写进 VERSION、
-                 README，并进入包名：YuanNIC_User_Package-<版本>-<YYYYMMDD>.tgz，
+                 交付包版本，形如 26.12.03（可带后缀，如 26.12.03-rc1；前面带 V 也行）。写进 VERSION、
+                 README，并进入包名（前面加 V）：YuanNIC_User_Package-V<版本>-B<Build>-<YYYYMMDD>.tgz，
                  日期取构建当天。不给时版本记为 dev，并打印警告。
+  -b, --build <Build 号>
+                 Build 号，与固件镜像名里的 B<build> 是同一套，如 0122 或 B0122（不足 4 位前面补 0）。
+                 写进 VERSION、README，并进入包名：YuanNIC_User_Package-V26.12.03-B0122-<YYYYMMDD>.tgz。
+                 不给时包名里没有 B 段；给了但与带进包的固件对不上时，打包过程会打印警告（不拦）。
       --clean    先删除 work/ 中间目录再编译（rdma-core 和 perftest 都重编）
       --no-ko    只编用户态，跳过内核模块（yuanrdma.ko / yuanmcdma.ko / yuannic.ko）
       --no-tgz   不生成 .tgz（只留目录）
 
 环境变量：
   YUANNIC_VERSION 同 --version，命令行给了以命令行为准。
+  YUANNIC_BUILD   同 --build，命令行给了以命令行为准。
   CMAKE          指定 cmake 可执行文件。默认自动挑一个 >= 3.18.1 的；
                  注意 PATH 里若有 Xilinx Vitis 的 cmake 3.3.2 会被跳过。
   JOBS           并行度，默认 nproc。
@@ -110,7 +115,7 @@ usage()
   4. 编 code/ynictrl 下的 ynictrl（FPGA 网卡固件更新工具）。
   5. 把程序、库、头文件、ko、yuancli、手册全部收集到 YuanNIC_User_Package/。
   6. 生成 VERSION / README.md / doc/ 两份 markdown 指南，并拷入 docs/manual/ 下的手册（.pdf / .docx / .xlsx）。
-  7. 打包成 YuanNIC_User_Package-<版本>-<YYYYMMDD>.tgz（--no-tgz 可跳过），
+  7. 打包成 YuanNIC_User_Package-V<版本>-B<Build>-<YYYYMMDD>.tgz（--no-tgz 可跳过），
      放在本脚本所在目录；包内顶层目录名固定为 YuanNIC_User_Package/。
 
 产物：
@@ -122,7 +127,7 @@ usage()
   YuanNIC_User_Package/etc/libibverbs.d/  空目录，libibverbs 启动时 opendir 用（消除 Warning）
   YuanNIC_User_Package/doc/        user-guide.md / perftest-guide.md / 使用手册 .pdf + .docx / 板卡资源和引脚手册 .xlsx
   YuanNIC_User_Package/firmware/   最新一版烧写镜像（.jic / .rpd / .sof + SHA256SUMS）
-  YuanNIC_User_Package-<版本>-<YYYYMMDD>.tgz   可直接交付的压缩包
+  YuanNIC_User_Package-V<版本>-B<Build>-<YYYYMMDD>.tgz   可直接交付的压缩包
 
 与系统 DOCA/OFED 的隔离：
   系统 doca-host 3.5.0（OFED 26.07）的 libibverbs 是 PABI 64，只认 lib*-rdmav64.so；
@@ -131,15 +136,16 @@ usage()
   也不编 rdma-core 的内核模块（mlx5_ib / ib_uverbs / rdma_cm 由系统或 DOCA 提供）。
 
 示例：
-  ./yuannic_user_build.sh --version 26.12.02   # 全量编译 + 打包（YuanNIC_User_Package-26.12.02-<今天>.tgz）
+  ./yuannic_user_build.sh --version 26.12.03 --build 0122   # 全量编译 + 打包（YuanNIC_User_Package-V26.12.03-B0122-<今天>.tgz）
+  ./yuannic_user_build.sh --version 26.12.03   # 不给 Build 号（YuanNIC_User_Package-V26.12.03-<今天>.tgz）
   ./yuannic_user_build.sh                # 全量编译 + 打包，版本记为 dev
   ./yuannic_user_build.sh --clean        # 清理后全量重编
   ./yuannic_user_build.sh --no-ko        # 只编用户态
   ./yuannic_user_build.sh --no-tgz       # 不生成 .tgz
-  JOBS=16 ./yuannic_user_build.sh --clean --version 26.12.02
+  JOBS=16 ./yuannic_user_build.sh --clean --version 26.12.03 --build 0122
 
 编译完成后使用：
-  tar xzf YuanNIC_User_Package-<版本>-<YYYYMMDD>.tgz
+  tar xzf YuanNIC_User_Package-V<版本>-B<Build>-<YYYYMMDD>.tgz
   source YuanNIC_User_Package/env.sh
   ibv_devinfo -d yuanrdma0
   ib_write_bw -d yuanrdma0 -x 3 -F <对端IP>
@@ -147,6 +153,7 @@ USAGE
 }
 
 PKG_VERSION="${YUANNIC_VERSION:-}"
+PKG_BUILD="${YUANNIC_BUILD:-}"
 DO_CLEAN=0
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -155,6 +162,10 @@ while [ $# -gt 0 ]; do
             [ $# -ge 2 ] && [ -n "$2" ] || { echo "$1 后面要跟版本号，如 $1 26.12.02" >&2; exit 1; }
             PKG_VERSION="$2"; shift ;;
         --version=*) PKG_VERSION="${1#--version=}" ;;
+        -b|--build)
+            [ $# -ge 2 ] && [ -n "$2" ] || { echo "$1 后面要跟 Build 号，如 $1 0122" >&2; exit 1; }
+            PKG_BUILD="$2"; shift ;;
+        --build=*) PKG_BUILD="${1#--build=}" ;;
         --no-ko)   BUILD_KO=0 ;;
         --no-tgz)  BUILD_TGZ=0 ;;
         --clean)   DO_CLEAN=1 ;;
@@ -164,6 +175,8 @@ while [ $# -gt 0 ]; do
 done
 
 # 版本号会进文件名，只收「数字.数字.数字」加可选后缀，挡掉 R26.12.02、空格、斜杠之类。
+# 包名里会给版本加 V，所以这里先去掉用户可能带上的 V（--version V26.12.03 与 26.12.03 等价）。
+PKG_VERSION="${PKG_VERSION#[Vv]}"
 if [ -z "$PKG_VERSION" ]; then
     PKG_VERSION=dev
     echo "警告：没给 --version，版本记为 dev；交付给用户的包请带 --version <版本>（如 26.12.02）" >&2
@@ -175,7 +188,18 @@ fi
 BUILD_EPOCH=$(date +%s)
 BUILD_TIME=$(date -d "@$BUILD_EPOCH" '+%Y-%m-%d %H:%M:%S')
 BUILD_DATE=$(date -d "@$BUILD_EPOCH" '+%Y%m%d')
-PKG_NAME="YuanNIC_User_Package-$PKG_VERSION-$BUILD_DATE"
+# Build 号与固件镜像名里的 B<build> 是同一套：收 0122 或 B0122，统一成 4 位数字，包名里写成 B0122。
+if [ -n "$PKG_BUILD" ]; then
+    b="${PKG_BUILD#[Bb]}"
+    printf '%s\n' "$b" | grep -qE '^[0-9]{1,4}$' \
+        || { echo "Build 号「$PKG_BUILD」格式不对：应为 0122 或 B0122 这样的 1~4 位数字" >&2; exit 1; }
+    PKG_BUILD=$(printf '%04d' "$((10#$b))")
+fi
+PKG_BUILD_LABEL="${PKG_BUILD:+B$PKG_BUILD}"
+# 包名中间段：V<版本>[-B<Build>]；没给 --version 时版本段是 dev。
+if [ "$PKG_VERSION" = dev ]; then PKG_TAG=dev; else PKG_TAG="V$PKG_VERSION"; fi
+[ -z "$PKG_BUILD" ] || PKG_TAG="$PKG_TAG-$PKG_BUILD_LABEL"
+PKG_NAME="YuanNIC_User_Package-$PKG_TAG-$BUILD_DATE"
 
 # 参数全部校验通过后才删中间目录，避免参数写错却先把 work/ 清掉
 if [ "$DO_CLEAN" = 1 ]; then
@@ -544,6 +568,7 @@ mkdir -p "$OUT/doc"
 cat > "$OUT/VERSION" <<VEREOF
 YuanNIC_User_Package
 version      : $PKG_VERSION
+build        : ${PKG_BUILD_LABEL:--}
 package      : $PKG_NAME.tgz
 build_time   : $BUILD_TIME
 build_host   : $(hostname)
@@ -558,7 +583,7 @@ VEREOF
 cat > "$OUT/README.md" <<'READMEEOF'
 # YuanNIC 用户包
 
-版本 @PKG_VERSION@，构建日期 @BUILD_DATE@（详见 `VERSION`）。
+版本 @PKG_TAG@，构建日期 @BUILD_DATE@（详见 `VERSION`）。
 
 YuanNIC 400G RoCEv2 网卡的**用户态 RDMA 软件包**。内含 perftest 测试工具、
 rdma-core 运行库、内核模块和诊断工具，与系统自带的 RDMA 栈（doca-host /
@@ -631,7 +656,7 @@ tar xzf @PKG_NAME@.tgz
 cd YuanNIC_User_Package
 ```
 
-包名里的 `@PKG_VERSION@` 是版本、`@BUILD_DATE@` 是构建日期；解压出来的目录名固定是
+包名里日期前面的 `@PKG_TAG@` 是版本号（`V` 开头；带 `B` 段时是 Build 号，与 `firmware/` 里固件镜像的 Build 号对应），`@BUILD_DATE@` 是构建日期；解压出来的目录名固定是
 `YuanNIC_User_Package/`，版本以目录里的 `VERSION` 文件为准。
 
 本包不向系统路径安装任何文件，所有库和程序都留在包内目录里，
@@ -862,7 +887,7 @@ PTEOF
 
 # 上面的文档用带引号的 heredoc（正文里有反引号和 $，不能让 shell 展开），
 # 版本与包名先写成 @占位符@，这里统一替换；漏换的占位符直接报错，不让它进交付包。
-sed -i -e "s/@PKG_VERSION@/$PKG_VERSION/g" -e "s/@BUILD_DATE@/$BUILD_DATE/g" -e "s/@PKG_NAME@/$PKG_NAME/g" \
+sed -i -e "s/@PKG_VERSION@/$PKG_VERSION/g" -e "s/@PKG_TAG@/$PKG_TAG/g" -e "s/@BUILD_DATE@/$BUILD_DATE/g" -e "s/@PKG_NAME@/$PKG_NAME/g" \
     "$OUT/README.md" "$OUT/doc/user-guide.md" "$OUT/doc/perftest-guide.md"
 if grep -n '@[A-Z_]*@' "$OUT/README.md" "$OUT/doc/user-guide.md" "$OUT/doc/perftest-guide.md"; then
     die "文档里还有没替换的占位符（见上）"
@@ -925,12 +950,12 @@ fi
 # 所以放进包里直接跑也行（见脚本头部的路径探测）。
 mkdir -p "$OUT/tools"
 for t in flash_and_init.sh roce_perf_test.sh; do
-    if [ -f "$ROOT/build/user_tools/$t" ]; then
-        cp "$ROOT/build/user_tools/$t" "$OUT/tools/$t"
+    if [ -f "$HERE/$t" ]; then
+        cp "$HERE/$t" "$OUT/tools/$t"
         chmod +x "$OUT/tools/$t"
         echo "  $t 已放入 tools/"
     else
-        echo "  [警告] 找不到 build/user_tools/$t，跳过"
+        echo "  [警告] 找不到 deploy/$t，跳过"
     fi
 done
 
@@ -953,6 +978,7 @@ FW_OUT="$OUT/firmware"
 rm -rf "$FW_OUT"
 mkdir -p "$FW_OUT"
 fw_count=0
+fw_keys=""
 if [ -d "$FW_SRC" ]; then
     # 找出目录里出现过的型号（只认带版本号的正规镜像，固定名的 *_Release.sof 之类不算）
     models=$(ls "$FW_SRC" 2>/dev/null \
@@ -973,6 +999,7 @@ if [ -d "$FW_SRC" ]; then
             fi
         done
         [ -n "$best_key" ] || continue
+        fw_keys="$fw_keys $best_key"
         echo "  $model  最新一版：$best_key"
         got=0
         for want in "A:jic" "R:rpd" "B:rpd" "R:sof"; do
@@ -987,6 +1014,13 @@ if [ -d "$FW_SRC" ]; then
         [ -f "$FW_SRC/$model-A$best_key.jic" ] || echo "    [警告] 这一版没有 .jic（没法离线烧整片 flash，只能用 .rpd 在线升级 active）"
         [ -f "$FW_SRC/$model-R$best_key.rpd" ] || echo "    [警告] 这一版没有 Release .rpd（ynictrl 在线升级用不了）"
     done
+    # 包名的版本 / Build 号应当与带进包的固件一致；对不上只提示（也可能是有意的），不拦。
+    if [ -n "$PKG_BUILD" ] && [ -n "$fw_keys" ]; then
+        case "$fw_keys " in
+            *" $PKG_VERSION-$PKG_BUILD_LABEL-"*) ;;
+            *) echo "  [警告] 包名是 $PKG_TAG，但带进包的固件是：${fw_keys# }；核对 --version / --build" ;;
+        esac
+    fi
     if [ "$fw_count" -gt 0 ]; then
         ( cd "$FW_OUT" && sha256sum -- *.* > SHA256SUMS )
         cat > "$FW_OUT/README.md" <<'FWEOF'
@@ -1016,7 +1050,7 @@ fi
 # ---------------------------------------------------------------------------
 # 10. 打包
 # ---------------------------------------------------------------------------
-# 包名带版本和日期：YuanNIC_User_Package-<版本>-<YYYYMMDD>.tgz。只覆盖同名包，
+# 包名带版本、Build 号和日期：YuanNIC_User_Package-V<版本>-B<Build>-<YYYYMMDD>.tgz。只覆盖同名包，
 # 其他版本/日期的旧包不删（可能已经交付出去，要留底），需要时手工清理。
 TGZ="$HERE/$PKG_NAME.tgz"
 if [ "$BUILD_TGZ" = "1" ]; then
@@ -1024,7 +1058,7 @@ if [ "$BUILD_TGZ" = "1" ]; then
     rm -f "$TGZ"
     # 在产物目录的父目录里打，包内顶层目录名就是 YuanNIC_User_Package/。
     # 注意这里必须是 $(dirname "$OUT") 而不是 $HERE：2026-11-20 脚本移到 deploy/ 后，
-    # 产物仍出在 build/user_tools/（消费方按同级目录找包），两者已不是同一个目录。
+    # 产物出在 build/user_tools/，与脚本所在的 deploy/ 不是同一个目录。
     # 写成 -C "$HERE" 会报 "tar: YuanNIC_User_Package: Cannot stat"。
     # 保留符号链接（lib/ 下的 .so.1 -> .so.1.19.66.0 必须成对），所以不用 -h。
     tar czf "$TGZ" -C "$(dirname "$OUT")" "$(basename "$OUT")" || die "打包失败"
@@ -1038,7 +1072,7 @@ else
 fi
 
 log "完成"
-echo "版本    ：$PKG_VERSION（构建日期 $BUILD_DATE）"
+echo "版本    ：$PKG_TAG（构建日期 $BUILD_DATE）"
 echo "产物目录：$OUT"
 [ "$BUILD_TGZ" = "1" ] && echo "交付包  ：$TGZ"
 echo ""
