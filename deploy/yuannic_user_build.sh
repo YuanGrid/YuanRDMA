@@ -9,7 +9,8 @@
 #   YuanNIC_User_Package/lib/       libibverbs / librdmacm / libyuanrdma-rdmav65.so ...
 #   YuanNIC_User_Package/include/   头文件（编译依赖本栈的其他程序时用）
 #   YuanNIC_User_Package/ko/        内核模块：yuanrdma.ko / yuanmcdma.ko / yuannic.ko
-#   YuanNIC_User_Package/doc/       用户手册：user-guide.md / perftest-guide.md + 《YuanNIC-NH400网卡使用手册》.pdf/.docx（取自 docs/manual/）
+#   YuanNIC_User_Package/doc/       用户手册：user-guide.md / perftest-guide.md + 《YuanNIC-NH400网卡使用手册》.pdf/.docx
+#                                   + 《YuanNIC-400G-C板卡资源和引脚手册》.xlsx（都取自 docs/manual/）
 #   YuanNIC_User_Package/tools/     运维脚本（flash_and_init.sh / roce_perf_test.sh）
 #   YuanNIC_User_Package/firmware/  最新一版烧写镜像（.jic + .rpd + .sof），取自 firmware/
 #   YuanNIC_User_Package-<版本>-<YYYYMMDD>.tgz
@@ -98,7 +99,8 @@ usage()
   CC_KERN        编内核模块用的编译器，默认自动找 gcc-12，找不到则用 gcc。
                  必须与编译当前内核的编译器一致（Ubuntu 22.04 HWE 6.8 是 gcc-12）。
   YUANNIC_FW_DIR    固件镜像目录，默认仓库根 firmware/。
-  YUANNIC_MANUAL_DIR 使用手册（.pdf / .docx）所在目录，默认仓库根 docs/manual/；找不到手册时报错退出。
+  YUANNIC_MANUAL_DIR 手册所在目录（使用手册 .pdf / .docx，板卡资源和引脚手册 .xlsx），默认仓库根 docs/manual/；
+                 找不到使用手册（.pdf / .docx）时报错退出，.xlsx 有就带上。
 
 做什么：
   1. 复制 code/github/rdma-core（v66）到 work/，注入 code/rdmasw/rdma-core-provider/yuanrdma，
@@ -107,7 +109,7 @@ usage()
   3. （未加 --no-ko 时）编 code/kernel 下的 yuanrdma.ko、yuanmcdma.ko、yuannic.ko。
   4. 编 code/ynictrl 下的 ynictrl（FPGA 网卡固件更新工具）。
   5. 把程序、库、头文件、ko、yuancli、手册全部收集到 YuanNIC_User_Package/。
-  6. 生成 VERSION / README.md / doc/ 两份 markdown 指南，并拷入 docs/manual/ 下的使用手册（.pdf / .docx）。
+  6. 生成 VERSION / README.md / doc/ 两份 markdown 指南，并拷入 docs/manual/ 下的手册（.pdf / .docx / .xlsx）。
   7. 打包成 YuanNIC_User_Package-<版本>-<YYYYMMDD>.tgz（--no-tgz 可跳过），
      放在本脚本所在目录；包内顶层目录名固定为 YuanNIC_User_Package/。
 
@@ -118,7 +120,7 @@ usage()
   YuanNIC_User_Package/include/    头文件
   YuanNIC_User_Package/ko/         yuanrdma.ko / yuanmcdma.ko / yuannic.ko
   YuanNIC_User_Package/etc/libibverbs.d/  空目录，libibverbs 启动时 opendir 用（消除 Warning）
-  YuanNIC_User_Package/doc/        user-guide.md / perftest-guide.md / 使用手册 .pdf + .docx
+  YuanNIC_User_Package/doc/        user-guide.md / perftest-guide.md / 使用手册 .pdf + .docx / 板卡资源和引脚手册 .xlsx
   YuanNIC_User_Package/firmware/   最新一版烧写镜像（.jic / .rpd / .sof + SHA256SUMS）
   YuanNIC_User_Package-<版本>-<YYYYMMDD>.tgz   可直接交付的压缩包
 
@@ -580,7 +582,8 @@ YuanNIC_User_Package/
     ├── user-guide.md      完整使用说明
     ├── perftest-guide.md  perftest 测试指南
     ├── YuanNIC-NH400网卡使用手册.pdf   使用手册（固件烧写、在线升级、perftest 基线测试）
-    └── YuanNIC-NH400网卡使用手册.docx  同上，可编辑版
+    ├── YuanNIC-NH400网卡使用手册.docx  同上，可编辑版
+    └── YuanNIC-400G-C板卡资源和引脚手册.xlsx  板卡概览、FPGA 资源、全部引脚、JTAG 接线
 ```
 
 ## 三步跑起来
@@ -865,16 +868,17 @@ if grep -n '@[A-Z_]*@' "$OUT/README.md" "$OUT/doc/user-guide.md" "$OUT/doc/perft
     die "文档里还有没替换的占位符（见上）"
 fi
 
-# 使用手册（.pdf 给用户看，.docx 是可编辑版）取自仓库 docs/manual/，原样拷进 doc/。
-# 交付包必须带手册，缺了直接报错；先删掉 doc/ 里上一次留下的旧手册，手册改名后不会留下两份。
+# 手册取自仓库 docs/manual/，原样拷进 doc/：使用手册（.pdf 给用户看，.docx 是可编辑版）、
+# 板卡资源和引脚手册（.xlsx）。交付包必须带使用手册，缺了直接报错；.xlsx 有就带上。
+# 先删掉 doc/ 里上一次留下的旧手册，手册改名后不会留下两份。
 MANUAL_SRC="${YUANNIC_MANUAL_DIR:-$ROOT/docs/manual}"
-rm -f "$OUT/doc"/*.pdf "$OUT/doc"/*.docx
+rm -f "$OUT/doc"/*.pdf "$OUT/doc"/*.docx "$OUT/doc"/*.xlsx
 manual_n=0
-for f in "$MANUAL_SRC"/*.pdf "$MANUAL_SRC"/*.docx; do
+for f in "$MANUAL_SRC"/*.pdf "$MANUAL_SRC"/*.docx "$MANUAL_SRC"/*.xlsx; do
     [ -f "$f" ] || continue
     cp "$f" "$OUT/doc/" || die "拷贝 $f 失败"
-    echo "  使用手册：doc/$(basename "$f")（$(du -h "$f" | cut -f1)）"
-    manual_n=$((manual_n + 1))
+    echo "  手册：doc/$(basename "$f")（$(du -h "$f" | cut -f1)）"
+    case "$f" in *.pdf|*.docx) manual_n=$((manual_n + 1)) ;; esac
 done
 [ "$manual_n" -gt 0 ] || die "$MANUAL_SRC 下没有使用手册（.pdf / .docx），可用 YUANNIC_MANUAL_DIR 指定"
 

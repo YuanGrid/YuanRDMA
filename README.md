@@ -304,6 +304,7 @@ ibv_devinfo -d yuanrdma0                   # 应看到 PORT_ACTIVE
 
 JTAG 烧写、在线升级、MAC 与 SN 写入，以及 perftest 基线测试（测试拓扑、两台服务器的配置、启动方法、结果判读与参考值）的完整步骤见
 [《YuanNIC-NH400-C 网卡使用手册》](docs/manual/YuanNIC-NH400网卡使用手册.pdf)（另有 [docx 版](docs/manual/YuanNIC-NH400网卡使用手册.docx)）。
+板卡概览、FPGA 资源、全部引脚与 JTAG 接线见 [《YuanNIC-400G-C 板卡资源和引脚手册》](docs/manual/YuanNIC-400G-C板卡资源和引脚手册.xlsx)。
 
 ## 10 路线图
 

@@ -305,6 +305,7 @@ ibv_devinfo -d yuanrdma0                   # expect PORT_ACTIVE
 Step-by-step instructions for JTAG flashing, online firmware upgrade, MAC/SN provisioning and the perftest baseline
 (test topology, configuration of both servers, how to run the tests, how to read the results, reference values) are in the
 [YuanNIC-NH400-C user manual](docs/manual/YuanNIC-NH400网卡使用手册.pdf) (Chinese; also available as [docx](docs/manual/YuanNIC-NH400网卡使用手册.docx)).
+Board overview, FPGA resources, the full pinout and JTAG wiring are in the [YuanNIC-400G-C board resource and pinout manual](docs/manual/YuanNIC-400G-C板卡资源和引脚手册.xlsx) (Chinese).
 
 ## 10 Roadmap
 
