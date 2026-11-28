@@ -251,6 +251,8 @@ set_instance_assignment -name IO_STANDARD "1.0-V" -to pcie_reset_n -entity YuanR
 set_location_assignment PIN_KW47 -to ex_reset_n -comment IOBANK_2B
 set_location_assignment PIN_LN50 -to opt_mod_los -comment IOBANK_2B
 set_location_assignment PIN_MA50 -to opt_mod_pst -comment IOBANK_2B
+# U_pci5_top 保留区比不开 BAS 时的 X12 Y140 X101 Y299 大：MCDMA 打开 BAS 后，约 4 Mbit 的读完成缓冲
+# 落在本区内，X101 宽度装不下（Fixed size Logic Lock region "Region" requires 1606 M20K, can only accommodate 1474）。
 set_instance_assignment -name PLACE_REGION "X12 Y140 X131 Y309" -to U_pci5_top
 set_instance_assignment -name RESERVE_PLACE_REGION ON -to U_pci5_top
 set_instance_assignment -name CORE_ONLY_PLACE_REGION ON -to U_pci5_top
@@ -374,34 +376,12 @@ set_global_assignment -name IP_FILE ../fpga_ip/rx_mac_fifo.ip
 set_global_assignment -name SDC_FILE ../xdc_src/YuanRDMA.sdc
 set_global_assignment -name SDC_FILE ../rtl_src/roce/roce.sdc
 
-# ---- 板级 GPIO / I2C / 光模块控制引脚的 I/O 约束 ----
-# 均为 IOBANK_2C，IO 标准 1.2 V。1.2-V 不支持显式驱动强度/slew 设置（Quartus 报 12417/12418），
-# 由 fitter 按 I/O 标准推断；只补 IO_STANDARD 即可满足 Assembler 出编程文件的条件。
-set_instance_assignment -name IO_STANDARD "1.2 V" -to opt_mod_lpm -entity YuanRDMA
-set_instance_assignment -name IO_STANDARD "1.2 V" -to opt_mod_rst -entity YuanRDMA
-set_instance_assignment -name IO_STANDARD "1.2 V" -to fpga_cpld_gpio[0] -entity YuanRDMA
-set_instance_assignment -name IO_STANDARD "1.2 V" -to fpga_cpld_gpio[1] -entity YuanRDMA
-set_instance_assignment -name IO_STANDARD "1.2 V" -to fpga_cpld_gpio[2] -entity YuanRDMA
-set_instance_assignment -name IO_STANDARD "1.2 V" -to fpga_cpld_gpio[3] -entity YuanRDMA
-set_instance_assignment -name IO_STANDARD "1.2 V" -to fpga_cpld_gpio[4] -entity YuanRDMA
-set_instance_assignment -name IO_STANDARD "1.2 V" -to fpga_cpld_gpio[5] -entity YuanRDMA
-set_instance_assignment -name IO_STANDARD "1.2 V" -to fpga_cpld_gpio[6] -entity YuanRDMA
-set_instance_assignment -name IO_STANDARD "1.2 V" -to fpga_cpld_gpio[7] -entity YuanRDMA
-set_instance_assignment -name IO_STANDARD "1.2 V" -to i2c_m_fpga_scl -entity YuanRDMA
-set_instance_assignment -name IO_STANDARD "1.2 V" -to i2c_m_fpga_sda -entity YuanRDMA
-set_instance_assignment -name IO_STANDARD "1.2 V" -to i2c_opt_scl0 -entity YuanRDMA
-set_instance_assignment -name IO_STANDARD "1.2 V" -to i2c_opt_sda0 -entity YuanRDMA
-set_instance_assignment -name IO_STANDARD "1.2 V" -to i2c_opt_scl1 -entity YuanRDMA
-set_instance_assignment -name IO_STANDARD "1.2 V" -to i2c_opt_sda1 -entity YuanRDMA
-set_instance_assignment -name IO_STANDARD "1.2 V" -to i2c_s_fpga_scl -entity YuanRDMA
-set_instance_assignment -name IO_STANDARD "1.2 V" -to i2c_s_fpga_sda -entity YuanRDMA
-set_instance_assignment -name IO_STANDARD "1.2 V" -to ex_reset_n -entity YuanRDMA
-set_instance_assignment -name IO_STANDARD "1.2 V" -to opt_mod_pst -entity YuanRDMA
-set_instance_assignment -name IO_STANDARD "1.2 V" -to opt_mod_los -entity YuanRDMA
-# i2c_opt_scl1/sda1 由测试计数器驱动，板上未接（旧版交付 QSF 亦无位置约束），
-# 用 fitter 自动放置的位置固定，避免 Assembler 因缺位置拒绝出 SOF。
-set_location_assignment PIN_MC25 -to i2c_opt_scl1 -comment IOBANK_2C
-set_location_assignment PIN_JL29 -to i2c_opt_sda1 -comment IOBANK_2C
+# ---- 光模块控制与 ex_reset_n 的 I/O 标准（IOBANK_2B，1.2-V）----
+set_instance_assignment -name IO_STANDARD "1.2-V" -to ex_reset_n -entity YuanRDMA
+set_instance_assignment -name IO_STANDARD "1.2-V" -to opt_mod_lpm -entity YuanRDMA
+set_instance_assignment -name IO_STANDARD "1.2-V" -to opt_mod_rst -entity YuanRDMA
+set_instance_assignment -name IO_STANDARD "1.2-V" -to opt_mod_los -entity YuanRDMA
+set_instance_assignment -name IO_STANDARD "1.2-V" -to opt_mod_pst -entity YuanRDMA
 set_global_assignment -name IP_FILE ../system/ip/axi4_adapter/axi4_adapter_clock_in.ip
 set_global_assignment -name IP_FILE ../system/ip/axi4_adapter/axi4_adapter_reset_in.ip
 set_global_assignment -name QSYS_FILE ../system/axi4_adapter.qsys

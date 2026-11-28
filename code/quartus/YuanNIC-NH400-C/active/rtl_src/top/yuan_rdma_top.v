@@ -29,55 +29,22 @@ module YuanRDMA (
    //eth MAC system clock 
    input  wire 				 eth_gt_fgt_clk      ,
    
-   //16bits ddr4 for HPS 
-   output wire [0:0] 		 c0_ddr4_act_n       ,
-   output wire [16:0] 		 c0_ddr4_adr         ,
-   input  wire [0:0] 		 c0_ddr4_alert_n     ,
-   output wire [1:0] 		 c0_ddr4_ba          ,
-   output wire [0:0] 		 c0_ddr4_bg          ,
-   output wire [0:0] 		 c0_ddr4_ck_c        ,
-   output wire [0:0] 		 c0_ddr4_ck_t        ,
-   output wire [0:0] 		 c0_ddr4_cke         ,
-   output wire [0:0] 		 c0_ddr4_cs_n        ,
-   output wire [0:0] 		 c0_ddr4_odt         ,
-   inout  wire [1:0] 		 c0_ddr4_dm_n        ,
-   inout  wire [15:0] 		 c0_ddr4_dq          ,
-   inout  wire [1:0] 		 c0_ddr4_dqs_c       ,
-   inout  wire [1:0] 		 c0_ddr4_dqs_t       ,
-   output wire [0:0] 		 c0_ddr4_par         ,
-   output wire [0:0] 		 c0_ddr4_reset_n     ,
-   
-   input  wire [0:0] 		 c0_oct_oct_rzqin    ,
-
-   //ddr4 reference clock 200M
-   input  wire [0:0] 		 c0_sys_clk_p        ,
-
-   //fpga core reference clock 200M
+   //fpga core reference clock 100M
    input  wire 				 pl_clk_p            ,
    //fpga core reset
    input  wire 				 ex_reset_n          ,
 
-   //optical module i2c 
-   inout  wire 				 i2c_opt_scl0        ,
-   inout  wire 				 i2c_opt_sda0        ,
-
-   inout  wire 				 i2c_opt_scl1        ,
-   inout  wire 				 i2c_opt_sda1        ,
-
    input  wire 				 opt_mod_los         ,
    input  wire 				 opt_mod_pst         ,//present
    output wire 				 opt_mod_lpm         ,//low power mode
-   output wire 	 			 opt_mod_rst         ,//
-
-   //CPLD 
-   input  wire 				 i2c_s_fpga_scl      ,//slave
-   inout  wire 				 i2c_s_fpga_sda      ,//slave
-
-   output reg  [7:0] 		 fpga_cpld_gpio      ,
-                        
-   inout  wire 				 i2c_m_fpga_scl      ,//master
-   inout  wire 				 i2c_m_fpga_sda       //master
+   output wire 	 			 opt_mod_rst          //
                    );
+
+   // C 板没有 FPGA 与 CPLD 之间的 I2C 连线，I2C 主/从模块照常例化，挂在内部线网上。
+   wire                      i2c_s_fpga_scl;
+   wire                      i2c_s_fpga_sda;
+   wire                      i2c_m_fpga_scl;
+   wire                      i2c_m_fpga_sda;
 
 /*****************************************************************************\
 *                                                                             *
@@ -93,12 +60,15 @@ module YuanRDMA (
    wire  [7:0]               soft_rst_val;
    wire                      soft_rst_clr;
    wire						 sys_rst;
+
+   // C 板不使用 ex_reset_n 引脚（端口保留以对应 QSF 的管脚分配），PLL 与系统复位只由上电/软复位决定。
+   wire                      ex_reset_n_null = 1'b1;
 `ifndef SIMULATION 
    clk200m
      U_clk200m(
                .refclk                   (pl_clk_p                ),
                
-               .rst                      (~ex_reset_n             ),
+               .rst                      (~ex_reset_n_null        ),
 
                .outclk_0                 (clk250m                 ),
                .outclk_1                 (clk100m                 ),
@@ -110,7 +80,7 @@ module YuanRDMA (
    rst
      U_rstm (
              .clk                        ( clk250m                ), 
-             .ex_reset_n                 ( ex_reset_n             ),
+             .ex_reset_n                 ( ex_reset_n_null        ),
              .mmcm_lock                  ( 1'b1                   ),
 
              .soft_rst_val               ( soft_rst_val           ),
@@ -1773,264 +1743,9 @@ axis_keep_pack #(
 
    
 
-/*****************************************************************************\
-*                                                                             *
-*                  DDR4 x16 component 2GB                                     *
-*                                                                             *
-\*****************************************************************************/   
-
-   wire 					 ddr4_reset_req;
-   wire 					 ddr4_reset_done;
-   wire 					 ddr4_cal_sucess;
-   wire 					 ddr4_cal_fail;
-   wire 					 ddr4_usr_rst;
-   wire 					 ddr4_usr_clk; //333M ?
-
-   wire  					 app_amm_ready;
-   wire 					 app_amm_read;
-   wire 					 app_amm_write;
-   wire [26:0] 				 app_amm_addr;
-   wire [127:0] 			 app_amm_rdat;
-   wire 					 app_amm_rvld;
-   wire [127:0] 			 app_amm_wdat;
-   wire [15:0]               app_amm_byte;
-   wire [6:0] 				 app_amm_bcnt;
+   // C 板没有 DDR4：不例化 ddr4_top / ddr4_tg；csr_pm 的 DDR 测试端口在其例化处输入接 0、输出悬空。
+   // 下面这个 ifndef SIMULATION 与文件末尾的 endif 配对。
  `ifndef SIMULATION
-   ddr4_top
-     U_ddr4_top(
-                .c0_sys_clk_p             (c0_sys_clk_p            ),
-          
-                .c0_ddr4_act_n            (c0_ddr4_act_n[0:0]      ),
-                .c0_ddr4_adr              (c0_ddr4_adr[16:0]       ),
-                .c0_ddr4_alert_n          (c0_ddr4_alert_n[0:0]    ),
-                .c0_ddr4_ba               (c0_ddr4_ba[1:0]         ),
-                .c0_ddr4_bg               (c0_ddr4_bg[0:0]         ),
-                .c0_ddr4_ck_c             (c0_ddr4_ck_c[0:0]       ),
-                .c0_ddr4_ck_t             (c0_ddr4_ck_t[0:0]       ),
-                .c0_ddr4_cke              (c0_ddr4_cke[0:0]        ),
-                .c0_ddr4_cs_n             (c0_ddr4_cs_n[0:0]       ),
-                .c0_ddr4_odt              (c0_ddr4_odt[0:0]        ),
-                .c0_ddr4_dm_n             (c0_ddr4_dm_n[1:0]       ),
-                .c0_ddr4_dq               (c0_ddr4_dq[15:0]        ),
-                .c0_ddr4_dqs_c            (c0_ddr4_dqs_c[1:0]      ),
-                .c0_ddr4_dqs_t            (c0_ddr4_dqs_t[1:0]      ),
-                .c0_ddr4_par              (c0_ddr4_par[0:0]        ),
-                .c0_ddr4_reset_n          (c0_ddr4_reset_n[0:0]    ),
-               
-                .c0_oct_oct_rzqin         (c0_oct_oct_rzqin[0:0]   ),
-         
-                .local_reset_req          (ddr4_reset_req          ),
-                .local_reset_done         (ddr4_reset_done         ),
-                                          
-                .local_cal_success        (ddr4_cal_sucess         ),
-                .local_cal_fail           (ddr4_cal_fail           ),
-                                          
-                .app_emif_usr_rst         (ddr4_usr_rst            ),
-                .app_emif_usr_clk         (ddr4_usr_clk            ), //333.25M ?
-                
-                .app_amm_ready            (app_amm_ready           ),
-                .app_amm_read             (app_amm_read            ),
-                .app_amm_write            (app_amm_write           ),
-                .app_amm_addr             (app_amm_addr            ),
-                .app_amm_rdat             (app_amm_rdat            ),
-                .app_amm_rvld             (app_amm_rvld            ),
-                .app_amm_wdat             (app_amm_wdat            ),
-                .app_amm_byte             (app_amm_byte            ),
-                .app_amm_bcnt             (app_amm_bcnt            )
-                );
-
-/*****************************************************************************\
-*                                                                             *
-*                  DDR read and write tester                                  *
-*                                                                             *
-\*****************************************************************************/      
-   wire				test_enb;
-   wire				test_type;
-   wire		[1:0]	test_wr;
-   wire				test_done;
-   wire				err_flag;
-   wire		[31:0]	err_cnt;
-   wire				rd_done;
-   wire		[31:0]	rd_addr;
-   wire				addr_mode;
-   wire		[7:0]	addr_seed;
-   wire		[31:0]	DDR_END_ADDR;
-   wire		[1:0]	dat_mode;
-   wire		[31:0]	ddr_dat0;
-   wire		[31:0]	ddr_dat1;
-   wire		[31:0]	ddr_dat2;
-   wire		[31:0]	ddr_dat3;
-   wire		[31:0]	total_time_w;
-   wire		[31:0]	total_cnt_w;
-   wire		[31:0]	total_time_r;
-   wire		[31:0]	total_cnt_r;
-   
-   reg				test_enb_d1		   , test_enb_d2	 ;	
-   reg				test_type_d1       , test_type_d2    ;
-   reg		[1:0]	test_wr_d1         , test_wr_d2      ;
-   reg				test_done_d1       , test_done_d2    ;
-   reg				err_flag_d1        , err_flag_d2     ;
-   reg		[31:0]	err_cnt_d1         , err_cnt_d2      ;
-   reg				rd_done_d1         , rd_done_d2      ;
-   reg		[31:0]	rd_addr_d1         , rd_addr_d2      ;
-   reg				addr_mode_d1       , addr_mode_d2    ;
-   reg		[7:0]	addr_seed_d1       , addr_seed_d2    ;
-   reg		[31:0]	DDR_END_ADDR_D1    , DDR_END_ADDR_D2 ;
-   reg		[1:0]	dat_mode_d1        , dat_mode_d2     ;
-   reg		[31:0]	ddr_dat0_d1        , ddr_dat0_d2     ;
-   reg		[31:0]	ddr_dat1_d1        , ddr_dat1_d2     ;
-   reg		[31:0]	ddr_dat2_d1        , ddr_dat2_d2     ;
-   reg		[31:0]	ddr_dat3_d1        , ddr_dat3_d2     ;
-   reg		[31:0]	total_time_w_d1    , total_time_w_d2 ;
-   reg		[31:0]	total_cnt_w_d1     , total_cnt_w_d2  ;
-   reg		[31:0]	total_time_r_d1    , total_time_r_d2 ;
-   reg		[31:0]	total_cnt_r_d1     , total_cnt_r_d2  ;
-   reg				ddr4_cal_sucess_d1 , ddr4_cal_sucess_d2	;
-   reg				ddr4_cal_fail_d1   , ddr4_cal_fail_d2	;
-   
-   
-   ddr4_tg
-     U_ddr4_tg(
-               .rst                      (ddr4_usr_rst             ),
-               .clk                      (ddr4_usr_clk             ),
-               
-               .test_enb				 (test_enb_d2  			   ),
-               .test_type				 (test_type_d2 			   ),
-               .ddr_wr				  	 (test_wr_d2   			   ),
-               .test_done				 (test_done  			   ),
-               .err_flag                 (err_flag   			   ),
-               .err_cnt                  (err_cnt    			   ),
-               .rd_done					 (rd_done				   ),
-               .rd_addr					 (rd_addr				   ),
-                                                    
-               .addr_mode                (addr_mode_d2 			   ),
-               .addr_seed                (addr_seed_d2 			   ),
-               .DDR_END_ADDR			 (DDR_END_ADDR_D2[26:0]	   ),
-                                                                
-               .dat_mode                 (dat_mode_d2  			   ),
-               .ddr_dat0                 (ddr_dat0_d2			   ),
-               .ddr_dat1                 (ddr_dat1_d2			   ),
-               .ddr_dat2                 (ddr_dat2_d2  			   ),
-               .ddr_dat3                 (ddr_dat3_d2  			   ),
-                                                 
-               .total_time_w             (total_time_w			   ),
-               .total_cnt_w              (total_cnt_w		   	   ),
-               .total_time_r		     (total_time_r			   ),
-               .total_cnt_r				 (total_cnt_r			   ),
-               
-               .app_amm_ready            (app_amm_ready            ),
-               .app_amm_read             (app_amm_read             ),
-               .app_amm_write            (app_amm_write            ),
-               .app_amm_addr             (app_amm_addr             ),
-               .app_amm_rdat             (app_amm_rdat             ),
-               .app_amm_rvld             (app_amm_rvld             ),
-               .app_amm_wdat             (app_amm_wdat             ),
-               .app_amm_byte             (app_amm_byte             ),
-               .app_amm_bcnt             (app_amm_bcnt             )
-               );
-
-//跨时钟域处理
-always @(posedge ddr4_usr_clk)
-begin
-    test_enb_d1 	<= test_enb;		test_enb_d2 	<= test_enb_d1;
-    test_type_d1	<= test_type;       test_type_d2	<= test_type_d1;
-    test_wr_d1		<= test_wr;         test_wr_d2		<= test_wr_d1;
-    addr_mode_d1	<= addr_mode;       addr_mode_d2	<= addr_mode_d1;
-    addr_seed_d1	<= addr_seed;       addr_seed_d2	<= addr_seed_d1;
-    dat_mode_d1		<= dat_mode;        dat_mode_d2		<= dat_mode_d1;
-    ddr_dat0_d1		<= ddr_dat0;        ddr_dat0_d2		<= ddr_dat0_d1;
-    ddr_dat1_d1		<= ddr_dat1;        ddr_dat1_d2		<= ddr_dat1_d1;
-    ddr_dat2_d1		<= ddr_dat2;        ddr_dat2_d2		<= ddr_dat2_d1;
-    ddr_dat3_d1		<= ddr_dat3;        ddr_dat3_d2		<= ddr_dat3_d1;
-                                        
-    DDR_END_ADDR_D1	<= DDR_END_ADDR;    DDR_END_ADDR_D2	<= DDR_END_ADDR_D1;
-
-end
-
-always @(posedge clk250m)
-begin
-    test_done_d1	<= test_done;		test_done_d2	<= test_done_d1;
-    err_flag_d1		<= err_flag;        err_flag_d2		<= err_flag_d1;
-    err_cnt_d1		<= err_cnt;         err_cnt_d2		<= err_cnt_d1;
-    rd_done_d1		<= rd_done;         rd_done_d2		<= rd_done_d1;
-    rd_addr_d1		<= rd_addr;         rd_addr_d2		<= rd_addr_d1;
-                                        
-    total_time_w_d1	<= total_time_w;    total_time_w_d2	<= total_time_w_d1;
-    total_time_r_d1	<= total_time_r;    total_time_r_d2	<= total_time_r_d1;
-    total_cnt_w_d1	<= total_cnt_w;     total_cnt_w_d2	<= total_cnt_w_d1;
-    total_cnt_r_d1	<= total_cnt_r;     total_cnt_r_d2	<= total_cnt_r_d1;
-
-    ddr4_cal_fail_d1   <= ddr4_cal_fail;	ddr4_cal_fail_d2  	<= ddr4_cal_fail_d1;
-    ddr4_cal_sucess_d1 <= ddr4_cal_sucess;	ddr4_cal_sucess_d2  <= ddr4_cal_sucess_d1; 
-end
-
- /*****************************************************************************\
-*                                                                             *
-*                  ddr4  debug                                     			  *
-*                                                                             *
-\*****************************************************************************/   
-   wire                      ddr_ctl_req;
-   wire 					 ddr_ctl_rwn;
-   wire [31:0] 				 ddr_ctl_addr;
-   wire [127:0]				 ddr_ctl_wdat;
-   wire [127:0]				 ddr_ctl_rdat;
-   wire 					 ddr_ctl_ack;
-   
-/*
-   ddr_ctl
-     U_ddr_debug_ctl(
-              .rst                       (ddr4_usr_rst           ),
-              .clk                       (ddr4_usr_clk           ),
-                                                                 
-              //ddr controller csr                                 
-              .ddr_ctl_req               (ddr_ctl_req            ),
-              .ddr_ctl_rwn               (ddr_ctl_rwn            ),
-              .ddr_ctl_addr              (ddr_ctl_addr           ),
-              .ddr_ctl_wdat              (ddr_ctl_wdat           ),
-              .ddr_ctl_byte				 (ddr_ctl_byte			 ),
-              .ddr_ctl_rdat              (ddr_ctl_rdat           ),
-              .ddr_ctl_ack               (ddr_ctl_ack            ),
-
-              .app_amm_ready			 (ddr_dbg_ready			 ),																
-              .app_amm_write             (ddr_dbg_write			 ),
-              .app_amm_read              (ddr_dbg_read 			 ),
-              .app_amm_addr              (ddr_dbg_addr 			 ),
-              .app_amm_wdat              (ddr_dbg_wdat 			 ),
-              .app_amm_rdat              (ddr_dbg_rdat 			 ),
-              .app_amm_rvld              (ddr_dbg_rvld 			 ),
-              .app_amm_byte          	 (ddr_dbg_byte 			 ),
-              .app_amm_bcnt          	 (ddr_dbg_bcnt 			 )
-              );    
- 
-always @(*)
-begin
-    if(test_enb)
-        begin
-            app_amm_read 	<= ddr_tg_read;
-            app_amm_write 	<= ddr_tg_write;
-            app_amm_addr 	<= ddr_tg_addr[26:0];
-            app_amm_wdat 	<= ddr_tg_wdat;
-            app_amm_byte 	<= ddr_tg_byte;
-            app_amm_bcnt 	<= ddr_tg_bcnt;
-        end
-    else 
-        begin
-            app_amm_read 	<= ddr_dbg_read;
-            app_amm_write 	<= ddr_dbg_write;
-            app_amm_addr 	<= ddr_dbg_addr[26:0];
-            app_amm_wdat 	<= ddr_dbg_wdat;
-            app_amm_byte 	<= ddr_dbg_byte;
-            app_amm_bcnt 	<= ddr_dbg_bcnt;
-        end
-
-    ddr_tg_ready	<= app_amm_ready;
-    ddr_tg_rvld		<= app_amm_rvld;
-    ddr_tg_rdat		<= app_amm_rdat;
-
-    ddr_dbg_ready	<= app_amm_ready;
-    ddr_dbg_rvld	<= app_amm_rvld;
-    ddr_dbg_rdat	<= app_amm_rdat;
-end			   */
 /*****************************************************************************\
 *                                                                             *
 *                  eth400G interface                                          *
@@ -2584,41 +2299,41 @@ iic_slave_top
               .opt_mod_lpm				  (opt_mod_lpm				),
               .opt_mod_rst				  (opt_mod_rst				),
               
-              //csr110
-              .test_enb					  (test_enb   			   ),
-              .test_type				  (test_type  			   ),
-              .test_wr				  	  (test_wr    			   ),
-              .test_done				  (test_done_d2			   ),
-              .err_flag                   (err_flag_d2 			   ),
-              .err_cnt                    (err_cnt_d2  			   ),
-              .rd_addr					  (rd_addr_d2			   ),
-              .rd_done					  (rd_done_d2			   ),
-              .DDR_END_ADDR				  (DDR_END_ADDR			   ),
+              //csr110（C 板没有 DDR4：输入接 0，输出悬空）
+              .test_enb					  (                         ),
+              .test_type				  (                         ),
+              .test_wr				  	  (                         ),
+              .test_done				  (1'd0                     ),
+              .err_flag                   (1'd0                     ),
+              .err_cnt                    (32'd0                    ),
+              .rd_addr					  (32'd0                    ),
+              .rd_done					  (1'd0                     ),
+              .DDR_END_ADDR				  (                         ),
               
-              .addr_mode                  (addr_mode  			   ),
-              .addr_seed                  (addr_seed  			   ),
+              .addr_mode                  (                         ),
+              .addr_seed                  (                         ),
                                                                    
-              .dat_mode                   (dat_mode   			   ),
-              .ddr_dat0                   (ddr_dat0				   ),
-              .ddr_dat1                   (ddr_dat1				   ),
-              .ddr_dat2                   (ddr_dat2   			   ),
-              .ddr_dat3                   (ddr_dat3   			   ),
+              .dat_mode                   (                         ),
+              .ddr_dat0                   (                         ),
+              .ddr_dat1                   (                         ),
+              .ddr_dat2                   (                         ),
+              .ddr_dat3                   (                         ),
                                                   
-              .total_time_w               (total_time_w_d2		   ),
-              .total_cnt_w                (total_cnt_w_d2	   	   ),
-              .total_time_r		     	  (total_time_r_d2		   ),
-              .total_cnt_r				  (total_cnt_r_d2		   ),
+              .total_time_w               (32'd0                    ),
+              .total_cnt_w                (32'd0                    ),
+              .total_time_r		     	  (32'd0                    ),
+              .total_cnt_r				  (32'd0                    ),
                
-              .ddr4_cal_sucess			  (ddr4_cal_sucess_d2	   ),
-              .ddr4_cal_fail			  (ddr4_cal_fail_d2		   ),
+              .ddr4_cal_sucess			  (1'd0                     ),
+              .ddr4_cal_fail			  (1'd0                     ),
                
-              .ddr_ctl_req                (ddr_ctl_req   		   ),
-              .ddr_ctl_rwn                (ddr_ctl_rwn   		   ),
-              .ddr_ctl_addr               (ddr_ctl_addr  		   ),
-              .ddr_ctl_wdat               (ddr_ctl_wdat  		   ),
+              .ddr_ctl_req                (                         ),
+              .ddr_ctl_rwn                (                         ),
+              .ddr_ctl_addr               (                         ),
+              .ddr_ctl_wdat               (                         ),
               //.ddr_ctl_byte               (ddr_ctl_byte  		   ),
-              .ddr_ctl_rdat               (ddr_ctl_rdat  		   ),
-              .ddr_ctl_ack                (ddr_ctl_ack   		   ),
+              .ddr_ctl_rdat               (128'd0                   ),
+              .ddr_ctl_ack                (1'd0                     ),
               
               //csr40
               .i2c_m_cpld_sel			  (i2c_m_cpld_sel		   ),	
@@ -2643,61 +2358,5 @@ iic_slave_top
               .StatClrOver                (1'd0                    )
               );
 
-/*****************************************************************************\
-*                                                                             *
-*                  GPIO test                                                  *
-*                                                                             *
-\*****************************************************************************/
-
-   reg [15:0] 				 tst_cnt = 16'h55aa;
-   
-   reg                       i2c_opt_scl0_t    ;
-   reg                       i2c_opt_sda0_t    ;  
-   reg                       i2c_opt_scl1_t    ;
-   reg                       i2c_opt_sda1_t    ;  
-   reg   						  opt_mod_lpm_t     ;
-   reg   						  opt_mod_rst_t     ;
-   reg                       i2c_m_cpld_scl_t  ;
-   reg                       i2c_m_cpld_sda_t  ;
-   reg   [2:0]               fpga_cpld_gpio_t  ;
-   reg                       i2c_s_fpga_sda_t  ;
-   reg                       i2c_s_fpga_scl_t  ;
-   
-   always @ ( posedge clk100m ) begin
-
-      tst_cnt <= {tst_cnt[14:0],tst_cnt[15]} ^ 16'h1235;
-      
-      i2c_opt_scl0_t    <= tst_cnt[0] ^ tst_cnt[8];
-      i2c_opt_sda0_t    <= tst_cnt[1] ^ tst_cnt[9];
-                        
-      i2c_opt_scl1_t    <= tst_cnt[2] ^ tst_cnt[14];
-      i2c_opt_sda1_t    <= tst_cnt[3] ^ tst_cnt[13];
-      
-      opt_mod_lpm_t    <= opt_mod_los;
-      opt_mod_rst_t    <= opt_mod_pst;
-
-      i2c_m_cpld_scl_t <= tst_cnt[4] ^ tst_cnt[0];
-      i2c_m_cpld_sda_t <= tst_cnt[5] ^ tst_cnt[7];
-
-      fpga_cpld_gpio_t <= tst_cnt[8:6];
-
-      i2c_s_fpga_sda_t <= tst_cnt[6] ^ tst_cnt[7] ^ i2c_m_fpga_scl;
-      i2c_s_fpga_scl_t <= tst_cnt[7] ^ tst_cnt[8];
-   end
-   
-   assign i2c_opt_scl0    = i2c_opt_scl0_t;  
-   assign i2c_opt_sda0    = i2c_opt_sda0_t;                    
-   assign i2c_opt_scl1    = i2c_opt_scl1_t;  
-   assign i2c_opt_sda1    = i2c_opt_sda1_t;  
-   //assign opt_mod_lpm     = 1'b1;   
-   //assign opt_mod_rst     = 1'b1;   
-   always @(posedge eth_mac_clk)  
-   begin
-        fpga_cpld_gpio[0] <= (eth_system_stat == 32'h63f);
-        fpga_cpld_gpio[1] <= (rx_mac_inframe != 'b0) | (gap_to_mac_frame != 'b0);
-        fpga_cpld_gpio[7:2] <= 'b0;
-   end 
-  // assign i2c_m_fpga_sda  = i2c_s_fpga_sda_t;
-  // assign i2c_m_fpga_scl  = i2c_s_fpga_scl_t;
 `endif             
 endmodule // YuanRDMA

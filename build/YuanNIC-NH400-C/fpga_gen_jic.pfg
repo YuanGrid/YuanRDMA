@@ -1,0 +1,44 @@
+<pfg version="1">
+    <settings custom_db_dir="./" mode="ASX4"/>
+    <output_files>
+        <output_file name="output_file_all" directory="./" type="JIC">
+            <file_options/>
+            <flash_device_id>Flash_Device_1</flash_device_id>
+            <secondary_file type="SEC_RPD" name="output_file_all_jic">
+                <file_options/>
+            </secondary_file>
+            <secondary_file type="MAP" name="output_file_all_jic">
+                <file_options/>
+            </secondary_file>
+        </output_file>
+    </output_files>
+    <bitstreams>
+        <bitstream id="Bitstream_1">
+            <path>YuanRDMA_boot.sof</path>
+        </bitstream>
+        <bitstream id="Bitstream_2">
+            <path>YuanRDMA_active.sof</path>
+        </bitstream>
+    </bitstreams>
+    <flash_devices>
+        <flash_loader>AGIB041R29DB</flash_loader>
+        <flash_device type="MX66U2G" id="Flash_Device_1">
+            <partition reserved="1" fixed_s_addr="1" s_addr="0x00000000" e_addr="0x0020FFFF" fixed_e_addr="1" id="BOOT_INFO" size="0"/>
+            <partition reserved="1" extra_space="262144" fixed_s_addr="1" s_addr="0x00210000" e_addr="0x0160FFFF" fixed_e_addr="0" id="FACTORY_IMAGE" size="0"/>
+            <partition reserved="1" fixed_s_addr="1" s_addr="auto" e_addr="auto" fixed_e_addr="1" id="SPT0" size="32768"/>
+            <partition reserved="1" fixed_s_addr="1" s_addr="auto" e_addr="auto" fixed_e_addr="1" id="SPT1" size="32768"/>
+            <partition reserved="1" fixed_s_addr="1" s_addr="auto" e_addr="auto" fixed_e_addr="1" id="CPB0" size="32768"/>
+            <partition reserved="1" fixed_s_addr="1" s_addr="auto" e_addr="auto" fixed_e_addr="1" id="CPB1" size="32768"/>
+            <partition reserved="0" fixed_s_addr="0" s_addr="auto" e_addr="auto" fixed_e_addr="0" id="RELEASE_0" size="0"/>
+        </flash_device>
+    </flash_devices>
+    <assignments>
+        <assignment page="0" partition_id="FACTORY_IMAGE">
+            <bitstream_id>Bitstream_1</bitstream_id>
+        </assignment>
+        <assignment page="1" partition_id="RELEASE_0">
+            <bitstream_id>Bitstream_2</bitstream_id>
+        </assignment>
+    </assignments>
+</pfg>
+
