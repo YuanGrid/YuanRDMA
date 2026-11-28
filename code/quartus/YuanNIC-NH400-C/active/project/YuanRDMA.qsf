@@ -260,7 +260,7 @@ set_instance_assignment -name REGION_NAME Region -to U_pci5_top
 # ---- Fitter seed（B6462，2026-11-21）----
 # QDMA 侧 PFC（u4_pfc_function，8 组 2048×1024 M20K）已删除，
 # 该块曾是 eth tx_clkout|ch23 负 slack 的唯一来源。
-set_global_assignment -name SEED 7
+set_global_assignment -name SEED 0
 set_global_assignment -name OPTIMIZATION_MODE "HIGH PERFORMANCE EFFORT" -comment "Use High Performance Effort optimization mode when optimizing for performance. Superior Performance with Maximum Placement Effort optimization mode has been deprecated and will be removed in 27.1.1."
 set_global_assignment -name OPTIMIZATION_TECHNIQUE SPEED
 set_global_assignment -name MUX_RESTRUCTURE OFF
