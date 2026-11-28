@@ -60,6 +60,7 @@ struct yuanrdma_qp {
 	uint32_t sq_log2_depth, rq_log2_depth;
 	uint32_t sq_producer, sq_consumer;	/* 软件计数（自由增长），槽号 = 计数 & (depth-1) */
 	uint32_t rq_producer, rq_consumer;
+	uint32_t rq_db_producer;		/* 最近一次写进 RQ 门铃的 rq_producer（recv_lock 保护），见 rq_ring_doorbell */
 	uint64_t *sq_wr_id;
 	uint64_t *rq_wr_id;
 	bool error;				/* 收到过错误 CQE：其余 WQE 由 provider 冲刷 */

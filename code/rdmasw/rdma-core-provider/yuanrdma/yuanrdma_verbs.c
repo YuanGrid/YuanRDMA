@@ -282,7 +282,7 @@ int yuanrdma_modify_qp(struct ibv_qp *ibv_qp, struct ibv_qp_attr *attributes, in
 		qp->error = false;
 		pthread_spin_unlock(&qp->send_lock);
 		pthread_spin_lock(&qp->recv_lock);
-		qp->rq_producer = qp->rq_consumer = 0;
+		qp->rq_producer = qp->rq_consumer = qp->rq_db_producer = 0;
 		pthread_spin_unlock(&qp->recv_lock);
 	}
 	/* 用户态只缓存，改动已经由 uverbs 写进 QPC（RTL 从 QPC 取 dst_mac/dst_ip）。
@@ -616,6 +616,44 @@ int yuanrdma_post_send(struct ibv_qp *ibv_qp, struct ibv_send_wr *wr, struct ibv
  */
 #define YUANRDMA_UD_GRH_BYTES 40u
 
+/*
+ * RQ 门铃合并。门铃是 UC 写；逐个 post_recv 都敲时，下一次 post_recv 加锁（原子指令即全屏障）
+ * 要等上一个门铃写走到设备才能往下走，补 RQ 的速度被钉在「每个 WQE 一次 MMIO 往返」上。
+ * 一包一补的 UD 接收端（每个完成后立即 post_recv 一个）因此补不上线速，硬件收包时 RQ 已空。
+ *
+ * 规则（recv_lock 内判定）：
+ *   - 未敲门铃的 WQE 攒到 YUANRDMA_RQ_DB_BATCH 个就敲；
+ *   - 硬件手里的 WQE（rq_db_producer − rq_consumer，即已敲门铃减去已轮询到的接收完成）少于
+ *     YUANRDMA_RQ_DB_LOW 时立即敲：浅 RQ、低速应用与逐个敲完全相同；
+ *   - poll_cq 每次都把本 CQ 上各 QP 攒着的门铃补敲（rq_doorbell_flush）。
+ * 这个差值只会高估硬件手里的 WQE（还没轮询到的完成仍算在硬件手里）：CQ 已轮询空时它就是实数，
+ * 硬件至少还有 LOW 个 WQE；CQ 里还有完成时，应用要取完成就得 poll，攒着的门铃随之敲出。
+ * 所以攒着的至多 BATCH − 1 个 WQE 不会被一直扣住，应用停止补 RQ 后最后几个也照样可用。
+ */
+#define YUANRDMA_RQ_DB_BATCH 16u
+#define YUANRDMA_RQ_DB_LOW   64
+
+/* 调用方持有 recv_lock */
+static void rq_ring_doorbell(struct yuanrdma_context *context, struct yuanrdma_qp *qp)
+{
+	udma_to_device_barrier();		/* WQE 先于 doorbell 可见 */
+	mmio_write32((uint32_t *)((char *)context->doorbell_page + YNRDMA_DB_RQ),
+		     ((qp->rq_producer & 0xffff) << 16) | qp->qp_index);
+	qp->rq_db_producer = qp->rq_producer;
+}
+
+/* poll_cq 调用：补敲 qp 攒着的 RQ 门铃。post_recv 正持锁时跳过，它自己按规则敲，剩下的留给下一次 poll */
+static void rq_doorbell_flush(struct yuanrdma_context *context, struct yuanrdma_qp *qp)
+{
+	if (qp->rq_db_producer == qp->rq_producer)	/* 不持锁先看一眼：绝大多数时候没有攒着的 */
+		return;
+	if (pthread_spin_trylock(&qp->recv_lock))
+		return;
+	if (qp->rq_db_producer != qp->rq_producer)
+		rq_ring_doorbell(context, qp);
+	pthread_spin_unlock(&qp->recv_lock);
+}
+
 int yuanrdma_post_recv(struct ibv_qp *ibv_qp, struct ibv_recv_wr *wr, struct ibv_recv_wr **bad_wr)
 {
 	struct yuanrdma_context *context = to_yuanrdma_context(ibv_qp->context);
@@ -656,11 +694,11 @@ int yuanrdma_post_recv(struct ibv_qp *ibv_qp, struct ibv_recv_wr *wr, struct ibv
 		qp->rq_producer++;
 		posted = true;
 	}
-	if (posted) {
-		udma_to_device_barrier();
-		mmio_write32((uint32_t *)((char *)context->doorbell_page + YNRDMA_DB_RQ),
-			     ((qp->rq_producer & 0xffff) << 16) | qp->qp_index);
-	}
+	/* 门铃合并规则见 rq_ring_doorbell 上方。rq_consumer 由 poll_cq 在 cq->lock 下推进，这里读到的
+	 * 可能偏旧（偏小），差值按有符号算：QP 出错后 flush_queue 会把 rq_consumer 推过 rq_db_producer。 */
+	if (posted && (qp->rq_producer - qp->rq_db_producer >= YUANRDMA_RQ_DB_BATCH ||
+		       (int32_t)(qp->rq_db_producer - qp->rq_consumer) < YUANRDMA_RQ_DB_LOW))
+		rq_ring_doorbell(context, qp);
 	pthread_spin_unlock(&qp->recv_lock);
 	return ret;
 }
@@ -739,6 +777,7 @@ int yuanrdma_poll_cq(struct ibv_cq *ibv_cq, int entries, struct ibv_wc *wc)
 {
 	struct yuanrdma_context *context = to_yuanrdma_context(ibv_cq->context);
 	struct yuanrdma_cq *cq = to_yuanrdma_cq(ibv_cq);
+	struct yuanrdma_qp *rq_qp = NULL;	/* 本批最近一个出接收完成的 QP（补敲 RQ 门铃用） */
 	uint32_t depth = 1u << cq->log2_depth;
 	int count = 0, qp_index;
 
@@ -791,6 +830,11 @@ int yuanrdma_poll_cq(struct ibv_cq *ibv_cq, int entries, struct ibv_wc *wc)
 				}
 			}
 			qp->rq_consumer++;
+			if (rq_qp != qp) {		/* 换了 QP：上一个 QP 攒着的 RQ 门铃先补敲 */
+				if (rq_qp)
+					rq_doorbell_flush(context, rq_qp);
+				rq_qp = qp;
+			}
 		} else {				/* 发送完成：之前未 signaled 的 WQE 一并退休 */
 			slot = wqe_index & ((1u << qp->sq_log2_depth) - 1);
 			wc[count].wr_id = qp->sq_wr_id[slot];
@@ -800,13 +844,22 @@ int yuanrdma_poll_cq(struct ibv_cq *ibv_cq, int entries, struct ibv_wc *wc)
 			qp->error = true;
 		count++;
 	}
-	/* 出错的 QP：其余 WQE 冲刷 */
-	for (qp_index = 0; qp_index < YNRDMA_MAX_QP && count < entries; qp_index++) {
-		struct yuanrdma_qp *qp = context->qp_table[qp_index];
+	if (rq_qp)
+		rq_doorbell_flush(context, rq_qp);
+	/* 没取满说明 CQ 已经轮询空：出错的 QP 其余 WQE 冲刷；以本 CQ 为 recv_cq 的 QP 攒着的 RQ 门铃
+	 * 全部补敲（取满时只补了本批出现过的 QP，其余的等 CQ 轮询空这一次）。 */
+	if (count < entries) {
+		for (qp_index = 0; qp_index < YNRDMA_MAX_QP; qp_index++) {
+			struct yuanrdma_qp *qp = context->qp_table[qp_index];
 
-		if (qp && qp->error)
-			count += flush_queue(qp, qp->ibv_qp.send_cq == ibv_cq, qp->ibv_qp.recv_cq == ibv_cq,
-					     entries - count, &wc[count]);
+			if (!qp)
+				continue;
+			if (qp->error && count < entries)
+				count += flush_queue(qp, qp->ibv_qp.send_cq == ibv_cq, qp->ibv_qp.recv_cq == ibv_cq,
+						     entries - count, &wc[count]);
+			if (qp->ibv_qp.recv_cq == ibv_cq)
+				rq_doorbell_flush(context, qp);
+		}
 	}
 	if (count)
 		mmio_write32((uint32_t *)((char *)context->doorbell_page + YNRDMA_DB_CQ),
