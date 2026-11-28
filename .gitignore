@@ -53,7 +53,8 @@ code/nictrl/nictrl
 # 系统
 .DS_Store
 
-# 本地资料与测试产物
+# 本地资料、测试产物与开发辅助脚本
 private/
 test/
 skill/
+/tool/
