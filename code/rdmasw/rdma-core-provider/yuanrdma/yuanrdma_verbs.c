@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0 OR BSD-2-Clause
 /* yuanrdma provider：控制面走 uverbs 命令；数据面直接写主机内存中的环并敲 doorbell。 */
+#include <endian.h>
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
@@ -212,6 +213,11 @@ struct ibv_qp *yuanrdma_create_qp(struct ibv_pd *pd, struct ibv_qp_init_attr *at
 	qp->rq_wr_id = calloc(1u << qp->rq_log2_depth, sizeof(uint64_t));
 	if (!qp->sq_wr_id || !qp->rq_wr_id)
 		goto free_shadow;
+	if (qp->is_ud) {
+		qp->rq_addr = calloc(1u << qp->rq_log2_depth, sizeof(uint64_t));
+		if (!qp->rq_addr)
+			goto free_shadow;
+	}
 	if (want_inline) {
 		size_t size;
 
@@ -242,6 +248,7 @@ free_shadow:
 	free(qp->inline_buf);
 	free(qp->sq_wr_id);
 	free(qp->rq_wr_id);
+	free(qp->rq_addr);
 	munmap(qp->rq_ring, qp->rq_ring_size);
 unmap_sq:
 	munmap(qp->sq_ring, qp->sq_ring_size);
@@ -279,15 +286,15 @@ int yuanrdma_modify_qp(struct ibv_qp *ibv_qp, struct ibv_qp_attr *attributes, in
 		pthread_spin_unlock(&qp->recv_lock);
 	}
 	/* 用户态只缓存，改动已经由 uverbs 写进 QPC（RTL 从 QPC 取 dst_mac/dst_ip）。
-	 * 缓存的两项都只服务 post_send 的前置检查（UD 的 path_mtu 上限与 AH 一致性），
-	 * 不影响控制面。 */
+	 * 缓存的两项都只服务 post_send（UD 的 path_mtu 上限、QPC 当前目的地址），不影响控制面。 */
 	if (!ret && (mask & IBV_QP_PATH_MTU) &&
 	    attributes->path_mtu >= IBV_MTU_256 && attributes->path_mtu <= IBV_MTU_4096)
 		qp->path_mtu = attributes->path_mtu;
 	if (!ret && (mask & IBV_QP_AV)) {
-		qp->av_dgid = attributes->ah_attr.grh.dgid;
-		qp->av_sgid_index = attributes->ah_attr.grh.sgid_index;
+		pthread_spin_lock(&qp->send_lock);
+		qp->av = attributes->ah_attr.grh;
 		qp->av_valid = true;
+		pthread_spin_unlock(&qp->send_lock);
 	}
 	return ret;
 }
@@ -324,28 +331,27 @@ int yuanrdma_destroy_qp(struct ibv_qp *ibv_qp)
 	free(qp->inline_buf);
 	free(qp->sq_wr_id);
 	free(qp->rq_wr_id);
+	free(qp->rq_addr);
 	free(qp);
 	return 0;
 }
 
-/* ---------------------------------------------------------------- AH（G2.1 Step 2）
+/* ---------------------------------------------------------------- AH
  *
- * UD 发送需要三样东西：目的 QPN、Q_Key、目的地址（dmac/dip）。前两个是 per-WR 的，
- * 落在 SQ WQE 的 dw9/dw10（见 yuanrdma_hw.h 的 sq_wqe_layout）；dmac/dip 是 per-AH 的，
- * 但 RTL 的 UD 组包**不从 WQE 取目的 MAC/IP**：roce_tx.sv:169/180 用 build_job.dmac /
- * build_job.dip，二者来自 QPC（modify_qp 的 IBV_QP_AV 已写进去，见
- * code/kernel/yuanrdma/yuanrdma_verbs.c:636-660）。所以 AH 在用户态的职责只有两条：
+ * UD 发送需要三样东西：目的 QPN、Q_Key、目的地址（dmac/dip/TTL/TOS）。前两个是 per-WR 的，
+ * 落在 SQ WQE 的 dw9/dw10（见 yuanrdma_hw.h 的 sq_wqe_layout）；目的地址是 per-AH 的，
+ * 但 RTL 的 UD 组包**不从 WQE 取目的 MAC/IP**：roce_req 的 tx_job.dmac/dip 来自 QPC。
+ * 所以 AH 在用户态的职责是：
  *
  *   1) 把 ibv_ah_attr 解析成规范形式，参数错误在 create_ah 就报（perftest 会说
  *      "Couldn't create AH"），而不是拖到 post_send 才失败；
- *   2) post_send 时校验 wr->wr.ud.ah 与 QP 当前 AV 一致。这一步很关键：RTL 只用 QPC
- *      的目的地址，如果调用方给 QP 配了 A 的 AV、却在 post_send 里传 B 的 AH，
- *      硬件会「成功地」把包发到 A，IB 语义却要求发到 B——必须在这里挡住。
+ *   2) post_send 时与 QP 当前写进 QPC 的目的地址比对，不同就先改写 QPC
+ *      （ud_set_destination：modify_qp(IBV_QP_AV)，内核解析 dmac 后整项写 QPC）。
  *
- * 限制（与内核 yuanrdma_create_ah、yuanrdma_modify_qp 的 IB_QP_AV 分支一致）：
+ * 限制（与内核 yuanrdma_modify_qp 的 IB_QP_AV 分支一致）：
  * 只接受 RoCEv2 + IPv4（dgid 是 v4-mapped），IPv6 GID / IB 链路层都返回 EOPNOTSUPP。
- * sgid_index 只记下来，不解析成本端 IP：RTL 的本端 IP/MAC 来自 CSR
- * （YNRDMA_REG_IPV4/YNRDMA_REG_MAC_*），与 GID 表无关。
+ * 本端 IP/MAC 来自 CSR（YNRDMA_REG_IPV4/YNRDMA_REG_MAC_*），与 sgid_index 无关；
+ * sgid_index 只交给内核选 GID 类型（必须是 RoCEv2）与做 ARP。
  */
 static bool gid_is_v4mapped(const union ibv_gid *gid)
 {
@@ -376,16 +382,12 @@ struct ibv_ah *yuanrdma_create_ah(struct ibv_pd *pd, struct ibv_ah_attr *attr)
 		return NULL;
 	ah->ibv_ah.context = pd->context;
 	ah->ibv_ah.pd = pd;
-	ah->dgid = attr->grh.dgid;
-	ah->sgid_index = attr->grh.sgid_index;
-	ah->traffic_class = attr->grh.traffic_class;
-	ah->hop_limit = attr->grh.hop_limit;
-	ah->port_num = attr->port_num ? attr->port_num : 1;
-	/* 源 GID 只做记录：RTL 的本端地址来自 CSR，不按 sgid_index 选。GID 表由内核
-	 * yuanrdma_add_gid 维护（yuanrdma_verbs.c:131），libibverbs 的 uverbs 路径能读到，
-	 * 所以这里查得到；查不到也不拒绝（perftest 常用 sgid_index=0 做 v2 IPv4 GID）。 */
+	ah->attr = *attr;
+	if (!ah->attr.port_num)
+		ah->attr.port_num = 1;
+	/* 源 GID 只做记录；GID 表由内核 yuanrdma_add_gid 维护，查不到也不拒绝。 */
 	if (attr->grh.sgid_index < 16)
-		ibv_query_gid(pd->context, ah->port_num, attr->grh.sgid_index, &ah->sgid);
+		ibv_query_gid(pd->context, ah->attr.port_num, attr->grh.sgid_index, &ah->sgid);
 	return &ah->ibv_ah;
 }
 
@@ -439,27 +441,50 @@ static uint32_t mtu_bytes(enum ibv_mtu mtu)
 	return mtu ? 128u << mtu : 0;
 }
 
-/* wr->wr.ud.ah 与 QP 当前 AV 是否一致。**只对 UD 且 QP 配过 AV 时生效**：
- * RTL 用 QPC 的 dst_mac/dst_ip 组头，用 WQE 的 qpn 做 BTH/DETH，两者来自不同地方。
+/*
+ * UD：保证 QPC 的目的地址就是 wr->wr.ud.ah。调用方持有 send_lock。
  *
- * 为什么不是强制：标准 UD 流程（rdma-core libibverbs/examples/ud_pingpong.c:90-117、
- * perftest 的 ud_pingpong 同理）**从不给 QP 配 IBV_QP_AV**，目的地址只在 per-WR 的 AH 里。
- * 强制要求 AV 会把标准流程挡在 post_send，比它要防的问题更糟。
+ * RTL 组 UD 帧的 Eth/IP 头（dmac、dip、TTL、TOS、UDP sport）取自 QPC，WQE 里只带 remote_qpn
+ * 与 qkey。标准 UD 用法（rdma_cm 的 udaddy、ud_pingpong、perftest）只在 WR 上给 AH、从不
+ * modify_qp(IBV_QP_AV)，不补这一步时 QPC 的目的地址是 create_qp 时的 0：帧发往
+ * 0.0.0.0 / 00:00:00:00:00:00、TTL 0（直连 ConnectX 时对端照收，但它从接收到的 IPv4 头
+ * 里取不到可用的目的地址，ibv_create_ah_from_wc 失败；过交换机则根本到不了）。
  *
- * 但这留了一个真实缺口，必须说清楚：AH 只到 provider 为止，RTL 拿不到它的 dgid。
- * UD QP 若没配 AV，QPC 的 dst_mac/dst_ip 是 create_qp 时的 0，硬件会组出目的地址为 0 的
- * 帧（对端收不到，且看起来是「发出去了」）。所以走 UD 的 ULP 必须额外做一次
- * ibv_modify_qp(IBV_QP_AV) 把目的地址先写进 QPC——这是本硬件的使用约束，已写进
- * open_issues 与 skill 文档待同步。配了 AV 之后，这里的比对才真正起作用。 */
-static int ud_av_matches(const struct yuanrdma_qp *qp, const struct ibv_ah *ibv_ah)
+ * 做法：AH 与 QPC 当前目的地址不同就发一次 modify_qp(IBV_QP_AV)（内核解析 dmac 并整项写
+ * QPC），之后同一个 AH 的 WR 直接走快路径。
+ *
+ * **语义限制**：QPC 只有一份目的地址，RTL 在取 WQE 时读它。所以换目的地址时 SQ 里不能有
+ * 还没退休的 WQE（包括本次 post_send 链里排在前面、尚未敲 doorbell 的那些），否则它们会被
+ * 发到新地址。判据是 provider 自己的 sq_consumer == sq_producer，sq_consumer 只在 poll 到
+ * 发送 CQE 时前进——换地址前，之前的 WQE 必须都以 signaled CQE 退休（最后一个 signaled
+ * 即可，前面未 signaled 的随它一起退休）。不满足返回 EBUSY，不静默错发。
+ * 一个 QP 只对一个目的地址（udaddy 每个连接一个 QP、ud_pingpong、perftest 每 QP 一个 AH）
+ * 只在第一条 WR 上付一次 modify_qp 的代价（含一次 ARP 查询，邻居表已有时是微秒级）。
+ */
+static bool ud_same_route(const struct ibv_global_route *a, const struct ibv_global_route *b)
+{
+	return !memcmp(a->dgid.raw, b->dgid.raw, sizeof(a->dgid.raw)) && a->sgid_index == b->sgid_index &&
+	       a->flow_label == b->flow_label && a->hop_limit == b->hop_limit &&
+	       a->traffic_class == b->traffic_class;
+}
+
+static int ud_set_destination(struct yuanrdma_qp *qp, const struct ibv_ah *ibv_ah)
 {
 	const struct yuanrdma_ah *ah = container_of(ibv_ah, struct yuanrdma_ah, ibv_ah);
+	struct ibv_modify_qp command = {};
+	struct ibv_qp_attr attr = {};
+	int ret;
 
-	if (!qp->av_valid)
+	if (qp->av_valid && ud_same_route(&qp->av, &ah->attr.grh))
 		return 0;
-	if (memcmp(ah->dgid.raw, qp->av_dgid.raw, sizeof(ah->dgid.raw)) ||
-	    ah->sgid_index != qp->av_sgid_index)
-		return EINVAL;
+	if (qp->sq_producer != qp->sq_consumer)
+		return EBUSY;
+	attr.ah_attr = ah->attr;
+	ret = ibv_cmd_modify_qp(&qp->ibv_qp, &attr, IBV_QP_AV, &command, sizeof(command));
+	if (ret)
+		return ret;
+	qp->av = ah->attr.grh;
+	qp->av_valid = true;
 	return 0;
 }
 
@@ -522,7 +547,7 @@ int yuanrdma_post_send(struct ibv_qp *ibv_qp, struct ibv_send_wr *wr, struct ibv
 							 * 用户态拒绝，不是切分。下发后 RTL 会按
 							 * frame_length 组一个超长帧，对端丢包。 */
 			else
-				ret = ud_av_matches(qp, wr->wr.ud.ah);
+				ret = ud_set_destination(qp, wr->wr.ud.ah);
 		} else if (wr->num_sge > 1 && !is_inline) {
 			ret = EINVAL;
 		}
@@ -583,6 +608,14 @@ int yuanrdma_post_send(struct ibv_qp *ibv_qp, struct ibv_send_wr *wr, struct ibv
 	return ret;
 }
 
+/*
+ * UD 接收缓冲的前 40 B 留给 GRH（IB 语义：不论报文带不带 GRH，UD 接收都从第一个 SGE 的
+ * 第 40 字节起放载荷，wc.byte_len 含这 40 B；ud_pingpong / udaddy / perftest 都按
+ * size + 40 申请缓冲）。RTL 把载荷写到 RQ WQE 的 addr 起，所以 UD 的 RQ WQE 下发
+ * 「用户起址 + 40、长度 - 40」，GRH 区由 poll_cq 按 CQE 的 IPv4 信息合成（见 ud_write_grh）。
+ */
+#define YUANRDMA_UD_GRH_BYTES 40u
+
 int yuanrdma_post_recv(struct ibv_qp *ibv_qp, struct ibv_recv_wr *wr, struct ibv_recv_wr **bad_wr)
 {
 	struct yuanrdma_context *context = to_yuanrdma_context(ibv_qp->context);
@@ -601,10 +634,22 @@ int yuanrdma_post_recv(struct ibv_qp *ibv_qp, struct ibv_recv_wr *wr, struct ibv
 			*bad_wr = wr;
 			break;
 		}
+		if (qp->is_ud && wr->num_sge && wr->sg_list[0].length < YUANRDMA_UD_GRH_BYTES) {
+			ret = EINVAL;		/* 放不下 GRH 区：IB 语义下这个缓冲收不了任何 UD 报文 */
+			*bad_wr = wr;
+			break;
+		}
 		if (wr->num_sge) {
 			wqe.length = wr->sg_list[0].length;
 			wqe.lkey = wr->sg_list[0].lkey;
 			wqe.addr = wr->sg_list[0].addr;
+		}
+		if (qp->is_ud) {
+			qp->rq_addr[slot] = wqe.addr;
+			if (wr->num_sge) {
+				wqe.addr += YUANRDMA_UD_GRH_BYTES;
+				wqe.length -= YUANRDMA_UD_GRH_BYTES;
+			}
 		}
 		memcpy(&qp->rq_ring[slot], &wqe, sizeof(wqe));
 		qp->rq_wr_id[slot] = wr->wr_id;
@@ -618,6 +663,47 @@ int yuanrdma_post_recv(struct ibv_qp *ibv_qp, struct ibv_recv_wr *wr, struct ibv
 	}
 	pthread_spin_unlock(&qp->recv_lock);
 	return ret;
+}
+
+/*
+ * UD 接收的 GRH 合成。RoCEv2 线上没有 GRH，IB 语义却要求带 IBV_WC_GRH 的 UD 完成在接收缓冲
+ * 前 40 B 放 GRH：ibv_create_ah_from_wc 从这里取对端地址造回包 AH（udaddy 的 create_reply_ah）。
+ * 格式与 ConnectX 一致（2026-11-27 对端 gdb 实取）：前 20 B 为 0，后 20 B 是收到的 IPv4 头；
+ * libibverbs 的 get_grh_header_version 见首字 version != 6 且 [20] 是 0x45 即按 IPv4 解析，
+ * 用 daddr 查本端 GID 序号、saddr 作 dgid、ttl 作 hop_limit、tos 作 traffic_class。
+ *
+ * IPv4 信息来自 CQE dw5..dw7（RTL 在 UD 接收时填，并置 dw0[19]）。CQE 没带（老镜像）时
+ * 不写 GRH、不置 IBV_WC_GRH——那样 create_ah_from_wc 会得到 is_global=0 的 AH，create_ah 拒绝，
+ * 比编一个错的源地址强。
+ */
+static void ud_write_grh(uint8_t *grh, const struct ynrdma_cqe *cqe, uint32_t payload_length, bool has_imm)
+{
+	uint8_t *ip = grh + 20;
+	uint32_t dw7 = le32toh(cqe->dw7);
+	uint32_t total = 20 + 8 + 12 + 8 + (has_imm ? 4 : 0) + payload_length + ((0u - payload_length) & 3) + 4;
+	uint32_t sum = 0;
+	int i;
+
+	memset(grh, 0, 20);
+	ip[0] = 0x45;
+	ip[1] = (dw7 >> 8) & 0xff;		/* TOS */
+	ip[2] = total >> 8;
+	ip[3] = total & 0xff;
+	ip[4] = ip[5] = 0;
+	ip[6] = 0x40;				/* DF */
+	ip[7] = 0;
+	ip[8] = dw7 & 0xff;			/* TTL */
+	ip[9] = 17;				/* UDP */
+	ip[10] = ip[11] = 0;
+	memcpy(ip + 12, &cqe->src_ip, 4);	/* dw5/dw6 的内存字节序就是网络序 */
+	memcpy(ip + 16, &cqe->dst_ip, 4);
+	for (i = 0; i < 20; i += 2)
+		sum += (ip[i] << 8) | ip[i + 1];
+	while (sum >> 16)
+		sum = (sum & 0xffff) + (sum >> 16);
+	sum = ~sum & 0xffff;
+	ip[10] = sum >> 8;
+	ip[11] = sum & 0xff;
 }
 
 /* 硬件出错后只给出错的那个 WQE 写 CQE，其后的 WQE 由这里冲刷成 FLUSH_ERR */
@@ -690,13 +776,20 @@ int yuanrdma_poll_cq(struct ibv_cq *ibv_cq, int entries, struct ibv_wc *wc)
 			wc[count].wc_flags |= IBV_WC_WITH_IMM;
 			wc[count].imm_data = cqe->imm;
 		}
-		/* has_grh（dw0[18]）：UD 收包时接收缓冲**前 40 B 是 GRH**，byte_len 不含这 40 B。
-		 * 只有 UD 会置这一位，RC 恒 0。 */
-		if ((dw0 >> 18) & 1)
-			wc[count].wc_flags |= IBV_WC_GRH;
 		if ((dw0 >> 17) & 1) {			/* 接收完成：RQ 按序 */
 			slot = wqe_index & ((1u << qp->rq_log2_depth) - 1);
 			wc[count].wr_id = qp->rq_wr_id[slot];
+			/* UD：载荷落在用户缓冲 +40 处（post_recv 移过），byte_len 按 IB 语义含 40 B GRH 区；
+			 * CQE 带了 IPv4 信息（dw0[19]）就合成 GRH。dw0[18] 是旧契约的「硬件已写 GRH」，
+			 * 从没有镜像置过，现已废弃不读。 */
+			if (qp->is_ud && wc[count].status == IBV_WC_SUCCESS) {
+				wc[count].byte_len += YUANRDMA_UD_GRH_BYTES;
+				if ((dw0 & YNRDMA_CQE_F_IPV4) && qp->rq_addr[slot]) {
+					ud_write_grh((uint8_t *)(uintptr_t)qp->rq_addr[slot], cqe,
+						     le32toh(cqe->byte_len), (dw0 >> 16) & 1);
+					wc[count].wc_flags |= IBV_WC_GRH;
+				}
+			}
 			qp->rq_consumer++;
 		} else {				/* 发送完成：之前未 signaled 的 WQE 一并退休 */
 			slot = wqe_index & ((1u << qp->sq_log2_depth) - 1);

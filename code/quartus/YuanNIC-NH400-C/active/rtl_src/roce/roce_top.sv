@@ -577,7 +577,7 @@ module roce_top
     wire [CQ_CLIENTS-1:0]     cq_cqe_valid, cq_cqe_ready;
     // S6：每个客户端的 CQ 编号 CQ_W 位（与 roce_engine 的 resp/req_cqe_cq 宽度一致）。
     wire [CQ_CLIENTS*CQ_W-1:0] cq_cqe_cq;
-    wire [CQ_CLIENTS*160-1:0] cq_cqe_data;
+    wire [CQ_CLIENTS*256-1:0] cq_cqe_data;      // 每客户端一整条 32 B CQE（dw0..dw7）
     wire                      cq_dma_request_valid, cq_dma_write_valid;
     wire [63:0]               cq_dma_address, cq_dma_page1;
     wire [12:0]               cq_dma_length;
@@ -675,9 +675,9 @@ module roce_top
                 // 位宽随 RX_DW，引擎参数表里一并传 .RX_DW(RX_DW)（见 RX_DW 定义处）
                 .rx_payload_data(lane_rx_payload_data[lane*RX_DW +: RX_DW]), .rx_payload_last(lane_rx_payload_last[lane]),
                 .resp_cqe_valid(cq_cqe_valid[lane*2]),   .resp_cqe_ready(cq_cqe_ready[lane*2]),
-                .resp_cqe_cq(cq_cqe_cq[(lane*2)*CQ_W +: CQ_W]), .resp_cqe_data(cq_cqe_data[(lane*2)*160 +: 160]),
+                .resp_cqe_cq(cq_cqe_cq[(lane*2)*CQ_W +: CQ_W]), .resp_cqe_data(cq_cqe_data[(lane*2)*256 +: 256]),
                 .req_cqe_valid(cq_cqe_valid[lane*2+1]),  .req_cqe_ready(cq_cqe_ready[lane*2+1]),
-                .req_cqe_cq(cq_cqe_cq[(lane*2+1)*CQ_W +: CQ_W]), .req_cqe_data(cq_cqe_data[(lane*2+1)*160 +: 160]),
+                .req_cqe_cq(cq_cqe_cq[(lane*2+1)*CQ_W +: CQ_W]), .req_cqe_data(cq_cqe_data[(lane*2+1)*256 +: 256]),
                 .cq_dma_write_request_valid(cq_dma_request_valid && (cq_dma_lane == LANE_W'(lane))),
                 .cq_dma_write_request_ready(lane_cq_dma_request_ready[lane]),
                 .cq_dma_write_request_address(cq_dma_address), .cq_dma_write_request_page1(cq_dma_page1),

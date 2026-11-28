@@ -19,8 +19,9 @@ module roce_cq
     output wire  [CLIENTS-1:0]    cqe_ready,
     // S6：每个客户端的 CQ 编号是 CQ_W 位（16 时 4、64 时 6）。写死 4 会把 CQ40 截成 CQ8。
     input  wire  [CLIENTS*CQ_W-1:0] cqe_cq_index,
-    // S（UD）：cqe_data 从 128→160 bit/client，新增 dw4[31:0]（src_qp + src_qp_valid）。
-    input  wire  [CLIENTS*160-1:0] cqe_data,
+    // 每客户端一整条 32 B CQE（dw0..dw7，256 bit）。dw4 = src_qp，dw5..dw7 = UD 接收的 IPv4 信息
+    // （2026-11-27 由 160 加宽；发送完成的客户端高位恒 0，综合会把那些寄存器裁掉）。
+    input  wire  [CLIENTS*256-1:0] cqe_data,
     // DMA 写
     output reg               dma_write_request_valid,
     input  wire              dma_write_request_ready,
@@ -50,7 +51,7 @@ module roce_cq
     // B6462 STA 里 lane0 的 cqe_valid 跨到 lane3 再折回 u_cq，走线占该路径 84%；
     // 缓冲后仲裁只看本模块内的寄存器，lane 侧只到本地寄存器。
     reg  [CLIENTS-1:0]      in_valid_q;
-    reg  [CLIENTS*160-1:0]  in_data_q;
+    reg  [CLIENTS*256-1:0]  in_data_q;
     reg  [CLIENTS*CQ_W-1:0] in_cq_q;
     integer in_i;
 
@@ -76,7 +77,7 @@ module roce_cq
     assign cqe_ready = in_ready;
 
     wire [CQ_W-1:0] cq        = in_cq_q[picked_client*CQ_W +: CQ_W];
-    wire [159:0]  cqe_entry   = in_data_q[picked_client*160 +: 160];
+    wire [255:0]  cqe_entry   = in_data_q[picked_client*256 +: 256];
     wire [15:0]  producer    = producer_index[cq];
     wire [3:0]   log2_depth   = cqc[cq].log2_depth;
     wire [15:0]  index_mask = (16'd1 << log2_depth) - 16'd1;
@@ -94,7 +95,7 @@ module roce_cq
                     in_valid_q[in_i] <= 1'b0;
                 if (cqe_valid[in_i] && in_ready[in_i]) begin
                     in_valid_q[in_i] <= 1'b1;
-                    in_data_q[in_i*160 +: 160] <= cqe_data[in_i*160 +: 160];
+                    in_data_q[in_i*256 +: 256] <= cqe_data[in_i*256 +: 256];
                     in_cq_q[in_i*CQ_W +: CQ_W] <= cqe_cq_index[in_i*CQ_W +: CQ_W];
                 end
             end
@@ -138,10 +139,8 @@ module roce_cq
                             dma_write_request_valid <= 1'b1;
                             // 1024 位写拍：低 32 B 是 CQE，高 96 B 必须为 0——wr_align 会用
                             // request_length=32 算出的 wstrb 把其余字节屏蔽掉，零填充只是让波形可读。
-                            // CQE 32 B：dw0..dw3 来自 cqe_entry[127:0]，dw4 来自 cqe_entry[159:128]。
-                            // owner 位覆盖 dw0[31]；高 96 B（dw8..dw31）填 0。
-                            dma_write_data      <= {864'd0, cqe_entry[159:128],
-                                                    cqe_entry[127:32], owner_bit, cqe_entry[30:0]};
+                            // CQE 32 B = cqe_entry[255:0]（dw0..dw7），owner 位覆盖 dw0[31]；高 96 B（dw8..dw31）填 0。
+                            dma_write_data      <= {768'd0, cqe_entry[255:32], owner_bit, cqe_entry[30:0]};
                             state           <= S_REQUEST;
                         end
                     end

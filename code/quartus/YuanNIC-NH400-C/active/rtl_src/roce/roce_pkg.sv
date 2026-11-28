@@ -264,6 +264,10 @@ package roce_pkg;
         // Source GID 低 32 位就是 IPv4 源地址（GRH 的 GID = ::ffff:<IPv4>），所以必须把源 IP
         // 从解析级带上来；rx_hdr_t 以前只有目的侧信息，合成不出来。
         logic [31:0] src_ip;
+        // UD 接收的 CQE 还要带 IPv4 的 TTL / TOS（2026-11-27）：provider 合成的 GRH 里 hop_limit /
+        // traffic_class 取它们，ibv_create_ah_from_wc 造出的回包 AH 才与对端发来的同 DSCP。RC 恒 0。
+        logic [7:0]  ip_ttl;
+        logic [7:0]  ip_tos;
         logic [12:0] payload_length;      // 0..4096
         logic        bad;          // 头部不合法（长度、opcode）
     } rx_hdr_t;

@@ -13,12 +13,12 @@
  *   2) SQ WQE 的 UD 字段（dw9[23:0] remote_qpn / dw10[31:0] remote_qkey，见 struct ynrdma_sq_wqe 下方）
  *      ↔ roce_req.sv 新增切片 `wqe_read_data[9*32 +: 24]` / `[10*32 +: 32]`
  *      ↔ provider post_send 的 UD 分支。RC 字段偏移不变（dw8 仍是 rkey）。
- *   3) CQE 的 src_qp / has_grh（dw4[23:0] / dw4[24] / dw0[18]，见 struct ynrdma_cqe 下方）
- *      ↔ roce_resp.sv 的 cqe_data **160 bit** 拼接（:839-842，dw4 在 [159:128]）
- *      ↔ roce_req.sv 的 cqe_data（同为 160 bit）↔ roce_engine.sv 的 resp/req_cqe_data 端口
- *      ↔ roce_cq.sv 的 160 bit/client 搬运与 DMA 写拍
- *      ↔ provider yuanrdma_poll_cq 的 wc.src_qp / IBV_WC_GRH。
- *      任何一段退回 128 bit 都会静默丢掉 dw4（-Wno-WIDTH 掩盖），UD 的 src_qp 恒 0。
+ *   3) CQE 的 src_qp / IPv4 信息（dw4[23:0] / dw4[24] / dw0[19] / dw5..dw7，见 struct ynrdma_cqe 下方）
+ *      ↔ roce_resp.sv 的 cqe_data **256 bit** 拼接（dw4 在 [159:128]，dw5..dw7 在 [255:160]）
+ *      ↔ roce_req.sv 的 cqe_data（同为 256 bit，dw5..dw7 恒 0）↔ roce_engine.sv 的 resp/req_cqe_data 端口
+ *      ↔ roce_cq.sv 的 256 bit/client 搬运与 DMA 写拍
+ *      ↔ provider yuanrdma_poll_cq 的 wc.src_qp / GRH 合成（ud_write_grh）。
+ *      任何一段退回窄位宽都会静默丢掉高位 dw（-Wno-WIDTH 掩盖），UD 的 src_qp / GRH 就没了。
  *   4) QPC 布局（struct ynrdma_qpc 各 dw 的位段）↔ roce_pkg.sv 的 qpc_* 访问函数。
  *   5) CQE dw0 的 owner/has_imm/is_recv 位 ↔ roce_cq.sv 的 owner_bit 注入 ↔ provider poll_cq。
  *   6) 任何 yuanrdma_hw.h 里的结构体都必须保持下方注释标明的字节大小（编译期断言在文件末尾）。
@@ -254,17 +254,22 @@ struct ynrdma_rq_wqe {
  * 即第一圈写 1、第二圈写 0。provider 在 ci 处检查 owner == !((ci >> log2_depth) & 1)。 */
 struct ynrdma_cqe {
 	__u32 dw0;          /* [7:0]ibv_wc_opcode [15:8]ibv_wc_status [16]has_imm [17]is_recv
-			     * [18]has_grh（UD 收到的报文是否已合成 GRH，provider 据此置 IBV_WC_GRH）
-			     * [19..30]保留（写 0）[31]owner */
+			     * [18]废弃（旧契约的 has_grh「硬件已把 GRH 写进缓冲」，从没有镜像置过，RTL 写 0、provider 不读）
+			     * [19]ipv4_valid（UD 接收：dw5..dw7 带收到的 IPv4 源/目的/TTL/TOS，见 YNRDMA_CQE_F_IPV4）
+			     * [20..30]保留（写 0）[31]owner */
 	__u32 dw1;          /* [15:0]wqe_idx [23:16]qp_idx（8 bit，128 个 QP 够用；255 才溢出） */
-	__u32 byte_len;
+	__u32 byte_len;     /* 载荷字节数（不含 GRH 区；UD 的 wc.byte_len = 它 + 40 由 provider 加） */
 	__u32 imm;          /* 网络序原样 */
 	__u32 dw4;          /* UD：DETH 的源 QPN
 			     * [23:0]src_qp（IB 语义下 UD 的 wc.src_qp 是 24 bit，全 1 = 未定义/组播）
 			     * [24]src_qp_valid（0 = 该 CQE 的 src_qp 无意义，例如 RC 完成）
 			     * [31:25]保留（写 0） */
-	__u32 rsvd[3];      /* dw5..dw7 */
+	__u32 src_ip;       /* dw5 UD 接收：IPv4 源地址，**网络序字节 0..3 放在 [7:0]..[31:24]**
+			     * （与 YNRDMA_REG_IPV4 同口径，内存里的 4 字节就是网络序）。dw0[19]=0 时为 0 */
+	__u32 dst_ip;       /* dw6 UD 接收：IPv4 目的地址（= 本端 YNRDMA_REG_IPV4，rx_front 只收发给本端 IP 的帧），口径同上 */
+	__u32 dw7;          /* UD 接收：[7:0]IPv4 TTL [15:8]IPv4 TOS（DSCP|ECN 原样）[31:16]保留（写 0） */
 };
+#define YNRDMA_CQE_F_IPV4        (1u << 19)
 
 /* ---- UD 在 CQE 里的落位（放原 rsvd[4] 区，结构体仍是 32 B） ----
  *
@@ -274,9 +279,10 @@ struct ynrdma_cqe {
  *        wc.src_qp = le32toh(cqe->dw4) & 0xffffff;
  *      为 0 时保持 0。**不要无条件读 dw4[23:0]**——S6 之前 dw4 一直是 rsvd，
  *      老环里的残留数据会让 RC 完成报出随机 src_qp。
- *   3) `wc.wc_flags |= IBV_WC_GRH`：判 dw0[18]（has_grh）为 1 时置位。
- *      置位时接收缓冲**前 40 B 是 GRH**，byte_len 不含这 40 B（IB 语义，见 roce_pkg.rx_hdr_t
- *      的 src_ip 注释）。只有 UD + has_grh 的组合会置这一位，RC 恒 0。
+ *   3) UD 接收缓冲：provider 下发 RQ WQE 时把地址后移 40 B（IB 语义：UD 缓冲前 40 B 是 GRH 区），
+ *      RTL 只管从 RQ WQE 的 addr 起写载荷；wc.byte_len = CQE byte_len + 40。
+ *      dw0[19]（ipv4_valid）为 1 时 provider 用 dw5..dw7 在 GRH 区合成 GRH（前 20 B 为 0、后 20 B 是
+ *      IPv4 头，与 ConnectX 一致），并置 IBV_WC_GRH；为 0（老镜像）时不置。RC 恒 0。
  *   4) has_imm（dw0[16]）/ is_recv（dw0[17]）的现有判读顺序不要动。
  *
  * RTL 侧写入点：roce_resp.sv 的 `cqe_data <= {...}` 那一条拼接（约 :835-837）。

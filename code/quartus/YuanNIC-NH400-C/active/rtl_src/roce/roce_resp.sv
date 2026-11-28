@@ -84,10 +84,9 @@ module roce_resp
     output reg                     cqe_valid,
     input  wire                    cqe_ready,
     output reg   [CQ_W-1:0]        cqe_cq_index,
-    // S（UD）：cqe_data 从 128 → 160 bit，新增 dw4[24:0] = {src_qp_valid[24], src_qp[23:0]}。
-    // dw0[18] = has_grh：**恒 0**（GRH 尚未实现，见 MAIN_CQE 处的说明）。provider 目前据此
-    // 决定是否置 IBV_WC_GRH —— 置 1 会让 ULP 从 buf[40] 起读载荷，而接收缓冲里没有那 40 B。
-    output reg   [159:0]           cqe_data,
+    // CQE 32 B 全宽（dw0..dw7）。dw4[24:0] = {src_qp_valid, src_qp}；UD 接收时 dw0[19] = ipv4_valid，
+    // dw5 = IPv4 源、dw6 = IPv4 目的（本端）、dw7 = {TOS, TTL}，provider 据此合成 GRH（见 MAIN_CQE）。
+    output reg   [255:0]           cqe_data,
     // TX 任务
     output reg                     tx_job_valid,
     input  wire                    tx_job_ready,
@@ -1157,17 +1156,23 @@ module roce_resp
                 cqe_valid <= 1'b1;
                 cqe_cq_index    <= qpc_rcq(qp_context);
                 // dw4[24:0] = {src_qp_valid, src_qp[23:0]}：UD recv 时填 DETH 源 QPN；RC 时全 0。
-                // dw0[18] = has_grh：**恒 0**。GRH 目前没有实现——接收缓冲里只有 payload，
-                // 没有那 40 B（RoCEv2 线上本来就没有 GRH，要由接收侧从 IPv4/UDP 头合成）。
-                // 声明 has_grh=1 会让 ULP 按 IB 语义从 buf[40] 起读载荷（标准 ud_pingpong 就是
-                // 这么写的），读到的是错位数据。dw4 的 src_qp 仍然有效（DETH 里有），
-                // 只是不带 IBV_WC_GRH 标志。实现 GRH 写入后再把这一位改回 header.has_deth，
-                // 并同步 yuanrdma_hw.h 的 dw0[18] 与 provider 的注释。
+                // UD 接收（2026-11-27）：dw0[19] = ipv4_valid，dw5..dw7 带收到的 IPv4 头信息——
+                //   dw5 = 源 IP、dw6 = 目的 IP（rx_front 只收目的 IP == local_ip 的帧，直接用 local_ip），
+                //   两者都是「网络序字节 0..3 放 [7:0]..[31:24]」（与 CSR IPV4 同口径，主机内存里就是网络序）；
+                //   dw7 = {16'd0, TOS, TTL}。
+                // 为什么要：RoCEv2 线上没有 GRH，IB 语义下带 IBV_WC_GRH 的 UD 完成要在接收缓冲前 40 B
+                // 放 GRH，ibv_create_ah_from_wc 从那里取对端地址造回包 AH（udaddy 的 create_reply_ah）。
+                // GRH 由 provider 按这三个 dw 合成（载荷落点由 provider 把 RQ 地址后移 40 B 让出），
+                // RTL 不写 GRH，接收写通路不变。dw0[18]（旧契约的 has_grh）恒 0、已废弃。
                 // dw0[17] = is_recv（recv CQE 恒 1，不能丢）。
-                cqe_data   <= {7'd0, header.has_deth, header.deth_src_qp,     // dw4[31:0]
+                cqe_data   <= {16'd0, header.ip_tos, header.ip_ttl,               // dw7
+                               (header.has_deth ? local_ip : 32'd0),               // dw6
+                               {header.src_ip[7:0], header.src_ip[15:8],           // dw5（src_ip 是主机序，
+                                header.src_ip[23:16], header.src_ip[31:24]},       //  字节倒成网络序）
+                               7'd0, header.has_deth, header.deth_src_qp,          // dw4[31:0]
                                (header.has_immediate ? header.immediate : 32'd0), cqe_length,
                                8'd0, 8'(qp_index), cursor_wqe_index,          // dw1[23:16] qp_idx（ABI 8 位）
-                               1'b0, 12'd0, 1'b0, 1'b1, header.has_immediate, cqe_status, cqe_opcode};
+                               1'b0, 11'd0, header.has_deth, 1'b0, 1'b1, header.has_immediate, cqe_status, cqe_opcode};
                 if (cqe_valid && cqe_ready) begin
                     cqe_valid <= 1'b0;
                     main_state      <= MAIN_ACK;

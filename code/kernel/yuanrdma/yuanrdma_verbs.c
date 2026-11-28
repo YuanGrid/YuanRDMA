@@ -720,7 +720,7 @@ static int yuanrdma_create_qp(struct ib_qp *ibqp, struct ib_qp_init_attr *init, 
 	}
 	/* G2.1／UD：RC 与 UD 都支持，没有开关（2026-11-21 起）。
 	 *   UD —— 契约见 §76：WQE opcode 5/6、dw9=remote_qpn、dw10=remote_qkey、
-	 *         CQE dw4=src_qp / dw0[18]=has_grh。B6458/B6459 比特流已实测可用；
+	 *         CQE dw4=src_qp、dw0[19]+dw5..dw7=IPv4 信息（provider 合成 GRH）。B6458/B6459 比特流已实测可用；
 	 *         更老的比特流里 WQE 5/6 没有 case，会静默组出 RC 形态的包，
 	 *         那种镜像上不要建 UD QP（见 yuanrdma_driver.h 顶部说明）。
 	 *   两者都不支持 SRQ / create_flags。
@@ -732,8 +732,8 @@ static int yuanrdma_create_qp(struct ib_qp *ibqp, struct ib_qp_init_attr *init, 
 	/*
 	 * max_recv_sge：UD 与 RC 都只给 1。
 	 * 任务书提到「UD 的 max_recv_sge 需要 2（payload + SGID）」，但 IB 语义里 UD 收到的
-	 * GRH 是**拼在第一个 SGE 缓冲区的最前面**（RQ WQE 只有一片缓冲，硬件按
-	 * ynrdma_rq_wqe.addr/length 写 GRH+payload，CQE 的 has_grh 告诉用户态前 40 B 是 GRH），
+	 * GRH 是**拼在第一个 SGE 缓冲区的最前面**（RQ WQE 只有一片缓冲：provider 把 addr 后移 40 B
+	 * 交给硬件写 payload，前 40 B 由 provider 按 CQE 的 IPv4 信息合成 GRH），
 	 * 不是写进第二个 SGE。本卡 RQ WQE（yuanrdma_hw.h:238-243）也只有 addr/length/lkey 一组，
 	 * 报 2 会让 provider 收 WR 时放行第二个 SGE，而硬件根本没地方写——静默丢数据。
 	 * 所以这里对 UD 仍要求 <= 1，环大小检查不变。
@@ -814,6 +814,55 @@ static u32 yuanrdma_state_code(enum ib_qp_state state)
 	}
 }
 
+/*
+ * UD 的目的 MAC 解析（阻塞，最长等 1 s 的 ARP）。
+ *
+ * RC 的 modify_qp(IB_QP_AV) 由 ib_core 在调驱动之前解析好 ah_attr.roce.dmac
+ * （_ib_modify_qp → ib_resolve_eth_dmac），但那一步只对 connected QP 做
+ * （is_qp_type_connected 不含 UD），uverbs 传下来的 UD AV 里 dmac 恒为 0。
+ * 本卡 RTL 按 QPC 的 dst_mac 组以太网头，dmac 只能由驱动自己解析。
+ * rdma_addr_find_l2_eth_by_grh 在 5.15 不导出，这里照它的写法直接用导出的 rdma_resolve_ip。
+ */
+struct yuanrdma_resolve_ctx {
+	struct completion done;
+	int status;
+};
+
+static void yuanrdma_resolve_done(int status, struct sockaddr *src_addr, struct rdma_dev_addr *addr,
+				  void *context)
+{
+	struct yuanrdma_resolve_ctx *ctx = context;
+
+	ctx->status = status;
+	complete(&ctx->done);
+}
+
+static int yuanrdma_resolve_dmac(const struct ib_global_route *route, u8 *dmac)
+{
+	union {
+		struct sockaddr_in v4;
+		struct sockaddr_in6 v6;
+	} src, dst;
+	struct yuanrdma_resolve_ctx ctx;
+	struct rdma_dev_addr dev_addr = {};
+	int ret;
+
+	rdma_gid2ip((struct sockaddr *)&src, &route->sgid_attr->gid);
+	rdma_gid2ip((struct sockaddr *)&dst, &route->dgid);
+	dev_addr.net = &init_net;
+	dev_addr.sgid_attr = route->sgid_attr;
+	init_completion(&ctx.done);
+	ret = rdma_resolve_ip((struct sockaddr *)&src, (struct sockaddr *)&dst, &dev_addr, 1000,
+			      yuanrdma_resolve_done, true, &ctx);
+	if (ret)
+		return ret;
+	wait_for_completion(&ctx.done);
+	if (ctx.status)
+		return ctx.status;
+	ether_addr_copy(dmac, dev_addr.dst_dev_addr);
+	return 0;
+}
+
 static int yuanrdma_modify_qp(struct ib_qp *ibqp, struct ib_qp_attr *attr, int mask, struct ib_udata *udata)
 {
 	struct yuanrdma_dev *dev = to_yuanrdma_dev(ibqp->device);
@@ -827,30 +876,40 @@ static int yuanrdma_modify_qp(struct ib_qp *ibqp, struct ib_qp_attr *attr, int m
 		return -EOPNOTSUPP;
 	if (qp->gsi)
 		return yuanrdma_gsi_modify_qp(qp, attr, mask);
-	if (!ib_modify_qp_is_ok(current_state, new_state, ibqp->qp_type, mask))
-		return -EINVAL;
 	/*
-	 * UD 到 RTR/RTS 却没写过 AV：**只告警，不拒绝**。
+	 * UD 的 IB_QP_AV：驱动私有扩展，任何状态都接受（ib_core 的 qp_state_table 里 UD 没有 AV
+	 * 这一项，所以这一位不交给 ib_modify_qp_is_ok 判）。
 	 *
-	 * 内核的 qp_state_table（verbs.c:1441-1470）把 UD 的 IB_QP_AV 列为可选，
-	 * 而 rdma_cm 的 UD 建链路径（cma_ib_init_qp_attr，cma.c:1231-1263）确实**从不**带
-	 * IB_QP_AV——它把 AH 通过 event->param.ud.ah_attr 交给应用，由应用在每条 WR 上带。
-	 * 所以在这里硬拒会把 ucmatose / rping -U 这类标准用法整个挡死。
-	 *
-	 * 但本卡的 RTL 是从 QPC 组 Eth/IP/UDP 头的（dst_mac_lo / dw4 / dst_ip，见 roce_tx 的
-	 * header_computed），WQE 里只有 remote_qpn 与 qkey（§76 契约）。也就是说：
-	 * rdma_cm 这种用法在本卡上会把帧发往 00:00:00:00:00:00 / 0.0.0.0。
-	 * 这是一个「协议合法、实现不支持」的组合，正确做法是把它变成**响声**而不是静默：
-	 * 建链照常成功（不改行为），dmesg 明确说明后续 SEND 会发到零地址，
-	 * 提示改用带 AV 的 modify_qp（perftest -R 之外的自建路径）或等 QPC 支持 per-WR AH。
+	 * 为什么需要：RTL 组 UD 帧的 Eth/IP 头取自 QPC（dst_mac_lo / dw4 / dst_ip / dw7 的 tos、ttl，
+	 * roce_req 的 tx_job.dmac/dip），SQ WQE 里只有 remote_qpn 与 qkey。标准 UD 用法
+	 * （rdma_cm 的 cma_ib_init_qp_attr、ud_pingpong、perftest）都不在 modify_qp 里带 AV，
+	 * 目的地址只在每条 WR 的 AH 里——QPC 不写时帧发往 0.0.0.0 / 00:00:00:00:00:00、TTL 0。
+	 * 直连 ConnectX 时对端照收（不按目的 IP/MAC 过滤），但它用接收到的目的 IP 0.0.0.0
+	 * 查不到本端 GID，ibv_create_ah_from_wc 失败（udaddy 的 failed to create reply AH）。
+	 * provider 在 post_send 发现 AH 与 QPC 当前目的地址不同、且 SQ 已排空时，用这条命令把 AH
+	 * 写进 QPC（provider 的 ud_set_destination）。dmac 由下面的 yuanrdma_resolve_dmac 解析。
+	 * IB_QP_PORT 一并放过：uverbs 的 modify_qp 在「带 AV、不是进 RTR」时会自动补上
+	 * IB_QP_PORT（= AV 里的端口），而 UD 的 RTS→RTS 不允许 PORT，不放过就是 -EINVAL。
 	 */
-	if (ibqp->qp_type == IB_QPT_UD &&
-	    (new_state == IB_QPS_RTR || new_state == IB_QPS_RTS) &&
-	    !(mask & IB_QP_AV) && !qp->attributes.ah_attr.type)
-		dev_warn_ratelimited(&dev->pdev->dev,
-				     "UD QP %u 进 RTR/RTS 但从未设置 AV：本卡从 QPC 组 Eth/IP 头，"
-				     "此 QP 上发出的 UD SEND 会落到 0.0.0.0/00:00:00:00:00:00（rdma_cm 的 UD 用法）\n",
-				     ibqp->qp_num);
+	if (!ib_modify_qp_is_ok(current_state, new_state, ibqp->qp_type,
+				(ibqp->qp_type == IB_QPT_UD && (mask & IB_QP_AV)) ?
+				(mask & ~(IB_QP_AV | IB_QP_PORT)) : mask))
+		return -EINVAL;
+	if (ibqp->qp_type == IB_QPT_UD && (mask & IB_QP_AV)) {
+		const struct ib_global_route *route = rdma_ah_read_grh(&attr->ah_attr);
+		int ret;
+
+		if (!(rdma_ah_get_ah_flags(&attr->ah_attr) & IB_AH_GRH) || !route->sgid_attr)
+			return -EINVAL;
+		if (is_zero_ether_addr(attr->ah_attr.roce.dmac)) {
+			ret = yuanrdma_resolve_dmac(route, attr->ah_attr.roce.dmac);
+			if (ret) {
+				dev_warn_ratelimited(&dev->pdev->dev, "UD QP %u：目的 %pI6 的 MAC 解析失败（%d）\n",
+						     ibqp->qp_num, route->dgid.raw, ret);
+				return ret;
+			}
+		}
+	}
 
 	/* QPC 的 pmtu 是 3 bit 的 IB 枚举，RTL 按 128 << code 换成 13 bit 字节数
 	 * （roce_pkg.sv qpc_pmtu/pmtu_bytes）：code 6/7 会得到 0 字节、0 只有 128 字节，
@@ -905,9 +964,13 @@ static int yuanrdma_modify_qp(struct ib_qp *ibqp, struct ib_qp_attr *attr, int m
 	/*
 	 * UD 的 Q_Key 不落 QPC：契约规定它随每个 WQE 走（dw10），因为同一个 UD QP 允许
 	 * 发往不同 Q_Key（AH 是 per-WR 的），写进 QPC 就把 per-WR 语义抹成 per-QP 了。
-	 * 这里只接受并忽略 IB_QP_QKEY，不报错：ib_modify_qp 到 UD 的 RTS 会带这个 mask，
-	 * 拒绝它等于让 UD QP 永远起不来。值本身由 provider 在 post_send 里从 AH 取。
+	 * 这里只接受 IB_QP_QKEY、不写 QPC：ib_modify_qp 到 UD 的 RTS 会带这个 mask，
+	 * 拒绝它等于让 UD QP 永远起不来。发送用的值由 provider 在 post_send 里从 WR 取。
+	 * 但值本身要留给 query_qp：udaddy 这类应用回包时用 ibv_query_qp(IBV_QP_QKEY) 取本端
+	 * Q_Key 当作对端的 remote_qkey（create_reply_ah），不留就回 0，对端按 Q_Key 不符丢包。
 	 */
+	if (mask & IB_QP_QKEY)
+		qp->attributes.qkey = attr->qkey;
 	if (mask & IB_QP_RQ_PSN)
 		context->rq_psn = attr->rq_psn & 0xffffff;
 	if (mask & IB_QP_SQ_PSN)

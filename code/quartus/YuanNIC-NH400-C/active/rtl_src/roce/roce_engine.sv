@@ -126,11 +126,11 @@ module roce_engine
     // S（UD）：CQE 160 bit —— dw0..dw3 是原来的 128 bit，dw4 = {7'd0, src_qp_valid, src_qp[23:0]}
     // （UD recv 时填 DETH 源 QPN；RC 恒 0）。roce_resp/roce_req 输出 160 bit，
     // roce_cq 也按 160 bit/client 收；这里若写回 128 会**静默丢掉 dw4**（-Wno-WIDTH 掩盖）。
-    output wire [159:0]           resp_cqe_data,
+    output wire [255:0]           resp_cqe_data,
     output wire                   req_cqe_valid,
     input  wire                   req_cqe_ready,
     output wire [CQ_W-1:0]        req_cqe_cq,
-    output wire [159:0]           req_cqe_data,
+    output wire [255:0]           req_cqe_data,
     // 共享 roce_cq 的写回经本 lane DMA 写客户端 2
     input  wire                   cq_dma_write_request_valid,
     output wire                   cq_dma_write_request_ready,

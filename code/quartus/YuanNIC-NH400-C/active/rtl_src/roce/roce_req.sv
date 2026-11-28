@@ -104,8 +104,8 @@ module roce_req
     output reg                     cqe_valid,
     input  wire                    cqe_ready,
     output reg   [CQ_W-1:0]        cqe_cq_index,
-    // S（UD）：与 roce_resp 对齐，cqe_data 加宽到 160 bit（dw4 = src_qp/has_grh，全 0 for RC）。
-    output reg   [159:0]           cqe_data,
+    // 与 roce_resp 对齐：cqe_data 是整个 32 B CQE（dw0..dw7），发送完成的 dw4..dw7 恒 0。
+    output reg   [255:0]           cqe_data,
     // TX 任务
     output reg                     tx_job_valid,
     input  wire                    tx_job_ready,
@@ -1423,7 +1423,8 @@ module roce_req
             REQ_CQE: begin
                 cqe_valid <= 1'b1;
                 cqe_cq_index    <= qpc_scq(qp_context);
-                cqe_data   <= {32'd0,                              // dw4 = 0（RC 无 src_qp）
+                cqe_data   <= {96'd0,                              // dw5..dw7 = 0（只有 UD 接收带 IPv4 信息）
+                               32'd0,                              // dw4 = 0（RC 无 src_qp）
                                32'd0, cqe_length, 8'd0, 8'(qp_index),     // dw1[23:16] qp_idx（ABI 8 位）
                             16'(cqe_wqe_index & ((16'd1 << qpc_sq_lg(qp_context)) - 16'd1)),
                             1'b0, 13'd0, 1'b0, 1'b0, cqe_status, cqe_opcode};

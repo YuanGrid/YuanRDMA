@@ -207,7 +207,7 @@ module roce_tx
     wire       header_has_reth = op_has_reth(build_job.opcode);
     wire       header_has_aeth = op_has_aeth(build_job.opcode);
     wire       header_has_immediate  = op_has_imm(build_job.opcode);
-    // UD（0x64/0x65）：BTH 后跟 DETH 8 B（Q_Key 4 B + 源 QPN 3 B + 1 B 保留），而不是 RETH。
+    // UD（0x64/0x65）：BTH 后跟 DETH 8 B（Q_Key 4 B + 1 B 保留 + 源 QPN 3 B），而不是 RETH。
     // 目的 QPN 不另带——BTH 的 Dest QP 本身就是 UD 的目的 QPN（复用 build_job.dqpn）。
     wire       header_has_deth = op_has_deth(build_job.opcode);
     // CNP：BTH 后跟 16 B 保留（不是 RETH），所以头长与 READ RESP 一样是 70 B，但内容全 0。
@@ -264,12 +264,15 @@ module roce_tx
         if (header_has_aeth) header_computed[432 +: 32] = {swap24(build_job.aeth_msn), build_job.aeth_syndrome};
         // UD 的 DETH（IBTA §9.8.5）：BTH 起于字节 42、12 B → DETH 起于字节 54。
         //   [432 +: 32] = 字节 54..57 = Q_Key（网络序，任务里是主机序，swap32）
-        //   [464 +: 24] = 字节 58..60 = 源 QPN（24 bit，网络序，swap24）
-        //   字节 61（[488 +: 8]）= 保留，header_computed 复位即 0，这里不写。
+        //   字节 58（[464 +: 8]）= 保留，header_computed 复位即 0，这里不写。
+        //   [472 +: 24] = 字节 59..61 = 源 QPN（24 bit，网络序，swap24）
+        // 2026-11-27 修：原来把源 QPN 写在 58..60、保留字节放在 61，与 IBTA 的
+        // 「Q_Key 4 B + 保留 1 B + SrcQP 3 B」差一个字节——ConnectX 收到后 wc.src_qp = QPN << 8
+        // （QP 0x80 报成 0x8000，对端 gdb 实取）。台子的参考模型当时按同样的错位写，所以没抓到。
         // 目的 QPN 在 BTH（[376 +: 24]，上面已按 build_job.dqpn 写过），DETH 里没有。
         if (header_has_deth) begin
             header_computed[432 +: 32] = swap32(build_job.deth_qkey);
-            header_computed[464 +: 24] = swap24(build_job.deth_src_qp);
+            header_computed[472 +: 24] = swap24(build_job.deth_src_qp);
         end
         if (header_has_immediate)  begin
             // ImmDt 的位置随前一种扩展头走：RETH 之后 = 字节 70；DETH 之后 = 字节 62；

@@ -39,20 +39,14 @@ struct yuanrdma_cq {
 };
 
 /*
- * provider 侧的 AH（UD 用）。ibv_ah_attr 里没有 dmac 字段——RoCEv2 的 dmac 由
- * libibverbs 的 addr 解析（ibv_query_gid/邻居）在 modify_qp 时经 uverbs 送进 QPC，
- * 而这一点必须与「post_send 用的是哪个 AH」对上：AH 对不上时 RTL 仍会用 QPC 里的
- * 目的地址把包发出去，静默把数据发到错的地方。所以这里存 dgid 与 sgid_index，
- * post_send 与 QP 在 modify_qp 里记下的 AV 比对（见 yuanrdma_post_send 的 ud_av_matches）。
+ * provider 侧的 AH（UD 用）。RTL 组 UD 帧的 Eth/IP 头取自 QPC，SQ WQE 里只有 remote_qpn 与
+ * qkey，所以 AH 本身到不了硬件：post_send 发现 wr->wr.ud.ah 与 QP 当前写进 QPC 的目的地址
+ * 不同时，用 attr 发一次 modify_qp(IBV_QP_AV)（内核解析 dmac 并写 QPC），见 ud_set_destination。
  */
 struct yuanrdma_ah {
 	struct ibv_ah ibv_ah;
-	union ibv_gid dgid;
+	struct ibv_ah_attr attr;		/* create_ah 时的原样拷贝（已校验 RoCEv2 + v4-mapped dgid） */
 	union ibv_gid sgid;
-	uint8_t sgid_index;
-	uint8_t port_num;
-	uint8_t traffic_class;
-	uint8_t hop_limit;
 };
 
 struct yuanrdma_qp {
@@ -74,11 +68,13 @@ struct yuanrdma_qp {
 	/* modify_qp(IBV_QP_PATH_MTU) 记下的路径 MTU。0 = 用户没设：此时不做
 	 * SEND_ONLY_UD 的长度检查（perftest 一定会设，但别让没设的人全被 EINVAL 挡掉）。 */
 	enum ibv_mtu path_mtu;
-	/* modify_qp(IBV_QP_AV) 记下的目的 AV，仅 UD 用：post_send 拿它和 wr->wr.ud.ah
-	 * 比对，防止「改了 QPC 的目的地址却发的另一个 AH」这种静默错发。 */
-	union ibv_gid av_dgid;
-	uint8_t av_sgid_index;
+	/* UD：QPC 里当前的目的地址（最近一次成功的 modify_qp(IBV_QP_AV)，用户显式下发或
+	 * post_send 按 AH 自动下发）。post_send 拿 wr->wr.ud.ah 和它比，不同就要改写 QPC。 */
+	struct ibv_global_route av;
 	bool av_valid;
+	/* UD 接收：每个 RQ 槽的用户缓冲起址。RQ WQE 下发的是「起址 + 40」（IB 语义：UD 接收缓冲
+	 * 前 40 B 留给 GRH），poll_cq 在 CQE 带了 IPv4 信息时把合成的 GRH 写回这里。RC 不分配。 */
+	uint64_t *rq_addr;
 	/* IBV_SEND_INLINE 的软件实现：WQE 里没有 inline 载荷区，所以每个 SQ 槽配一格跳板缓冲
 	 * （整块注册成一个 MR），post_send 把载荷拷进对应槽、按普通单 SGE 下发。
 	 * 只在 create_qp 要了 max_inline_data 时才分配（占 1 个 MR），不要 inline 的 QP 零开销。 */

@@ -129,15 +129,18 @@ module roce_rx_parse
         next_header.aeth_msn  = read_be24(55);
         next_header.has_immediate   = opcode_has_immediate;
         next_header.immediate       = header_bytes[immediate_offset*8 +: 32];
-        // DETH（UD）：Q_Key 4 B（字节 54..57）+ 源 QPN 3 B（58..60）+ 1 B 保留（61）。
+        // DETH（UD，IBTA §9.8.5）：Q_Key 4 B（字节 54..57）+ 1 B 保留（58）+ 源 QPN 3 B（59..61）。
         // RC 包恒为 0——58..61 在 WRITE 里是 RETH 的 rkey 尾部、在 SEND 里是 payload 开头，
         // 所以必须用 opcode_is_ud 门控，不能无条件取。
+        // 2026-11-27 修：原来读 58..60，ConnectX 的 QP 0x0011df 报成 0x000011（eth0 抓包 + gdb 实取）。
         next_header.has_deth        = opcode_is_ud;
         next_header.deth_qkey       = opcode_is_ud ? read_be32(54) : 32'd0;
-        next_header.deth_src_qp     = opcode_is_ud ? read_be24(58) : 24'd0;
+        next_header.deth_src_qp     = opcode_is_ud ? read_be24(59) : 24'd0;
         // GRH 合成需要源 IPv4（IBTA §9.8.5：Source GID = ::ffff:<src_ip>）。
         // RoCEv2 线上没有 40 B GRH，这里只取 IPv4 头里的源 IP（字节 26..29，主机序）。
         next_header.src_ip          = opcode_is_ud ? read_be32(26) : 32'd0;
+        next_header.ip_ttl          = opcode_is_ud ? header_byte(22) : 8'd0;
+        next_header.ip_tos          = opcode_is_ud ? byte_tos : 8'd0;
         // 头部报出去的 payload_length 必须与实际送出的拍数一致：bad 帧（opcode 不支持 /
         // 长度不自洽）的 payload 全部丢弃（has_payload=0），所以这里必须报 0。
         // 2026-11-12 修：原来只按 length_invalid 清零，opcode 不支持时仍报真实长度，
