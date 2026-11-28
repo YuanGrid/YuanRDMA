@@ -149,8 +149,8 @@ package roce_pkg;
     // B6390：24 号从 CNT_DISP_BUSY_CYCLES 换成 CNT_PAGE_HIT。原 DISP_BUSY 已被 B6389 实测证否
     // （roce-log §25.3）：纯 WRITE 流量下它与 RESP_CYCLES 逐拍相等，因为 disp busy 窗口正好等于
     // resp 非 IDLE 窗口，差值恒 0，测不到任何东西。换成命中计数后可直接验收"首包也走页缓存"。
-    localparam int CNT_PAGE_HIT         = 24; // roce_resp 页缓存命中次数（WRITE 路径）
-    localparam int CNT_PAGE_MISS        = 25; // roce_resp 页缓存未命中（走真翻译）次数，只计 WRITE
+    localparam int CNT_PAGE_HIT         = 24; // roce_resp 页缓存命中次数（WRITE 包；B0125 起含 RC SEND 续包）
+    localparam int CNT_PAGE_MISS        = 25; // roce_resp 页缓存未命中（走真翻译）次数，计 WRITE 与 RC SEND 续包
     localparam int CNT_NUM              = 26;
 
     // QP 状态

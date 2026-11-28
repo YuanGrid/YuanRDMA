@@ -208,6 +208,23 @@ module roce_resp
     // 这一项覆盖了全部线性写流；2 KB MTU 从偏移 3072 起的包才回落到慢路径。
     reg          page_next_valid;
     reg  [51:0]  page_next_pa0_base; // page_va_base + 1 这一页的物理基址
+    // ------------------------------------------------------------ SEND 续包的页缓存项（B0125）
+    // RC SEND 的续包（SEND_MIDDLE / SEND_LAST）原来每包都走 TRANSLATE + TRANSLATE_WAIT：板上 B0122 server send
+    // 每包 RESP 非 IDLE 约 12 拍，server write（续包命中页缓存）约 6.75 拍。SEND 的目的地址也是线性推进
+    // （cursor_address 按包长前进），同一条 RQ WQE 的 lkey 不变，与 WRITE 的续包同构。
+    // **单独一组缓存项，不与 WRITE 共用**：两类翻译的访问类型不同（SEND 是 ACC_LOCAL_WRITE + 本端 lkey，
+    // WRITE 是 ACC_REMOTE_WRITE + 远端 rkey），共用一项要么让 WRITE 命中 SEND 填的项、绕过远端写权限检查，
+    // 要么在同一 lane 上 SEND / WRITE 混跑时互相驱逐，让原本命中的 WRITE 退回慢路径。
+    // 作废时机、PD 校验、跨页判据与 WRITE 项完全相同；下一页的虚拟页号在填充时寄存，命中比较不做加法。
+    reg          spage_valid;
+    reg          spage_next_valid;
+    reg  [31:0]  spage_key;
+    reg  [15:0]  spage_pd;
+    reg  [51:0]  spage_va_base;
+    reg  [51:0]  spage_va_next;      // spage_va_base + 1（填充时算好）
+    reg  [51:0]  spage_pa0_base;
+    reg  [51:0]  spage_pa1_base;
+    reg  [51:0]  spage_next_pa0_base;
 
     // 命中条件：key 相同（同一 MR）、虚拟页号相同、PD 相同、且本包是 WRITE 包。
     //
@@ -258,6 +275,23 @@ module roce_resp
     // 命中第 1 页时 pa1 未知：本包已保证不跨页，dma_write_request_page1 不会被用到，
     // 但仍必须给一个确定值（MAIN_WRITE_REQUEST 会重新驱动它），填成本页基址 + 1 页。
     wire [51:0] page_hit_pa1_base = page_hit0 ? page_pa1_base : (page_next_pa0_base + 52'd1);
+    // SEND 续包（B0125）：比较源与 WRITE 续包相同（cursor_key / cursor_address），只在 RC 的
+    // SEND_MIDDLE / SEND_LAST 上命中；SEND 首包要先取 RQ WQE，UD 每包一条新 WQE，都不走这里。
+    wire        spage_hit0 = spage_valid &&
+                             (cursor_key == spage_key) &&
+                             (cursor_address[63:12] == spage_va_base) &&
+                             (qpc_pd(qp_context) == spage_pd) &&
+                             is_send_continue && !is_ud_send &&
+                             (header.payload_length != 13'd0);
+    wire        spage_hit1 = spage_next_valid &&
+                             (cursor_key == spage_key) &&
+                             (cursor_address[63:12] == spage_va_next) &&
+                             (qpc_pd(qp_context) == spage_pd) &&
+                             is_send_continue && !is_ud_send &&
+                             (header.payload_length != 13'd0) && !page_crosses;
+    wire        spage_hit  = spage_hit0 || spage_hit1;
+    wire [51:0] spage_hit_pa0_base = spage_hit0 ? spage_pa0_base : spage_next_pa0_base;
+    wire [51:0] spage_hit_pa1_base = spage_hit0 ? spage_pa1_base : (spage_next_pa0_base + 52'd1);
 
     // ------------------------------------------------------------ RQ WQE 预取环（B6460 / S2）
     // 为什么加：UD 一个包就是一条消息，每包都要取一条 RQ WQE。原来 MAIN_RQ_FETCH/MAIN_RQ_WAIT
@@ -742,6 +776,8 @@ module roce_resp
         if (table_request && table_write_enable && table_select == TBL_MPT) begin
             page_valid      <= 1'b0;
             page_next_valid <= 1'b0;
+            spage_valid      <= 1'b0;
+            spage_next_valid <= 1'b0;
         end
         if (doorbell_rq_valid) qp_rq_producer[doorbell_data[QP_W-1:LANE_BITS]] <= doorbell_data[31:16];   // 门铃 [QP_W-1:0] = qp_idx
         // qp_state_change 是全局 QP_NUM 位的 one-hot 脉冲（roce_tbl 按全局索引打），
@@ -767,6 +803,8 @@ module roce_resp
                 // 两个缓存项（第 0 页 / 下一页）共用 key 与 PD，必须一起作废。
                 page_valid      <= 1'b0;
                 page_next_valid <= 1'b0;
+                spage_valid      <= 1'b0;
+                spage_next_valid <= 1'b0;
             end
         if (rst) begin
             main_state        <= MAIN_IDLE;
@@ -778,6 +816,9 @@ module roce_resp
             response_in_valid <= 1'b0;
             resp_pending      <= 1'b0;
             page_valid  <= 1'b0;      // 页缓存随复位清空
+            page_next_valid  <= 1'b0;
+            spage_valid      <= 1'b0;
+            spage_next_valid <= 1'b0;
             acc_err_cnt <= 32'd0;     // access error 快照计数（B6433；快照本体 sticky，复位不动也行，但一并清掉更直观）
             dbg_access_shot <= '0;
             // 同 roce_req：逐 QP 状态必须在硬/软复位时全部清空。
@@ -911,9 +952,22 @@ module roce_resp
                         end else if (is_send_first || {19'd0, header.payload_length} > cursor_remaining) begin
                             need_error <= 1'b1; need_ack <= 1'b1; syndrome <= AETH_NAK_INV;
                             main_state <= MAIN_ACK;
+                        end else if (spage_hit) begin
+                            // B0125：SEND 续包命中页缓存，动作与下面 WRITE 的 page_hit 分支逐项相同
+                            // （请求 valid / 地址当拍置起，physical_address0 / page1 一起写，偏移取 cursor_address[11:0]）。
+                            // PAGE_HIT / PAGE_MISS 从 B0125 起也统计 SEND 续包。
+                            event_page_hit            <= 1'b1;
+                            physical_address0         <= {spage_hit_pa0_base, cursor_address[11:0]};
+                            physical_page1            <= {spage_hit_pa1_base, 12'd0};
+                            dma_write_request_valid   <= 1'b1;
+                            dma_write_request_address <= {spage_hit_pa0_base, cursor_address[11:0]};
+                            dma_write_request_page1   <= {spage_hit_pa1_base, 12'd0};
+                            dma_write_request_length  <= header.payload_length;
+                            main_state <= MAIN_WRITE_REQUEST;
                         end else begin
                             translate_key_main <= cursor_key; translate_address_main <= cursor_address; translate_length_main <= header.payload_length;
                             translate_access_main <= ACC_LOCAL_WRITE;
+                            event_page_miss <= (header.payload_length != 13'd0);
                             main_state <= MAIN_TRANSLATE;
                         end
                     end else if (is_write_first || is_write_continue) begin
@@ -1078,6 +1132,17 @@ module roce_resp
                                // 表里已经把 next page 算好了，这里直接捡现成的，不需要额外翻译。
                                page_next_valid    <= 1'b1;
                                page_next_pa0_base <= translate_physical_page1[63:12];
+                           end else if (!is_ud_send) begin
+                               // B0125：RC SEND 填 SEND 项（首包取 RQ WQE 后的翻译也填，第二包起就能命中）。
+                               spage_valid         <= 1'b1;
+                               spage_key           <= translate_key_main;
+                               spage_pd            <= qpc_pd(qp_context);
+                               spage_va_base       <= translate_address_main[63:12];
+                               spage_va_next       <= translate_address_main[63:12] + 52'd1;
+                               spage_pa0_base      <= translate_physical_address0[63:12];
+                               spage_pa1_base      <= translate_physical_page1[63:12];
+                               spage_next_valid    <= 1'b1;
+                               spage_next_pa0_base <= translate_physical_page1[63:12];
                            end
                            main_state <= MAIN_WRITE_REQUEST;
                        end else
