@@ -48,6 +48,7 @@ module roce_skip_align #(
     input  wire  [12:0]      meta_length,       // 1..4096
     input  wire              in_valid,
     output wire              in_ready,
+    output wire              data_ready,    // 本拍没有元数据时的 in_ready（见下方 assign）
     input  wire  [DW-1:0]    in_data,
     input  wire              in_last,
     output reg               out_valid,
@@ -125,6 +126,9 @@ module roce_skip_align #(
     // （consume_beat 要求 !input_done），拉高会让上游以为首拍已被接受而把它丢掉。
     assign in_ready = meta_slot ? meta_valid : (frame_active && !input_done && can_advance);
     assign meta_ready = meta_slot;
+    // meta_valid = 0 时的 in_ready。上游在只送数据、不可能同时送元数据的阶段（TX 的 payload 拍）
+    // 用它代替 in_ready，逐拍取值相同，但组合锥里不再有 meta_valid 及其上游逻辑。
+    assign data_ready = !meta_slot && frame_active && !input_done && can_advance;
 
     function automatic [BEAT_BYTES-1:0] low_bits_mask(input [BYTE_W-1:0] count);
         // 注意：常数 1 必须显式扩到 BEAT_BYTES 位，否则 +1 之后被截成 32 位，

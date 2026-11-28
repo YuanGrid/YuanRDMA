@@ -323,7 +323,7 @@ module roce_tx
     end
 
     // ------------------------------------------------------------ skip_align + 帧信息 FIFO
-    wire        align_meta_ready, align_in_ready;
+    wire        align_meta_ready, align_in_ready, align_data_ready;
     // B6461：被代际淘汰的重传任务不进 skip_align（不进 meta、也不送首拍），只把 FIFO 弹掉。
     wire        align_meta_valid = (build_state == BUILD_PREP) && build_job_valid && !build_job_stale;
     wire        align_in_valid = ((build_state == BUILD_PREP) && build_job_valid && !build_job_stale) ||
@@ -342,7 +342,10 @@ module roce_tx
     // 必须用 build_job（在途 FIFO 输出）而不是 job——job 在 PREP 拍还是上一包的值。
     wire        align_in_last  = (build_state == BUILD_PREP) ? (build_job_head.payload_length == 13'd0) :
                                  (build_state == BUILD_PAYLOAD) ? dma_read_last : 1'b0;
-    assign dma_read_ready = ((build_state == BUILD_PAYLOAD) && align_in_ready) ||
+    // PAYLOAD 拍 align_meta_valid 恒 0（它要求 BUILD_PREP），此时 align_in_ready 与 align_data_ready 逐拍相同。
+    // 用 align_data_ready：dma_read_ready 经读数据 skid 驱动 2300 多位数据寄存器的装载使能，
+    // 原写法让在途 FIFO 队头与 rtx_epoch 的比较（build_job_stale）也落进这条组合锥，是 core_clk 最差路径。
+    assign dma_read_ready = ((build_state == BUILD_PAYLOAD) && align_data_ready) ||
                             (build_state == BUILD_DROP);
 
     wire [2:0] align_debug_state;
@@ -357,7 +360,8 @@ module roce_tx
         .clk(clk), .rst(rst),
         .debug_state(align_debug_state),
         .meta_valid(align_meta_valid), .meta_ready(align_meta_ready), .meta_skip(header_skip), .meta_length(frame_length),
-        .in_valid(align_in_valid), .in_ready(align_in_ready), .in_data(align_in_data), .in_last(align_in_last),
+        .in_valid(align_in_valid), .in_ready(align_in_ready), .data_ready(align_data_ready),
+        .in_data(align_in_data), .in_last(align_in_last),
         .out_valid(frame_valid), .out_ready(frame_ready), .out_data(frame_data), .out_keep(frame_keep), .out_last(frame_last)
     );
 
@@ -414,7 +418,7 @@ module roce_tx
                         // `job` 不锁存——DROP 只按 dma_read_last 收拍，不读任务字段。
                         build_state <= (build_job_head.payload_length == 13'd0) ? BUILD_PREP : BUILD_DROP;
                     end
-            BUILD_PAYLOAD:  if (dma_read_valid && align_in_ready && dma_read_last) build_state <= BUILD_PREP;
+            BUILD_PAYLOAD:  if (dma_read_valid && align_data_ready && dma_read_last) build_state <= BUILD_PREP;
             BUILD_DROP:     if (dma_read_valid && dma_read_ready && dma_read_last) build_state <= BUILD_PREP;
             default: build_state <= BUILD_PREP;
         endcase
