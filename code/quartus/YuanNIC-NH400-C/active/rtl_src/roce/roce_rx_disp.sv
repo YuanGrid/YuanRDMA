@@ -5,6 +5,11 @@
 `timescale 1ns/1ps
 module roce_rx_disp
     import roce_pkg::*;
+#(
+    // 仿真断言开关：port 0 的 ready 必须只在 disp 空闲时出现（u_resp 的寄存 ready 协议，前视依赖它）。
+    // 随机驱动 route_header_ready 的等价台子（disp_arb_equiv）不守这个协议，在那里置 0。
+    parameter bit RESP_HDR_READY_CHECK = 1'b1
+)
 (
     input  wire       clk,
     input  wire       rst,
@@ -32,7 +37,16 @@ module roce_rx_disp
     assign debug_busy_owner = {owner, busy};
     wire destination_address = is_response;
 
-    assign route_header_valid = (!busy && rx_header_valid) ? (2'b01 << destination_address) : 2'b00;
+    // B0125：送往响应方（port 0，u_resp）的包头前视一拍。u_resp 的 rx_header_ready 是寄存的：看到 valid 的下一拍
+    // 才拉高，原来要等 busy 落下（done 的下一拍）才给 valid，每包在 done 之后空转 1 拍（1 KB 包 8 拍里的 1 拍）。
+    // 现在「u_resp 本拍 done、下一拍必然空闲」时就把头给 u_resp，它的 ready 正好落在 busy=0 的那一拍，握手与原来同拍语义：
+    // 握手仍然只在 !busy 时发生（rx_header_ready 不变），u_resp 也只会在那一拍拉 ready（下面的断言逐拍核对）。
+    // 请求方（port 1，u_req）照旧只在 !busy 时给 valid——它的 ready 时序与 u_resp 不同，不做前视。
+    // 前视只认 u_resp 自己的 done（busy_owner[0]）：服务端连续 WRITE / SEND 的收益全在 resp→resp 背靠背上，
+    // 不把 u_req 的 done 拉进 u_resp 头部装载使能（约千位）的组合锥里。
+    wire   hdr_free_next = !busy || (busy_owner[0] && route_done[0]);
+    assign route_header_valid = !rx_header_valid ? 2'b00 :
+                                destination_address ? {!busy, 1'b0} : {1'b0, hdr_free_next};
     assign rx_header_ready   = !busy && route_header_ready[destination_address];
     // B0123 时序：payload 方向的选路改用寄存的 one-hot 位 busy_owner[i] = busy && owner == i。
     // rx_payload_ready 是 RX payload skid（2305 位）的 m_ready，原来要先按 owner 选 route_payload_ready 再与 busy，
@@ -45,6 +59,9 @@ module roce_rx_disp
     always @(posedge clk) begin
         if (!rst && (busy_owner != (busy ? (2'b01 << owner) : 2'b00)))
             $fatal(1, "roce_rx_disp: busy_owner=%b 与 busy=%0d owner=%0d 不一致", busy_owner, busy, owner);
+        // 前视的前提：u_resp 拉 ready 的那一拍 disp 必须空闲，否则那次 ready 落空、u_resp 已装载的头没有握手。
+        if (RESP_HDR_READY_CHECK && !rst && route_header_ready[0] && busy)
+            $fatal(1, "roce_rx_disp: u_resp 在 busy=1 时拉了 rx_header_ready（前视时序被破坏）");
     end
     // synthesis translate_on
 
