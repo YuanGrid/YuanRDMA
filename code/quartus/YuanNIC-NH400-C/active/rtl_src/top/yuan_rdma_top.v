@@ -216,6 +216,10 @@ module YuanRDMA (
    (* keep *) wire [11:0]   d2h_axi_st_tid            ;
    (* keep *) wire          d2h_axi_st_tuser_error    ;
 
+   // pcie_app_clk 域复位的各使用方副本，赋值与说明见 mac_rstn_u 之后
+   (* dont_merge *) reg pcie_rstn_keep, pcie_rstn_h2d, pcie_rstn_rxf, pcie_rstn_mark,
+                        pcie_rstn_regl, pcie_rstn_qdma, pcie_rstn_d2h, pcie_rstn_roce;
+
    function [6:0] tkeep2empty;
     input [127:0] tkeep;
     integer i;
@@ -349,7 +353,7 @@ axis_keep_pack #(
     ) u_axis_keep_pack
                (
                 .clk                       (pcie_app_clk               ),
-                .rst_n                     (pcie_clk_rstn[1]           ),
+                .rst_n                     (pcie_rstn_keep           ),
 
                 .s_axis_tvalid             (o_h2d_axi_st_tvalid        ),
                 .s_axis_tready             (o_h2d_axi_st_tready        ),
@@ -412,7 +416,7 @@ axis_keep_pack #(
         .m_axis_tuser                       (    ),
         .m_axis_tready                      (h2d_axi_st_reg_tready),
         .aclk                               (pcie_app_clk            ),
-        .aresetn                            (pcie_clk_rstn[1]            )
+        .aresetn                            (pcie_rstn_h2d            )
     );
   
 
@@ -714,6 +718,23 @@ axis_keep_pack #(
         end
     endgenerate
 
+    // pcie_app_clk 域复位按使用方各复制一份。原先 mac_rstn_u 的一个同步寄存器直接扇出到 u82 / u21 /
+    // keep_pack 的 register slice、rdma_timestamp_mark、qdma_function 的 hash 等，这些模块分散在芯片各处，
+    // pld_clkout（2 ns）上是 1 级逻辑、走线 1.7～2.1 ns 的违例（最差 u82 的 filled，−0.060）。
+    // 每份只驱动一个实例，fitter 能把它放到使用方旁边；dont_merge 防止综合把这些同输入寄存器合并回一个。
+    // 各份同拍释放，pcie 域复位整体晚 1 拍。
+    // 声明在上方（使用方 u_axis_keep_pack 等在前面例化）
+    always @(posedge pcie_app_clk) begin
+        pcie_rstn_keep <= pcie_clk_rstn[1];
+        pcie_rstn_h2d  <= pcie_clk_rstn[1];
+        pcie_rstn_rxf  <= pcie_clk_rstn[1];
+        pcie_rstn_mark <= pcie_clk_rstn[1];
+        pcie_rstn_regl <= pcie_clk_rstn[1];
+        pcie_rstn_qdma <= pcie_clk_rstn[1];
+        pcie_rstn_d2h  <= pcie_clk_rstn[1];
+        pcie_rstn_roce <= pcie_clk_rstn[1];
+    end
+
     // ---------------------------------------------------------------
     // slot 2 (0x0130_0000, 原 pkt_gen) 的空桩。
     // pkt_gen 已删除，但 avm_config 的 avm_wait 在"没有用户应答"时会永久
@@ -953,7 +974,7 @@ axis_keep_pack #(
         .link_up0                           (eth_rx_pcs_ready         ),
         .mac_rstn                           (mac_clk_rstn[1]          ),
         .axil_rstn                          (axil_clk_rstn[1]         ),
-        .pcie_rstn                          (pcie_clk_rstn[1]         ),
+        .pcie_rstn                          (pcie_rstn_rxf         ),
         .time_stamp                         (time_stamp_delay         ),
         .axis_aclk                          (pcie_app_clk             ),
         .axil_aclk                          (clk250m                  ),
@@ -964,7 +985,7 @@ axis_keep_pack #(
     rdma_timestamp_mark #(.DATA_WIDTH(1024), .KEEP_WIDTH(128), .EMPTY_WIDTH(7)) u8_rdma_timestamp_mark
     (
         .clk                                (pcie_app_clk           ),
-        .rst_n                              (pcie_clk_rstn[1]       ),
+        .rst_n                              (pcie_rstn_mark       ),
         .s_axis_tvalid                      (h2d_axi_st_reg_tvalid      ),
         .s_axis_tdata                       (h2d_axi_st_reg_tdata       ),
         .s_axis_tlast                       (h2d_axi_st_reg_tlast       ),
@@ -1005,7 +1026,7 @@ axis_keep_pack #(
         .m_axis_tuser                       (regl_to_qdma_tkeep     ),
         .m_axis_tready                      (regl_to_qdma_tready    ),
         .aclk                               (pcie_app_clk           ),
-        .aresetn                            (pcie_clk_rstn[1]       )
+        .aresetn                            (pcie_rstn_regl       )
     );
 
     qdma_top #(.DATA_W(1024),.EMTY_W(7),.CHANNEL_W(11)) u9_qdma_top
@@ -1051,7 +1072,7 @@ axis_keep_pack #(
         .axil_aclk                          (clk250m                    ),
         .axil_rst                           (~axil_clk_rstn[1]           ),
         .dma_clk                            (pcie_app_clk               ),
-        .dma_rst                            (~pcie_clk_rstn[1]          ),
+        .dma_rst                            (~pcie_rstn_qdma          ),
         .mac_clk                            (eth_mac_clk                ),
         .mac_rst                            (~mac_clk_rstn[1]           )
     );
@@ -1108,7 +1129,7 @@ axis_keep_pack #(
         .m_axis_tuser                       (d2h_axi_st_tid                       ),
         .m_axis_tready                      (d2h_axi_st_tready                      ),
         .aclk                               (pcie_app_clk                            ),
-        .aresetn                            (pcie_clk_rstn[1]                        )
+        .aresetn                            (pcie_rstn_d2h                        )
     );
 
 
@@ -1304,7 +1325,7 @@ axis_keep_pack #(
         .l_avm_rspo                         (cfg_avm_rspo       ),
         .l_avm_wrsp                         (cfg_avm_wrsp       ),
         .pcie_clk                           (pcie_app_clk       ),
-        .pcie_rst_n                         (pcie_clk_rstn[1]   ),
+        .pcie_rst_n                         (pcie_rstn_roce   ),
         .bas_m2s                            (pcie5_bas_m2s      ),
         .bas_s2m                            (pcie5_bas_s2m      ),
         .mac_clk                            (eth_mac_clk        ),

@@ -183,7 +183,20 @@ module roce_top
     (* dont_merge *) reg [1:0] dp_pcie_rst_sync;
     always @(posedge pcie_clk)
         dp_pcie_rst_sync <= {dp_pcie_rst_sync[0], dp_pcie_rst_raw};
-    wire dp_pcie_rst = dp_pcie_rst_sync[1];
+
+    // 第 3 级按使用方复制（与 core 域的 dp_rst_lane 同一做法）：每 lane 的 roce_dma 一份、
+    // hub / bas_mon / debug 各一份。原先 dp_pcie_rst_sync[1] 一个寄存器扇出到 4 个 lane 的 AR / W FIFO，
+    // lane 分散在芯片各处，pld_clkout（2 ns）上出现 1 级逻辑、走线 1.6～1.9 ns 的违例，
+    // 连 dp_pcie_rst_sync[0] → [1] 这一级都被拉远（第 1 级要靠近 sync[0]，第 2 级被大扇出拖向使用方）。
+    // 各份同拍释放，复位整体晚 1 拍，对数据通路无影响。
+    (* dont_merge *) reg [LANES-1:0] dp_pcie_rst_lane;
+    (* dont_merge *) reg             dp_pcie_rst_hub, dp_pcie_rst_mon, dp_pcie_rst_dbg;
+    always @(posedge pcie_clk) begin
+        dp_pcie_rst_lane <= {LANES{dp_pcie_rst_sync[1]}};
+        dp_pcie_rst_hub  <= dp_pcie_rst_sync[1];
+        dp_pcie_rst_mon  <= dp_pcie_rst_sync[1];
+        dp_pcie_rst_dbg  <= dp_pcie_rst_sync[1];
+    end
 
     // ------------------------------------------------------------ AVMM 分流 + CSR
     wire [27:0] roce_address;
@@ -371,13 +384,13 @@ module roce_top
     wire [LANES*`BAS_M2S_W-1:0]   lane_bas_m2s;
     wire [LANES*`BAS_S2M_W-1:0]   lane_bas_s2m;
     roce_pcie_hub #(.LANES(LANES)) u_pcie_hub (
-        .pcie_clk(pcie_clk), .pcie_rst(dp_pcie_rst),
+        .pcie_clk(pcie_clk), .pcie_rst(dp_pcie_rst_hub),
         .lane_m2s_flat(lane_bas_m2s), .lane_s2m_flat(lane_bas_s2m),
         .bas_m2s(bas_m2s), .bas_s2m(bas_s2m)
     );
 
     roce_bas_mon u_bas_mon (
-        .pcie_clk(pcie_clk), .pcie_rst(dp_pcie_rst), .clk(core_clk), .rst(dp_rst_misc),
+        .pcie_clk(pcie_clk), .pcie_rst(dp_pcie_rst_mon), .clk(core_clk), .rst(dp_rst_misc),
         .bas_m2s(bas_m2s), .bas_s2m(bas_s2m), .sticky_clear(bas_sticky_clear_all),
         .count_aw(counter_bas_raw[0*32 +: 32]), .count_w_last(counter_bas_raw[1*32 +: 32]), .count_b(counter_bas_raw[2*32 +: 32]),
         .count_ar(counter_bas_raw[3*32 +: 32]), .count_r_last(counter_bas_raw[4*32 +: 32]),
@@ -637,7 +650,7 @@ module roce_top
                 .DATA_W(DATA_W), .USERF_W(USERF_W), .CORE_CLOCK_MHZ(CORE_CLOCK_MHZ),
                 .LANES(LANES), .LANE_ID(lane), .RX_DW(RX_DW), .WR_DW(ENGINE_WR_DW)
             ) u_engine (
-                .core_clk(core_clk), .dp_rst(dp_rst_lane[lane]), .pcie_clk(pcie_clk), .dp_pcie_rst(dp_pcie_rst),
+                .core_clk(core_clk), .dp_rst(dp_rst_lane[lane]), .pcie_clk(pcie_clk), .dp_pcie_rst(dp_pcie_rst_lane[lane]),
                 .mac_clk(mac_clk), .dp_mac_rst(dp_mac_rst_lane[lane]),
                 .rx_pfc(pfc_pause_core), .pfc_gate_enable(pfc_gate_enable),
                 .resp_gate(pfc_resp_gate), .pause_mac(pfc_pause_mac), .egress_gate(pfc_egress_gate_mac),
@@ -933,7 +946,7 @@ module roce_top
         .tx_merge_qdma_aborts(qdma_merge_aborts),
         .tx_merge_lane_state(lane_mux_debug_state),
         .tx_merge_lane_aborts(lane_merge_aborts),
-        .pcie_clk(pcie_clk), .pcie_rst(dp_pcie_rst),
+        .pcie_clk(pcie_clk), .pcie_rst(dp_pcie_rst_dbg),
         .pcie_ar_address(pcie_debug[63:0]),
         .pcie_ar_len(pcie_debug[71:64]),
         .pcie_ar_hs(pcie_debug[75:72]),
