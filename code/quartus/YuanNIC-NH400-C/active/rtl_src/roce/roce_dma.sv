@@ -340,8 +340,8 @@ module roce_dma #(
     // → write_request_done（= ready）→ 回到同一个 skid 的装载使能（扇出 141 位），−0.018，近临界 118 条。
     // 现在 ready 只看 valid、aw_space_q、write_align_ready、bresp_count_fifo_ready 和 phase，与请求内容无关，
     // 环上没有数据通路；跨页 / 拆分 / 拍数只进 write_phase 与锁存寄存器的 D 端。
-    // u_wr_align 与 B 计数 FIFO 本来就只在首个 burst 那拍采样请求（u_wr_align 在 request_valid && !request_active
-    // 时整体锁存），提前取走对它们没有影响；请求更早离开 skid，下一个请求更早就位，吞吐只会持平或更好。
+    // u_wr_align 与 B 计数 FIFO 本来就只在首个 burst 那拍采样请求（u_wr_align 空闲时每拍装载字段，request_valid
+    // 那拍进入 request_active 后保持），提前取走对它们没有影响；请求更早离开 skid，下一个请求更早就位，吞吐只会持平或更好。
     reg  [63:12] write_rest_page0;        // 首页余下：address[63:12]
     reg  [4:0]   write_rest_block;        //           address[11:7] + 1（头拍拆分要求首页 > 1 拍，addr[11:7] != 31，不进位出页）
     reg  [5:0]   write_rest_first_m1;     //           首页拍数 − 1
@@ -361,9 +361,21 @@ module roce_dma #(
         if (rst) aw_space_q <= 1'b0;
         else     aw_space_q <= aw_fifo_ready && (aw_fifo_depth < ($clog2(WRITE_AW_FIFO_DEPTH)+1)'(WRITE_AW_FIFO_DEPTH - 8));
     end
+    // B0123：B 计数 FIFO 的「可写」同样改用寄存器（bresp_space_q）。B0122 core_clk 余量 0 的一簇（+0.001～+0.006）
+    // 从 u_bresp_count_fifo 的格雷码指针出发：组合 full 比较 → s_axis_tready → write_request_start → u_wr_align。
+    // 这个 FIFO 两侧都是 clk，格雷码同步与组合 full 比较本来就是多余的，指针寄存器又带上电初值，Hyper-Retimer
+    // 不能把寄存器前移。bresp_space_q = 上一拍的 s_axis_tready 且 寄存深度 < DEPTH-8：深度是上一拍的写指针减
+    // 同步后的读指针，只会偏大，最多漏算 2 次入队，所以 bresp_space_q=1 那拍 FIFO 一定没满。可用深度 512 → 504。
+    wire [$clog2(WRITE_B_FIFO_DEPTH):0] bresp_count_fifo_depth;
+    reg         bresp_space_q;
+    always @(posedge clk) begin
+        if (rst) bresp_space_q <= 1'b0;
+        else     bresp_space_q <= bresp_count_fifo_ready &&
+                                  (bresp_count_fifo_depth < ($clog2(WRITE_B_FIFO_DEPTH)+1)'(WRITE_B_FIFO_DEPTH - 8));
+    end
     // phase 0 要上游有请求、对齐模块与 B 计数 FIFO 能收；后续 burst 的请求已在本模块里，只等 AW FIFO 有空。
     wire        write_aw_push = (write_phase != 2'd0) ? aw_space_q
-                                                      : (dma_write_request_valid && aw_space_q && write_align_ready && bresp_count_fifo_ready);
+                                                      : (dma_write_request_valid && aw_space_q && write_align_ready && bresp_space_q);
     wire        write_request_done    = write_aw_push && write_last_burst;     // 本请求最后一个 burst 入队
     wire        write_request_start   = write_aw_push && (write_phase == 2'd0);    // 对齐模块与 B 计数在首个 burst 时入队
     assign dma_write_request_ready    = write_request_start;
@@ -379,9 +391,12 @@ module roce_dma #(
         else if (write_request_done) write_phase <= 2'd0;
         else if (write_aw_push)      write_phase <= ((write_phase == 2'd0) && write_head_split) ? 2'd1 : 2'd2;
     end
-    // 后续 burst 的字段：首个 burst 入队（请求被取走）那拍锁存。数据寄存器不挂复位（只在 phase != 0 时被读）。
+    // 后续 burst 的字段：phase 0 时每拍跟着上游请求装载，首个 burst 入队（请求被取走）那拍装进来的就是本请求，
+    // 之后 phase 1 / 2 保持。数据寄存器不挂复位（只在 phase != 0 时被读）。B0123 时序：使能原来是
+    // write_request_start（由 aw_space_q、wr_align / B 计数可收与上游 valid 组合出来，扇出约 120 位），
+    // 现在只看本地的 write_phase，每请求拍数与锁存值都不变。
     always @(posedge clk) begin
-        if (write_request_start) begin
+        if (write_phase == 2'd0) begin
             write_rest_page0    <= dma_write_request_address[63:12];
             write_rest_block    <= dma_write_request_address[11:7] + 5'd1;
             write_rest_first_m1 <= write_first_burst_beats - 6'd1;
@@ -526,7 +541,7 @@ module roce_dma #(
         .m_axis_tready(bresp_valid && bresp_request_last), .m_axis_tlast(), .m_axis_tid(),
         .m_axis_tdest(), .m_axis_tuser(),
         .s_pause_req(1'b0), .s_pause_ack(), .m_pause_req(1'b0), .m_pause_ack(),
-        .s_status_depth(), .s_status_depth_commit(), .s_status_overflow(),
+        .s_status_depth(bresp_count_fifo_depth), .s_status_depth_commit(), .s_status_overflow(),
         .s_status_bad_frame(), .s_status_good_frame(),
         .m_status_depth(), .m_status_depth_commit(), .m_status_overflow(),
         .m_status_bad_frame(), .m_status_good_frame()

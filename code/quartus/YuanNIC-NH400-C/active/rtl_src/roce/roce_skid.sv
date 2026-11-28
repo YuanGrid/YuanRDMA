@@ -47,14 +47,16 @@ module roce_skid #(
         end
     end
 
-    // 数据通路不复位：与上面 valid 的分支一一对应
+    // 数据通路不复位。main_data 与上面 valid 的分支一一对应；skid_data 只要 skid 空就每拍跟着 s_data 走，
+    // 装载使能只看本地的 skid_valid，与 m_ready 无关（B0123）。skid_data 只在 skid_valid=1 时被读，而 skid_valid
+    // 置位的那一沿 skid 必空、采到的正是同一拍的 s_data，所以端口行为逐拍不变。原来的使能带着 m_ready，
+    // 下游组合出来的 ready 要同时驱动 main_data 与 skid_data 两组 WIDTH 位的使能（RX payload 2305 位时扇出翻倍）。
     always @(posedge clk) begin
         if (!main_valid || m_ready) begin
             if (skid_valid) main_data <= skid_data;
             else if (s_valid) main_data <= s_data;
-        end else if (s_valid && !skid_valid) begin
-            skid_data <= s_data;
         end
+        if (!skid_valid) skid_data <= s_data;
     end
 endmodule
 `default_nettype wire

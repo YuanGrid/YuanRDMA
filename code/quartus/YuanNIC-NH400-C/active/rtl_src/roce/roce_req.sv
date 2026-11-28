@@ -711,11 +711,17 @@ module roce_req
     // （u_req|state → u_arb|write_owner，−0.154）。改成寄存的标志：只在进入 REQ_RESP_WRITE_DATA
     // （REQ_RESP_WRITE_REQUEST 握手那拍）置位、离开（末拍）与复位时清，时时等于 state == REQ_RESP_WRITE_DATA，
     // 下面的仿真断言逐拍核对。
+    // B0123 时序：REQ_DRAIN 的译码同样改成寄存的镜像位 payload_drain（u_req|state → rx_payload_ready → u_disp →
+    // u_pay_eng_skid 的 2305 位装载使能，B0122 core_clk 余量 0 的簇 A）。在每个进入 REQ_DRAIN 的转移处置位
+    // （含 REQ_CQE 回到 cqe_return_state == REQ_DRAIN），离开 REQ_DRAIN 与复位时清，同样逐拍断言。
     reg    payload_forward;
+    reg    payload_drain;
     // synthesis translate_off
     always @(posedge clk) begin
         if (!rst && (payload_forward != (state == REQ_RESP_WRITE_DATA)))
             $fatal(1, "roce_req: payload_forward=%0d 与 state=%0d 不一致", payload_forward, state);
+        if (!rst && (payload_drain != (state == REQ_DRAIN)))
+            $fatal(1, "roce_req: payload_drain=%0d 与 state=%0d 不一致", payload_drain, state);
         if (!rst && (state == REQ_WALK_DECIDE) && (walk_psn_off_q != 24'(retire_psn - meta_psn_start_q)))
             $fatal(1, "roce_req: walk_psn_off_q=%0h 与 retire_psn - meta_psn_start_q=%0h 不一致",
                    walk_psn_off_q, 24'(retire_psn - meta_psn_start_q));
@@ -723,7 +729,7 @@ module roce_req
     // synthesis translate_on
     assign dma_write_valid = payload_forward && rx_payload_valid;
     assign dma_write_data  = rx_payload_data;
-    assign rx_payload_ready  = payload_forward ? dma_write_ready : (state == REQ_DRAIN && !payload_consumed);   // 已收完就不能再接下一包的数据
+    assign rx_payload_ready  = payload_forward ? dma_write_ready : (payload_drain && !payload_consumed);   // 已收完就不能再接下一包的数据
 
     // ------------------------------------------------------------ 包间流水（B6458）
     // 问题（roce-optimization-log §101/§102）：单 QP、MTU 1024 在板上是 13.13 拍/包，
@@ -866,6 +872,7 @@ module roce_req
         if (rst) begin
             state       <= REQ_IDLE;
             payload_forward <= 1'b0;
+            payload_drain   <= 1'b0;
             ctx_pending <= 1'b0;
             // B6503 簇 A：meta 派生量的寄存版也归零。功能上它们每进一次 REQ_WALK_WAIT2 就重装，
             // 且所有消费者都在那次重装之后；这里清只是为了让复位后的波形/仿真初值确定
@@ -1174,6 +1181,7 @@ module roce_req
             REQ_RX_CLASSIFY: begin
                 if (header.bad || !header.qp_valid || qpc_state(qp_context) != QPS_RTS) begin
                     state <= REQ_DRAIN;
+                    payload_drain <= 1'b1;
                 end else if (op_is_cnp(header.opcode)) begin
                     // CNP：不参与 PSN 逻辑（PSN 恒 0、没有 AETH），只上报。RP 侧（阶段 3）
                     // 会据此把该 QP 的速率降下来；现在只计数，务必别让它走下面的
@@ -1181,8 +1189,10 @@ module roce_req
                     event_rx_cnp    <= 1'b1;
                     event_rx_cnp_qp_l <= LANE_QPS'(1) << qp_lidx;
                     state <= REQ_DRAIN;
+                    payload_drain <= 1'b1;
                 end else if (rx_retire_stale) begin
                     state <= REQ_DRAIN;                                   // 过期或越界
+                    payload_drain <= 1'b1;
                 end else begin
                     event_kind <= rx_event_kind;
                     retire_psn    <= rx_retire_psn;
@@ -1198,6 +1208,7 @@ module roce_req
                 if (unacked_index == tx_index && !tx_started) begin                        // 没有在途 WQE
                     if (event_kind == EVENT_ACK && $signed(retire_psn - unacked_psn) > 0) unacked_psn <= retire_psn;
                     state <= (event_kind == EVENT_READ_RESPONSE) ? REQ_DRAIN : REQ_WRITE_BACK;
+                    payload_drain <= (event_kind == EVENT_READ_RESPONSE);
                 end else begin
                     ram_read_address <= {qp_lidx, unacked_index[4:0]};
                     state     <= REQ_WALK_WAIT1;
@@ -1229,6 +1240,7 @@ module roce_req
                 if ($signed(retire_psn - meta_psn_end_q) >= 0 && (unacked_index != tx_index)) begin   // 整个 WQE 都在门限前
                     if (wqe_is_read && recovering) begin                    // 已在重发，等进展或超时
                         state <= handling_rx ? REQ_DRAIN : REQ_WRITE_BACK;
+                        payload_drain <= handling_rx;
                     end else if (wqe_is_read) begin                         // READ 的响应丢了
                         if (retry_left == 3'd0) begin
                             cqe_status <= WCS_RETRY_EXC; cqe_signaled <= 1'b1; local_error <= 1'b1;
@@ -1306,8 +1318,10 @@ module roce_req
                                 retire_psn   <= meta_psn_start_q;
                                 cqe_return_state <= REQ_DRAIN;
                                 state  <= REQ_RESTART;
-                            end else
+                            end else begin
                                 state <= REQ_DRAIN;
+                                payload_drain <= 1'b1;
+                            end
                         end else begin
                             translate_key <= wqe_lkey;
                             translate_virtual_address  <= wqe_local_address + ({8'd0, walk_psn_off_q} << path_mtu_shift);
@@ -1416,15 +1430,18 @@ module roce_req
                 if (cqe_valid && cqe_ready) begin
                     cqe_valid <= 1'b0;
                     state      <= cqe_return_state;
+                    payload_drain <= (cqe_return_state == REQ_DRAIN);
                 end
             end
             REQ_DRAIN: if (payload_consumed || (rx_payload_valid && rx_payload_last)) begin
                          payload_consumed <= 1'b1;
                          state       <= REQ_WRITE_BACK;
+                         payload_drain <= 1'b0;
                      end
             REQ_WRITE_BACK: begin
                 if (handling_rx && !payload_consumed) begin
                     state <= REQ_DRAIN;
+                    payload_drain <= 1'b1;
                 end else begin
                     qp_tx_index[qp_lidx]   <= tx_index;   qp_unacked_index[qp_lidx]  <= unacked_index;  qp_next_psn[qp_lidx] <= next_psn; qp_unacked_psn[qp_lidx] <= unacked_psn;
                     qp_tx_offset[qp_lidx]  <= tx_offset;  qp_tx_started[qp_lidx] <= tx_started; qp_retry_left[qp_lidx]  <= retry_left;  qp_rnr_retry_left[qp_lidx]  <= rnr_retry_left;

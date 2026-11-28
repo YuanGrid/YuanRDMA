@@ -34,21 +34,35 @@ module roce_rx_disp
 
     assign route_header_valid = (!busy && rx_header_valid) ? (2'b01 << destination_address) : 2'b00;
     assign rx_header_ready   = !busy && route_header_ready[destination_address];
-    assign route_payload_valid = busy ? ({1'b0, rx_payload_valid} << owner) : 2'b00;
-    assign rx_payload_ready   = busy && route_payload_ready[owner];
+    // B0123 时序：payload 方向的选路改用寄存的 one-hot 位 busy_owner[i] = busy && owner == i。
+    // rx_payload_ready 是 RX payload skid（2305 位）的 m_ready，原来要先按 owner 选 route_payload_ready 再与 busy，
+    // 现在每路只是一个与门再或起来（B0122 core_clk 余量 0 的簇 A：u_req|state → u_pay_eng_skid）。
+    // busy / owner 照旧保留（头部方向与调试口用），下面的仿真断言逐拍核对 one-hot 与它们一致。
+    reg  [1:0] busy_owner;
+    assign route_payload_valid = busy_owner & {2{rx_payload_valid}};
+    assign rx_payload_ready   = |(busy_owner & route_payload_ready);
+    // synthesis translate_off
+    always @(posedge clk) begin
+        if (!rst && (busy_owner != (busy ? (2'b01 << owner) : 2'b00)))
+            $fatal(1, "roce_rx_disp: busy_owner=%b 与 busy=%0d owner=%0d 不一致", busy_owner, busy, owner);
+    end
+    // synthesis translate_on
 
     always @(posedge clk) begin
         event_rx_packet <= 1'b0;
         if (rst) begin
-            busy <= 1'b0;
+            busy       <= 1'b0;
+            busy_owner <= 2'b00;
         end else if (!busy) begin
             if (rx_header_valid && rx_header_ready) begin
-                busy      <= 1'b1;
-                owner       <= destination_address;
+                busy       <= 1'b1;
+                owner      <= destination_address;
+                busy_owner <= 2'b01 << destination_address;
                 event_rx_packet <= !rx_header.bad;
             end
         end else if (route_done[owner]) begin
-            busy <= 1'b0;
+            busy       <= 1'b0;
+            busy_owner <= 2'b00;
         end
     end
 endmodule

@@ -123,9 +123,22 @@ module roce_dma_arb #(
     assign downstream_write_request_length   = dma_write_request_length  [write_pick*13 +: 13];
     assign dma_write_request_ready   = (write_grant && downstream_write_request_ready) ? (WRITE_CLIENTS'(1) << write_pick) : '0;
 
-    assign downstream_write_valid = write_locked && dma_write_valid[write_owner];
+    // B0123 时序：写数据方向的握手改用寄存的 one-hot 位 write_owner_oh[i] = write_locked && write_owner == i。
+    // dma_write_ready 原来是「write_locked && downstream_write_ready 再按 write_owner 移位」，它经 resp / req 的
+    // rx_payload_ready、u_disp 一路串到 RX payload skid 的 2305 位装载使能（B0122 core_clk 余量 0 的簇 A）；
+    // 现在每个客户端只是 write_owner_oh[i] && downstream_write_ready 一个与门。数据仍按 write_owner 选路
+    // （不在握手环上）。write_locked / write_owner 照旧保留，下面的仿真断言逐拍核对 one-hot 与它们一致。
+    reg  [WRITE_CLIENTS-1:0] write_owner_oh;
+    assign downstream_write_valid = |(write_owner_oh & dma_write_valid);
     assign downstream_write_data  = dma_write_data[write_owner*WR_DW +: WR_DW];
-    assign dma_write_ready   = (write_locked && downstream_write_ready) ? (WRITE_CLIENTS'(1) << write_owner) : '0;
+    assign dma_write_ready   = write_owner_oh & {WRITE_CLIENTS{downstream_write_ready}};
+    // synthesis translate_off
+    always @(posedge clk) begin
+        if (!rst && (write_owner_oh != (write_locked ? (WRITE_CLIENTS'(1) << write_owner) : '0)))
+            $fatal(1, "roce_dma_arb: write_owner_oh=%b 与 write_locked=%0d write_owner=%0d 不一致",
+                   write_owner_oh, write_locked, write_owner);
+    end
+    // synthesis translate_on
 
     // 写完成顺序 FIFO（客户端号）
     reg  [WRITE_CLIENT_W-1:0] order_fifo [64];
@@ -138,6 +151,7 @@ module roce_dma_arb #(
         if (rst) begin
             write_round_robin   <= '0;
             write_locked <= 1'b0;
+            write_owner_oh <= '0;
             order_write_pointer <= '0;
             order_read_pointer <= '0;
         end else begin
@@ -145,13 +159,17 @@ module roce_dma_arb #(
                 write_round_robin       <= WRITE_CLIENT_W'((write_pick + 1) % WRITE_CLIENTS);
                 write_owner      <= write_pick;
                 write_locked     <= 1'b1;
+                write_owner_oh   <= WRITE_CLIENTS'(1) << write_pick;
                 write_beats_left    <= 7'((downstream_write_request_length + 13'(WR_DW/8 - 1)) >> $clog2(WR_DW/8));
                 order_fifo[order_write_pointer[5:0]] <= write_pick;
                 order_write_pointer     <= order_write_pointer + 7'd1;
             end
             if (downstream_write_valid && downstream_write_ready) begin
                 write_beats_left <= write_beats_left - 7'd1;
-                if (write_beats_left == 7'd1) write_locked <= 1'b0;
+                if (write_beats_left == 7'd1) begin
+                    write_locked   <= 1'b0;
+                    write_owner_oh <= '0;
+                end
             end
             if (downstream_write_complete) begin
                 dma_write_complete[order_fifo[order_read_pointer[5:0]]] <= 1'b1;

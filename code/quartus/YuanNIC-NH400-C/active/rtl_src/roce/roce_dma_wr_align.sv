@@ -75,9 +75,13 @@ module roce_dma_wr_align #(
                                : DW'({current_beat, previous_beat} >> {right_shift_bytes[6:0], 3'b000});
     wire [DW-1:0] beat_data = beat_is_useful ? shifted_beat : {DW{1'b0}};
 
+    // 低 count 位为 1 的掩码（count ≥ BB 时全 1）。写成温度计码：第 i 位 = (count > i)，每位只是 count 与常数比较，
+    // 位与位之间没有依赖。原来的 (1 << count) - 1 在 BB=256 时综合成 256 位借位链，B0122 core_clk 余量 0 的路径
+    // （u_bresp_count_fifo → u_wr_align → write_strobe → u_w_fifo）就经过它。两种写法对 count = 0..16383 逐位相同
+    // （test/sim/wr_align_equiv 穷举）。
     function automatic [BB-1:0] low_bits_mask(input [13:0] count);
-        low_bits_mask = (count >= 14'(BB)) ? {BB{1'b1}}
-                                           : ((BB'(1) << count) - BB'(1));
+        for (int i = 0; i < BB; i++)
+            low_bits_mask[i] = (count > 14'(i));
     endfunction
     wire [13:0]   strobe_low  = (start_offset > beat_byte_offset) ? (start_offset - beat_byte_offset) : 14'd0;
     wire [13:0]   strobe_high = (end_offset > beat_byte_offset) ? (end_offset - beat_byte_offset) : 14'd0;
@@ -112,25 +116,29 @@ module roce_dma_wr_align #(
                 write_valid <= 1'b0;
 
             if (!request_active) begin
-                if (request_valid) begin
-                    request_active    <= 1'b1;
-                    beat_index        <= 7'd0;
-                    // B6393：零长度时 end_offset 可为 0，ceil 结果为 0 会让 produce_beat
-                    // （beat_index < beat_count）恒假 → request_active 永不清 → request_ready
-                    // 恒 0，把这条写客户端与同引擎的读客户端一起堵死。钳到 1 拍：退化成
-                    // 一拍全 0 strobe 的合法 AXI 写，对长度 ≥1 是等价变换。
-                    beat_count        <= (((request_end_offset + 14'(BB - 1)) >> LB) == 14'd0) ? 7'd1
-                                                                              : 7'((request_end_offset + 14'(BB - 1)) >> LB);
-                    half_count        <= (((request_end_offset + 14'd127) >> 7) == 14'd0) ? 7'd1
-                                                                              : 7'((request_end_offset + 14'd127) >> 7);
-                    right_shift_bytes <= RSHIFT_W'(128) - {1'b0, request_address_low};
-                    start_offset      <= {7'd0, request_address_low};
-                    end_offset        <= request_end_offset;
-                    beats_needed      <= 7'((request_length + 13'(BB - 1)) >> LB);
-                    first_burst_beats <= request_first_burst_beats;
-                    head_split        <= request_head_split;
-                    previous_beat     <= 1024'd0;
-                end
+                // 空闲时请求字段每拍都跟着输入装载，装载使能只看本地的 request_active；request_valid
+                // （roce_dma 的 write_request_start）只进 request_active 这一位（B0123 时序）。原来是
+                // 「!request_active && request_valid」整体装载：write_request_start 由 roce_dma 的握手组合出来，
+                // 要走长线去驱动一千多位寄存器的使能（扇出 45，B0122 core_clk 余量 0 的那簇路径）。
+                // 空闲时这些字段没有任何读者（produce_beat 要求 request_active），request_valid 那拍装进来的
+                // 正是被受理的请求，所以端口行为逐拍不变；每请求仍是「装载 1 拍 + 出拍」，不多空拍。
+                request_active    <= request_valid;
+                beat_index        <= 7'd0;
+                // B6393：零长度时 end_offset 可为 0，ceil 结果为 0 会让 produce_beat
+                // （beat_index < beat_count）恒假 → request_active 永不清 → request_ready
+                // 恒 0，把这条写客户端与同引擎的读客户端一起堵死。钳到 1 拍：退化成
+                // 一拍全 0 strobe 的合法 AXI 写，对长度 ≥1 是等价变换。
+                beat_count        <= (((request_end_offset + 14'(BB - 1)) >> LB) == 14'd0) ? 7'd1
+                                                                          : 7'((request_end_offset + 14'(BB - 1)) >> LB);
+                half_count        <= (((request_end_offset + 14'd127) >> 7) == 14'd0) ? 7'd1
+                                                                          : 7'((request_end_offset + 14'd127) >> 7);
+                right_shift_bytes <= RSHIFT_W'(128) - {1'b0, request_address_low};
+                start_offset      <= {7'd0, request_address_low};
+                end_offset        <= request_end_offset;
+                beats_needed      <= 7'((request_length + 13'(BB - 1)) >> LB);
+                first_burst_beats <= request_first_burst_beats;
+                head_split        <= request_head_split;
+                previous_beat     <= 1024'd0;
             end else if (produce_beat) begin
                 beat_index <= beat_index + 7'd1;
                 if (take_input) begin

@@ -615,17 +615,6 @@ module roce_resp
     assign      done = done_reg;
     // 写回 per-QP 数组 + 打 done + 回 ACK。WRITE_DATA 末拍与 MAIN_FINISH 共用同一段逻辑，
     // 避免两处副本日后各自漂移。全部是寄存器写，不影响同拍的组合判断。
-    // 回包条目的 QPC 字段（两个入队点共用，避免两处副本漂移）
-    task automatic fill_response_ctx;
-        response_in.pmtu  <= qpc_pmtu(qp_context);
-        response_in.pd    <= qpc_pd(qp_context);
-        response_in.tos   <= qpc_tos(qp_context);
-        response_in.ttl   <= qpc_ttl(qp_context);
-        response_in.dmac  <= qpc_dmac(qp_context);
-        response_in.dip   <= qpc_dip(qp_context);
-        response_in.sport <= qpc_sport(qp_context);
-        response_in.dqpn  <= qpc_dqpn(qp_context);
-    endtask
     task automatic fin_fast_path;
         done_reg <= 1'b1;
         qp_expected_psn[qp_index[QP_W-1:LANE_BITS]] <= fin_expected_psn; qp_msn[qp_index[QP_W-1:LANE_BITS]]  <= fin_msn;
@@ -635,16 +624,7 @@ module roce_resp
         qp_cursor_remaining[qp_index[QP_W-1:LANE_BITS]] <= fin_cursor_remaining; qp_cursor_offset[qp_index[QP_W-1:LANE_BITS]] <= fin_cursor_offset;
         qp_cursor_wqe_index[qp_index[QP_W-1:LANE_BITS]] <= cursor_wqe_index;
         if (fin_send_response) begin
-            response_in_valid <= 1'b1;
-            response_in.qp_index    <= qp_index;
-            response_in.is_read    <= is_read_request && !fin_ack;
-            response_in.psn   <= ack_psn;
-            response_in.syndrome   <= syndrome;
-            response_in.msn   <= fin_msn;
-            response_in.virtual_address    <= header.reth_virtual_address;
-            response_in.rkey  <= header.reth_rkey;
-            response_in.payload_length   <= header.reth_length;
-            fill_response_ctx;
+            response_in_valid <= 1'b1;            // 条目字段见下面的 response_in 装载块
             if (syndrome == AETH_ACK) event_tx_ack <= !(is_read_request && !fin_ack);
             else                      event_tx_nak <= 1'b1;
         end
@@ -680,11 +660,58 @@ module roce_resp
     // **dma_read_ready 必须恒 1**：roce_dma_arb.sv 明确写了「某客户端不接收会堵住其后所有读数据」，
     // 而预取环随时可能在收返回，不能反压。
     assign dma_read_ready = 1'b1;                 // 取指数据只有一拍，状态机随时能收
-    wire   payload_forward    = (main_state == MAIN_WRITE_DATA);
-    wire   payload_drop   = (main_state == MAIN_DRAIN) && !payload_consumed;   // 已收完就不能再接下一包的数据
+    // B0123 时序：payload_forward / payload_drop 原来是 main_state 的组合译码，经 rx_payload_ready → u_disp →
+    // RX payload skid 的 2305 位装载使能（B0122 core_clk 余量 0 的簇 A，u_req|state → u_pay_eng_skid 的同类环）。
+    // 改成寄存的镜像位：payload_forward 只在进入 MAIN_WRITE_DATA（WRITE_REQUEST 握手那拍）置位、离开（末拍）与
+    // 复位时清；payload_drain 在每个进入 MAIN_DRAIN 的转移处置位、离开 MAIN_DRAIN 与复位时清。
+    // 下面的仿真断言逐拍核对它们分别等于 main_state == MAIN_WRITE_DATA / MAIN_DRAIN。
+    reg    payload_forward;
+    reg    payload_drain;
+    wire   payload_drop   = payload_drain && !payload_consumed;   // 已收完就不能再接下一包的数据
+    // synthesis translate_off
+    always @(posedge clk) begin
+        if (!rst && (payload_forward != (main_state == MAIN_WRITE_DATA)))
+            $fatal(1, "roce_resp: payload_forward=%0d 与 main_state=%0d 不一致", payload_forward, main_state);
+        if (!rst && (payload_drain != (main_state == MAIN_DRAIN)))
+            $fatal(1, "roce_resp: payload_drain=%0d 与 main_state=%0d 不一致", payload_drain, main_state);
+    end
+    // synthesis translate_on
     assign dma_write_valid = payload_forward && rx_payload_valid;
     assign dma_write_data  = rx_payload_data;
     assign rx_payload_ready  = payload_forward ? dma_write_ready : payload_drop;
+
+    // 回包条目 response_in 的字段（B0123 时序）：response_in_valid=0 时每拍跟着下一值装载，两个入队点
+    // （fin_fast_path、MAIN_ACK）只置 valid。原来字段在入队那拍装载，WRITE_DATA 末拍的入队条件里有
+    // dma_write_ready（u_arb 从 u_write_data_skid 的 skid_valid 组合出来），约 400 位的装载使能挂在这条握手上
+    // （B0122 core_clk 余量 0 的路径之一：u_write_data_skid|skid_valid → u_resp|response_in.dqpn）。
+    // 现在使能只看本地的 response_in_valid。等价性：入队只发生在 response_in_valid=0 的拍（快路径要求
+    // !(fin_send_response && response_in_valid)，MAIN_ACK 要求 !response_in_valid），那拍装进来的值与原来逐位相同；
+    // valid=1 期间保持到握手撤 valid；u_response_fifo 只在握手时采 s_axis_tdata，空闲时跟着变的值不可见。
+    // 两个入队点只有 is_read / msn 不同：MAIN_ACK 用 need_ack 与自增前的 msn，快路径（WRITE_DATA 末拍 /
+    // MAIN_FINISH）用 fin_ack 与 fin_msn，按 main_state 二选一。
+    // 注意：MAIN_ACK 用自增前的 msn，与快路径的 fin_msn（已 +1）不一致。本端 roce_req 不读 msn，自环测不出差异；
+    // 接 CX7 跑 SEND 混合流量时两条路径回的 AETH msn 不同，可能暴露，待统一。
+    wire response_at_ack = (main_state == MAIN_ACK);
+    always @(posedge clk) begin
+        if (!response_in_valid) begin
+            response_in.qp_index        <= qp_index;
+            response_in.is_read         <= is_read_request && !(response_at_ack ? need_ack : fin_ack);
+            response_in.psn             <= ack_psn;
+            response_in.syndrome        <= syndrome;
+            response_in.msn             <= response_at_ack ? msn : fin_msn;
+            response_in.virtual_address <= header.reth_virtual_address;
+            response_in.rkey            <= header.reth_rkey;
+            response_in.payload_length  <= header.reth_length;
+            response_in.pmtu            <= qpc_pmtu(qp_context);
+            response_in.pd              <= qpc_pd(qp_context);
+            response_in.tos             <= qpc_tos(qp_context);
+            response_in.ttl             <= qpc_ttl(qp_context);
+            response_in.dmac            <= qpc_dmac(qp_context);
+            response_in.dip             <= qpc_dip(qp_context);
+            response_in.sport           <= qpc_sport(qp_context);
+            response_in.dqpn            <= qpc_dqpn(qp_context);
+        end
+    end
 
     always @(posedge clk) begin
         rx_header_ready       <= 1'b0;
@@ -744,6 +771,8 @@ module roce_resp
             end
         if (rst) begin
             main_state        <= MAIN_IDLE;
+            payload_forward   <= 1'b0;
+            payload_drain     <= 1'b0;
             send_len_err      <= 1'b0;
             dma_write_request_valid  <= 1'b0;
             cqe_valid   <= 1'b0;
@@ -828,6 +857,7 @@ module roce_resp
                 if (header.bad || !header.qp_valid || !qp_state_ok || !is_request) begin
                     event_drop <= 1'b1;
                     main_state      <= MAIN_DRAIN;
+                    payload_drain   <= 1'b1;
                 end else if (psn_delta != 24'd0 && psn_delta[23]) begin          // 重复包
                     event_duplicate <= 1'b1;
                     if (is_read_request) begin
@@ -845,8 +875,10 @@ module roce_resp
                         syndrome     <= AETH_NAK_SEQ;
                         ack_psn <= expected_psn;
                         main_state      <= MAIN_ACK;
-                    end else
+                    end else begin
                         main_state <= MAIN_DRAIN;
+                        payload_drain <= 1'b1;
+                    end
                 end else begin
                     nak_sent <= 1'b0;
                     if (!length_ok && !is_read_request) begin
@@ -862,6 +894,7 @@ module roce_resp
                             if (is_ud_send) begin
                                 event_drop <= 1'b1;
                                 main_state <= MAIN_DRAIN;
+                                payload_drain <= 1'b1;
                             end else begin
                                 event_rnr_nak <= 1'b1;
                                 need_ack <= 1'b1; syndrome <= AETH_RNR_NAK | {3'd0, qpc_min_rnr(qp_context)};
@@ -875,6 +908,7 @@ module roce_resp
                             // 同一 QP 上还有 RC 的 SEND 消息未收完——不报错、不毁 QP，静默丢这一包。
                             event_drop <= 1'b1;
                             main_state <= MAIN_DRAIN;
+                            payload_drain <= 1'b1;
                         end else if (is_send_first || {19'd0, header.payload_length} > cursor_remaining) begin
                             need_error <= 1'b1; need_ack <= 1'b1; syndrome <= AETH_NAK_INV;
                             main_state <= MAIN_ACK;
@@ -983,6 +1017,7 @@ module roce_resp
                            pf_resync_q    <= 1'b1;
                            pf_resync_qp   <= pf_q;
                            main_state <= MAIN_DRAIN;
+                           payload_drain <= 1'b1;
                        end
                    end
             MAIN_TRANSLATE:  if (send_len_err) begin
@@ -1057,6 +1092,7 @@ module roce_resp
                        if (dma_write_request_valid && dma_write_request_ready) begin
                            dma_write_request_valid <= 1'b0;
                            main_state       <= MAIN_WRITE_DATA;
+                           payload_forward  <= 1'b1;
                        end
                    end
             // B6391：快路径与末拍 payload 合并。fin_* 全部由 header 与工作副本组合得出，
@@ -1066,6 +1102,7 @@ module roce_resp
             // 两个例外仍进 FINISH：需要发 CQE（字段要先寄存）与上一包回包还占着 FIFO 入口。
             MAIN_WRITE_DATA:  if (rx_payload_valid && dma_write_ready && rx_payload_last) begin
                        payload_consumed <= 1'b1;
+                       payload_forward  <= 1'b0;
                        if (fin_fast_ready) begin
                            fin_fast_path;
                            main_state <= MAIN_IDLE;
@@ -1140,19 +1177,8 @@ module roce_resp
                 // 入队条件改用 resp_pending：FINISH 快路径会把回包留在 FIFO 入口就回 IDLE，
                 // 那时 response_in_valid 可能仍是上一包的在途条目，用它会误判成本包已入队。
                 if ((need_ack || is_read_request) && !resp_pending && !response_in_valid) begin
-                    response_in_valid <= 1'b1;
+                    response_in_valid <= 1'b1;            // 条目字段见 response_in 装载块（MAIN_ACK 取 need_ack / msn）
                     resp_pending      <= 1'b1;
-                    response_in.qp_index    <= qp_index;
-                    response_in.is_read    <= is_read_request && !need_ack;
-                    response_in.psn   <= ack_psn;
-                    response_in.syndrome   <= syndrome;
-                    response_in.msn   <= msn;   // 注意：这里是自增前的 msn，与 fin_fast_path（:290）用的 fin_msn（已 +1）不一致。
-                    // 本端 roce_req 不读 msn，自环测不出差异；接 CX7 跑 SEND 混合流量时
-                    // 两条路径回的 AETH msn 不同，可能暴露。待统一（见 §28.7 疑点 6）。
-                    response_in.virtual_address    <= header.reth_virtual_address;
-                    response_in.rkey  <= header.reth_rkey;
-                    response_in.payload_length   <= header.reth_length;
-                    fill_response_ctx;
                     if (syndrome == AETH_ACK) event_tx_ack <= !(is_read_request && !need_ack);
                     else                 event_tx_nak <= 1'b1;
                 end
@@ -1161,14 +1187,18 @@ module roce_resp
                     // payload 已在 MAIN_WRITE_DATA 收完、且不需要置 QP 错误时，DRAIN 只是空转一拍，
                     // 直接进 WRITE_BACK。
                     main_state <= (payload_consumed && !need_error) ? MAIN_WRITE_BACK : MAIN_DRAIN;
-                end else if (!(need_ack || is_read_request) && !resp_pending)
+                    payload_drain <= !(payload_consumed && !need_error);
+                end else if (!(need_ack || is_read_request) && !resp_pending) begin
                     main_state <= (payload_consumed && !need_error) ? MAIN_WRITE_BACK : MAIN_DRAIN;
+                    payload_drain <= !(payload_consumed && !need_error);
+                end
             end
             MAIN_DRAIN: if (payload_consumed || (rx_payload_valid && rx_payload_last)) begin
                          // UD 的错误不把 QP 打进 ERR：UD 没有重传，一个坏包不该毁掉整个 QP。
                          // 错误本身仍按路径报（长度不符 → LOCAL_LEN_ERR CQE；翻译失败 → LOC_PROT_ERR）。
                          if (need_error && !is_ud_send) qp_set_error_main[qp_index] <= 1'b1;
                          main_state <= MAIN_WRITE_BACK;
+                         payload_drain <= 1'b0;
                      end
             MAIN_WRITE_BACK: begin
                 qp_expected_psn[qp_index[QP_W-1:LANE_BITS]] <= expected_psn; qp_msn[qp_index[QP_W-1:LANE_BITS]]  <= msn;  qp_ack_counter[qp_index[QP_W-1:LANE_BITS]] <= ack_counter;
