@@ -96,6 +96,15 @@ extern "C" {
 
 #define ALTERA_PCIE5_BAR2_MAGIC				0x4e540000U
 
+/*
+ * FPGA 里 info 扇区（ALTERA_IMG_SECTOR_ADDR 的前 512 B：MAC / 序列号 / 版本串）的镜像，
+ * 驱动读 MAC、序列号、版本串都读这里。FPGA 配置完成后自动从 flash 装载一次；
+ * 往 ALTERA_INFO_RELOAD_REG 写 1 会立即重读（qspi_flash_ctl 的 RESTART_RD_ADDR）。
+ */
+#define ALTERA_INFO_RAM_ADDR				0x01600000U
+#define ALTERA_INFO_RELOAD_REG				(ALTERA_INFO_RAM_ADDR + 0x4)
+#define ALTERA_INFO_RELOAD_TIMEOUT_MS		2000
+
 /************************** Function Prototypes ******************************/
 
 int init_hardware(void);
@@ -127,6 +136,8 @@ int altera_flash_read(u32 address, u32 len, u8 *res);
 int altera_flash_verify(u32 address, u32 len, u8 *src);
 void altera_flash_set_quiet(int quiet);
 int altera_update_act(void);
+void altera_info_reload(void);
+void altera_info_ram_read(u32 offset, u32 len, u8 *buf);
 int test_altera_highaddr(void);
 int altera_is_pcie5(void);
 void altera_set_current_adapter(int adapter_index, uint32_t pdf);

@@ -33,7 +33,9 @@
 #define CARD_FALSE_ID			0xDEED
 #define CARD_ADAPTER_FLAG		0xAD00
 #define CARD_INTERFACE_ID		-1
-#define CARD_SN_PREFIX			"MD"
+#define CARD_SN_PREFIX			"YN"	/* -n 写入的序列号必须以它开头 */
+#define CARD_SN_PREFIX_OLD		"MD"	/* 早期出厂的序列号，只用于识别与显示，不再允许写入 */
+#define CARD_MODEL_PREFIX_MD	"MD"	/* 旧 MD 型号（MD2X100GF27LA 等）升级件文件名的前缀 */
 #define CARD_MODEL_YN400G		"YN400GA7B041C"	/* 400G 板型号（YuanNIC-NH400-C），-c 与 -q 的 TYPE 共用 */
 #define CARD_VERSION_PREFIX		"ba"
 /*
@@ -131,6 +133,8 @@ int neti_read_sernum(int model, u32 addr, char *buf, int len);
 int neti_sernum_convert(u8 *src, int len);
 int neti_write_fwinfo(int model, u32 addr, const char *name, const char *sn);
 int neti_sernum_valid(const char *sn);
+int neti_sernum_present(const char *sn);
+int neti_altera_sernum_refresh(const char *sn);
 int neti_altera_info_update(u32 addr, const char *fwinfo, const char *sn, char *old_sn);
 int neti_write_bootinfo(int model, u32 jump_addr, u32 img_addr, u8 num);
 int neti_read_bootinfo(int model, u32 img_addr, u8 *num);
@@ -157,7 +161,7 @@ void usage(void)
 	printf("  -s, --set <address>             Set an adapter mac address\n");
 	printf("  -r, --read                      Read an adapter mac address\n");
 	printf("  -e, --erase <file>              Erase image!\n");
-	printf("  -n, --serial <SN>               Set an adapter serial number (MD..., at most %d chars)\n", NF_SERNUM_LEN);
+	printf("  -n, --serial <SN>               Set an adapter serial number (YN..., at most %d chars)\n", NF_SERNUM_LEN);
 	//printf("  -j, --jump <num>                Select the boot image, num range is 1-3\n");
 	printf("  -y, --sync                      Synchronize all MD card clocks\n");
 	printf("  -f, --fec enable/disable        Set Adapter fec enable/disable,only support 400G/100G\n");
@@ -177,9 +181,9 @@ void usage(void)
 	printf("  read the mac address of a port of the adapter\n");
 	printf("    ynictrl -c YN400GA7B041C -a 0 -i 0 -r\n");
 	printf("  update program and set the serial number in the same flash update\n");
-	printf("    ynictrl -c YN400GA7B041C -a 0 -p YN400GA7B041C-R26.12.02-B0116-20261123-1X400G-4203a24c.rpd -n MD400G260713002\n");
+	printf("    ynictrl -c YN400GA7B041C -a 0 -p YN400GA7B041C-R26.12.02-B0116-20261123-1X400G-4203a24c.rpd -n YN400G260713002\n");
 	printf("  write the serial number of the adapter\n");
-	printf("    ynictrl -c YN400GA7B041C -a 0 -n MD010G250217001\n");
+	printf("    ynictrl -c YN400GA7B041C -a 0 -n YN010G250217001\n");
 	//printf("  select the boot image 2\n");
 	//printf("    ynictrl -c YN400GA7B041C -j 2\n");
 	printf("  fec enable\n");
@@ -1191,7 +1195,7 @@ int neti_get_sys_info(int ifport)
 						printf("\n");
 					}
 					printf(" Serial Number : ");
-					if(strstr((char *)u_nfadpt->sernum[i], CARD_SN_PREFIX)) {
+					if(neti_sernum_present((const char *)u_nfadpt->sernum[i])) {
 						printf("%.*s\n", NF_SERNUM_LEN, u_nfadpt->sernum[i]);
 					} else {
 						printf("%s\n", "");
@@ -1613,6 +1617,10 @@ int neti_write_sernum(int model, u32 addr, u32 len, char *buf)
 			goto neti_quit;
 		printf("set success,");
 		printf("Serial number : %s (was %s)\n", buf, old_sn[0] ? old_sn : "empty");
+		/* flash 写完后让 FPGA 重读 info 扇区，-q 立即显示新序列号，不用重启 */
+		if(neti_altera_sernum_refresh(buf) != XST_SUCCESS)
+			printf("warning: serial number is in flash, but the adapter still reports the old one; "
+			       "it takes effect after the next power cycle\n");
 		goto neti_quit;
 
 	} else {
@@ -1802,8 +1810,8 @@ static int neti_fwinfo_from_name(const char *name, char *out, size_t outlen)
 }
 
 /*
- * 序列号：CARD_SN_PREFIX 开头、只含字母数字、不超过 NF_SERNUM_LEN 个字符。
- * -q 只显示带 CARD_SN_PREFIX 的序列号；超长会写进后面的版本串区域。
+ * 序列号：CARD_SN_PREFIX（YN）开头、只含字母数字、不超过 NF_SERNUM_LEN 个字符。
+ * 超长会写进后面的版本串区域。
  */
 int neti_sernum_valid(const char *sn)
 {
@@ -1819,6 +1827,53 @@ int neti_sernum_valid(const char *sn)
 			return XST_FAILURE;
 	}
 	return XST_SUCCESS;
+}
+
+/*
+ * flash 里读出来的那段是不是序列号：YN 开头，或早期出厂的 MD 开头。
+ * -q 只显示是序列号的内容（空白 flash 是 0xff，不显示）。
+ */
+int neti_sernum_present(const char *sn)
+{
+	if(!sn)
+		return 0;
+	return strncmp(sn, CARD_SN_PREFIX, strlen(CARD_SN_PREFIX)) == 0 ||
+	       strncmp(sn, CARD_SN_PREFIX_OLD, strlen(CARD_SN_PREFIX_OLD)) == 0;
+}
+
+/*
+ * 400G 板：让 FPGA 重新从 flash 装载 info 扇区，并确认序列号已更新。
+ *
+ * 驱动与 -q 读到的 MAC / 序列号 / 版本串不是直接读 flash，而是 FPGA 里的一份镜像
+ * （BAR 0x1600000 起，序列号在 +NF_SERNUM_ADDR）。这份镜像只在 FPGA 配置完成后自动装载一次，
+ * 所以只改 flash 时，要等下次上电才能看到新值。
+ * altera_info_reload() 让 FPGA 立即重读一遍；之后轮询镜像，直到序列号与刚写入的一致。
+ * 重读期间 FPGA 占用 SDM mailbox，调用前本进程对 flash 的操作必须都已结束。
+ */
+int neti_altera_sernum_refresh(const char *sn)
+{
+	u8 expect[NF_SERNUM_LEN_RU];
+	u8 got[NF_SERNUM_LEN_RU];
+	size_t n = strlen(sn);
+	int waited_ms;
+
+	memset(expect, 0xff, sizeof(expect));
+	memcpy(expect, sn, n);
+	expect[n] = '\0';
+
+	altera_info_reload();
+	for(waited_ms = 0; waited_ms <= ALTERA_INFO_RELOAD_TIMEOUT_MS; waited_ms += 10) {
+		usleep(10 * 1000);
+		altera_info_ram_read(NF_SERNUM_ADDR, NF_SERNUM_LEN_RU, got);
+		if(memcmp(got, expect, n + 1) == 0) {
+			if(verbose)
+				printf("info registers refreshed after %d ms\n", waited_ms + 10);
+			return XST_SUCCESS;
+		}
+	}
+	if(verbose)
+		printf("info registers still report \"%.*s\"\n", NF_SERNUM_LEN, (char *)got);
+	return XST_FAILURE;
 }
 
 /*
@@ -1848,7 +1903,7 @@ int neti_altera_info_update(u32 addr, const char *fwinfo, const char *sn, char *
 	}
 	memcpy(prev_sn, fs_buf + NF_SERNUM_ADDR, NF_SERNUM_LEN);
 	prev_sn[NF_SERNUM_LEN] = '\0';
-	if(!strstr(prev_sn, CARD_SN_PREFIX))
+	if(!neti_sernum_present(prev_sn))
 		prev_sn[0] = '\0';
 	if(old_sn)
 		memcpy(old_sn, prev_sn, NF_SERNUM_LEN_RU);
@@ -2879,10 +2934,10 @@ int main(int argc, char *argv[])
 #ifdef QSPI_FLASH
 					addr = TEST_ADDRESS;
 #else
-					if(strstr((char *)optarg, CARD_SN_PREFIX)) {
+					if(strstr((char *)optarg, CARD_MODEL_PREFIX_MD)) {
 						addr = XFAST_HW_RELEASE1_ADDR;
 					} else if(isdigit(optarg[0])) {
-						if(argv[optind] != NULL && (strstr(argv[optind], CARD_SN_PREFIX))) {
+						if(argv[optind] != NULL && (strstr(argv[optind], CARD_MODEL_PREFIX_MD))) {
 							if(atoi(optarg) == 1) {
 								hw_firmware = 1;
 								addr = XFAST_HW_RELEASE1_ADDR;
@@ -2928,7 +2983,7 @@ int main(int argc, char *argv[])
 				 */
 				pname = strrchr(optarg, '/');
 				pname = pname ? pname + 1 : optarg;
-				if(strstr(pname, CARD_SN_PREFIX) || neti_model_code(pname) != MODEL_MIN ||
+				if(strstr(pname, CARD_MODEL_PREFIX_MD) || neti_model_code(pname) != MODEL_MIN ||
 				   strchr(pname, '.')) {
 					prog_name = optarg;
 					prog_addr = addr;

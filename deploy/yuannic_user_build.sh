@@ -756,9 +756,9 @@ done
 
 ```bash
 sudo ./bin/ynictrl -c <型号> -a 0 -q                                              # 查询当前版本
-sudo ./bin/ynictrl -c <型号> -a 0 -n MD400G260713002                              # 只改序列号（不切镜像，不用重启）
+sudo ./bin/ynictrl -c <型号> -a 0 -n YN400G260713002                              # 只改序列号（不切镜像，不用重启）
 sudo ./bin/ynictrl -c <型号> -a 0 -p firmware/<型号>-R<版本>-….rpd                  # 升级 active 镜像，序列号保持不变
-sudo ./bin/ynictrl -c <型号> -a 0 -p firmware/<型号>-R<版本>-….rpd -n MD400G260713002  # 升级并同时写序列号
+sudo ./bin/ynictrl -c <型号> -a 0 -p firmware/<型号>-R<版本>-….rpd -n YN400G260713002  # 升级并同时写序列号
 ```
 
 ynictrl 通过 `yuannic.ko` 提供的 `/dev/ynic_netdev` 访问网卡，**必须先加载 `ko/yuanmcdma.ko`、再加载 `ko/yuannic.ko`**
@@ -773,7 +773,8 @@ ynictrl 通过 `yuannic.ko` 提供的 `/dev/ynic_netdev` 访问网卡，**必须
   卸载重装驱动、PCIe 重新扫描都不够（RDMA 能恢复，但网口发不出包）。重启之前不要再执行任何 ynictrl
   命令（`-q` 会读出空版本、`-p`/`-n` 会报 `Fail to execute QSPI Open`），也不要再跑业务。
   所以「升级 + 改序列号」请用上面的 `-p … -n …` **一条命令**完成，不要分两次。
-- 序列号以 `MD` 开头、只含字母数字、最多 15 位；不带 `-n` 时保留 flash 里原有的序列号。
+- 序列号以 `YN` 开头、只含字母数字、最多 15 位；不带 `-n` 时保留 flash 里原有的序列号。
+  `-n` 写完后网卡立即生效，`-q` 马上显示新序列号。早期出厂的 `MD` 开头序列号照常显示，但不能再写入。
 
 ## 6.1 环境初始化脚本 flash_and_init.sh
 

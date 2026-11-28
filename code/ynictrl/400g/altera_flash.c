@@ -740,6 +740,26 @@ int altera_update_act(void)
 	return ret;
 }
 
+/* 让 FPGA 立即从 flash 重读 info 扇区（重读期间 FPGA 占用 SDM mailbox，约几十 ms） */
+void altera_info_reload(void)
+{
+	write_register(ALTERA_INFO_RELOAD_REG - BASE_ADDRESS, 1);
+}
+
+/* 读 FPGA 里的 info 扇区镜像：offset / len 是扇区内的字节偏移与长度，按 4 字节读、小端拆开 */
+void altera_info_ram_read(u32 offset, u32 len, u8 *buf)
+{
+	u32 i, j, word;
+
+	for (i = offset & ~3U; i < offset + len; i += 4) {
+		word = read_register(ALTERA_INFO_RAM_ADDR + i - BASE_ADDRESS);
+		for (j = 0; j < 4; j++) {
+			if (i + j >= offset && i + j < offset + len)
+				buf[i + j - offset] = (word >> (8 * j)) & 0xff;
+		}
+	}
+}
+
 int test_altera_highaddr(void)
 {
 	int ret = XST_SUCCESS;
