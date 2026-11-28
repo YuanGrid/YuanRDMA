@@ -29,7 +29,14 @@ module roce_engine
     parameter int USERF_W        = 7,
     parameter int CORE_CLOCK_MHZ = 250,
     parameter int LANES          = 2,
-    parameter int LANE_ID        = 0
+    parameter int LANE_ID        = 0,
+    // RX payload 拍宽（1024 / 2048）：rx_payload_data 每拍 RX_DW/8 字节，第 0 字节在首拍 bit[7:0]，
+    // 只有末拍不满。resp / req 把 payload 拍原样转给 DMA 写客户端 0 / 1。
+    parameter int RX_DW          = 1024,
+    // DMA 写数据拍宽（1024 / 2048）：4 个写客户端、u_arb、两级写数据 skid、u_dma 的写数据都是 WR_DW 位，
+    // 每个写请求送 ceil(len / (WR_DW/8)) 拍。窄于 WR_DW 的客户端经 roce_wr_pack 拼拍（见下）。
+    // 两个都取 1024 时与加参数之前逐位等价。
+    parameter int WR_DW          = 1024
 )(
     input  wire                   core_clk,
     input  wire                   dp_rst,
@@ -110,7 +117,7 @@ module roce_engine
     input  rx_hdr_t               rx_header,
     input  wire                   rx_payload_valid,
     output wire                   rx_payload_ready,
-    input  wire [1023:0]          rx_payload_data,
+    input  wire [RX_DW-1:0]       rx_payload_data,
     input  wire                   rx_payload_last,
     // CQE 出口（到共享 roce_cq）
     output wire                   resp_cqe_valid,
@@ -167,6 +174,15 @@ module roce_engine
 );
     localparam int LANE_W = (LANES <= 2) ? 1 : (LANES <= 4) ? 2 : 3;
     localparam int CQC_W  = $bits(cqc_t);
+
+    // RX_DW > WR_DW 要把一个 RX 拍拆成几个写拍，末拍拆不拆得看本包剩余字节数（rx 流没有 keep），
+    // 没有实现；其余组合由 roce_wr_pack 拼拍。
+    initial begin
+        if ((RX_DW != 1024 && RX_DW != 2048) || (WR_DW != 1024 && WR_DW != 2048))
+            $fatal(1, "roce_engine: RX_DW=%0d / WR_DW=%0d 只能取 1024 或 2048", RX_DW, WR_DW);
+        if (RX_DW > WR_DW)
+            $fatal(1, "roce_engine: RX_DW=%0d 不能大于 WR_DW=%0d", RX_DW, WR_DW);
+    end
 
     // ------------------------------------------------------------ core 域复位第 3 级（B6417）
     // roce_top 已把 dp_rst 寄存两级（全局一根 → 每 lane 一根），这里按子模块再复制一份，
@@ -248,14 +264,17 @@ module roce_engine
     wire [3:0]    client_read_valid, client_read_ready;
     wire [255:0]  client_read_request_address, client_read_request_page1;
     wire [51:0]   client_read_request_length;
-    wire [1023:0] client_read_data;
-    wire [127:0]  client_read_keep;
+    // 2048 位通路：读数据 2048 位。tx（tag 2）取整宽；其余客户端只接低 1024 位，
+    // 由 u_rd_narrow 保证它们看到的仍是原来的 128 B/拍序列（见 roce_dma_rd_narrow.sv）。
+    localparam int RD_DW = 2048;
+    wire [RD_DW-1:0]   client_read_data;
+    wire [RD_DW/8-1:0] client_read_keep;
     wire          client_read_last, client_read_error;
     wire [3:0]    client_write_request_valid, client_write_request_ready;
     wire [3:0]    client_write_valid, client_write_ready, client_write_complete;
     wire [255:0]  client_write_request_address, client_write_request_page1;
     wire [51:0]   client_write_request_length;
-    wire [4095:0] client_write_data;
+    wire [4*WR_DW-1:0] client_write_data;
     wire          client_write_complete_error;
 
     assign client_write_request_valid[2]            = cq_dma_write_request_valid;
@@ -265,15 +284,18 @@ module roce_engine
     assign client_write_request_length[2*13 +: 13]  = cq_dma_write_request_length;
     assign client_write_valid[2]                    = cq_dma_write_valid;
     assign cq_dma_write_ready                       = client_write_ready[2];
-    assign client_write_data[2*1024 +: 1024]        = cq_dma_write_data;
+    // CQE 只有 32 B（request_length 恒 32），一个请求恒 1 拍，与 WR_DW 无关：高位零扩展即可，
+    // 多出来的字节由 roce_dma 按请求长度算的 wstrb 屏蔽。
+    assign client_write_data[2*WR_DW +: WR_DW]      = WR_DW'(cq_dma_write_data);
 
     wire          dn_read_request_valid, dn_read_request_ready, dn_read_valid, dn_read_ready;
     wire          dn_read_last, dn_read_error;
     wire [63:0]   dn_read_request_address, dn_read_request_page1;
-    wire [127:0]  dn_read_keep;
+    wire [RD_DW/8-1:0] dn_read_keep;
     wire [12:0]   dn_read_request_length, dn_write_request_length;
     wire [3:0]    dn_read_request_tag, dn_read_tag;
-    wire [1023:0] dn_read_data, dn_write_data;
+    wire [RD_DW-1:0] dn_read_data;
+    wire [WR_DW-1:0] dn_write_data;
     wire          dn_write_request_valid, dn_write_request_ready;
     wire          dn_write_valid, dn_write_ready, dn_write_complete, dn_write_complete_error;
     wire [63:0]   dn_write_request_address, dn_write_request_page1;
@@ -281,14 +303,15 @@ module roce_engine
     wire          arb_read_request_valid, arb_read_request_ready, arb_read_valid, arb_read_ready;
     wire          arb_read_last, arb_read_error;
     wire [63:0]   arb_read_request_address, arb_read_request_page1;
-    wire [127:0]  arb_read_keep;
+    wire [RD_DW/8-1:0] arb_read_keep;
     wire [12:0]   arb_read_request_length, arb_write_request_length;
     wire [3:0]    arb_read_request_tag, arb_read_tag;
-    wire [1023:0] arb_read_data, arb_write_data;
+    wire [RD_DW-1:0] arb_read_data;
+    wire [WR_DW-1:0] arb_write_data;
     wire          arb_write_request_valid, arb_write_request_ready, arb_write_valid, arb_write_ready;
     wire [63:0]   arb_write_request_address, arb_write_request_page1;
 
-    roce_dma_arb #(.READ_CLIENTS(4), .WRITE_CLIENTS(4)) u_arb (
+    roce_dma_arb #(.READ_CLIENTS(4), .WRITE_CLIENTS(4), .RD_DW(RD_DW), .WR_DW(WR_DW)) u_arb (
         .clk(core_clk), .rst(rst_arb),
         .dma_read_request_valid(client_read_request_valid),
         .dma_read_request_ready(client_read_request_ready),
@@ -341,7 +364,7 @@ module roce_engine
     //   读请求  u_arb → u_dma     {tag, length, page1, address}              145 位
     //   写请求  u_arb → u_dma     {length, page1, address}                   141 位
     //   读数据  u_dma → u_arb     {error, tag, last, keep, data}            1158 位
-    //   写数据  u_arb → u_dma     data                                      1024 位
+    //   写数据  u_arb → u_dma     data                                     WR_DW 位
     // 代价：每个方向多 1 拍固定延迟，吞吐不变（skid 两级，m_ready 恒 1 时每拍一个）。
     //
     // 顺序与死锁：读数据按序返回、skid 是 FIFO，tag 跟着走；写方向 u_arb 在一个请求的
@@ -362,16 +385,28 @@ module roce_engine
         .m_valid(dn_write_request_valid), .m_ready(dn_write_request_ready),
         .m_data({dn_write_request_length, dn_write_request_page1, dn_write_request_address})
     );
-    roce_skid #(.WIDTH(1 + 4 + 1 + 128 + 1024)) u_read_data_skid (
+    // 窄客户端拆拍：位于 u_dma 与读数据 skid 之间，见 roce_dma_rd_narrow.sv。
+    wire               nr_read_valid, nr_read_ready, nr_read_last, nr_read_error;
+    wire [RD_DW-1:0]   nr_read_data;
+    wire [RD_DW/8-1:0] nr_read_keep;
+    wire [3:0]         nr_read_tag;
+    roce_dma_rd_narrow #(.DW(RD_DW), .TAG_W(4), .WIDE_TAG(2)) u_rd_narrow (
         .clk(core_clk), .rst(rst_glue),
-        .s_valid(dn_read_valid), .s_ready(dn_read_ready),
-        .s_data({dn_read_error, dn_read_tag, dn_read_last, dn_read_keep, dn_read_data}),
+        .s_valid(dn_read_valid), .s_ready(dn_read_ready), .s_data(dn_read_data), .s_keep(dn_read_keep),
+        .s_last(dn_read_last), .s_tag(dn_read_tag), .s_error(dn_read_error),
+        .m_valid(nr_read_valid), .m_ready(nr_read_ready), .m_data(nr_read_data), .m_keep(nr_read_keep),
+        .m_last(nr_read_last), .m_tag(nr_read_tag), .m_error(nr_read_error)
+    );
+    roce_skid #(.WIDTH(1 + 4 + 1 + RD_DW/8 + RD_DW)) u_read_data_skid (
+        .clk(core_clk), .rst(rst_glue),
+        .s_valid(nr_read_valid), .s_ready(nr_read_ready),
+        .s_data({nr_read_error, nr_read_tag, nr_read_last, nr_read_keep, nr_read_data}),
         .m_valid(arb_read_valid), .m_ready(arb_read_ready),
         .m_data({arb_read_error, arb_read_tag, arb_read_last, arb_read_keep, arb_read_data})
     );
     wire          mid_write_valid, mid_write_ready;
-    wire [1023:0] mid_write_data;
-    roce_skid #(.WIDTH(1024)) u_write_data_skid (
+    wire [WR_DW-1:0] mid_write_data;
+    roce_skid #(.WIDTH(WR_DW)) u_write_data_skid (
         .clk(core_clk), .rst(rst_glue),
         .s_valid(arb_write_valid), .s_ready(arb_write_ready),
         .s_data(arb_write_data),
@@ -384,7 +419,7 @@ module roce_engine
     // WRITE 续包走页缓存，同样的错位只会静默写错数据。B6432 上 server send_bw ~50% 轮次 remote access
     // error（§56.7）。第二级放在 u_dma 一侧：组合 ready 只走短线，两级之间是寄存器到寄存器的长线。
     // 代价：写数据多 1 拍固定延迟，吞吐不变；u_dma 收请求不看数据（见上），不引入互锁。
-    roce_skid #(.WIDTH(1024)) u_write_data_skid2 (
+    roce_skid #(.WIDTH(WR_DW)) u_write_data_skid2 (
         .clk(core_clk), .rst(rst_glue),
         .s_valid(mid_write_valid), .s_ready(mid_write_ready),
         .s_data(mid_write_data),
@@ -392,7 +427,7 @@ module roce_engine
         .m_data(dn_write_data)
     );
 
-    roce_dma #(.TAG_W(4)) u_dma (
+    roce_dma #(.TAG_W(4), .RD_DW(RD_DW), .WR_DW(WR_DW)) u_dma (
         .clk(core_clk), .rst(rst_dma), .pcie_clk(pcie_clk), .pcie_rst(dp_pcie_rst),
         .bas_m2s(virt_bas_m2s), .bas_s2m(virt_bas_s2m),
         .dma_read_request_valid(dn_read_request_valid),
@@ -431,6 +466,8 @@ module roce_engine
     wire              sel_write_valid_pre, sel_write_ready_pre;
     wire [63:0]       sel_write_address_pre, sel_write_page1_pre;
     wire [12:0]       sel_write_length_pre;
+    wire              test_write_valid, test_write_ready;   // u_dma_test → u_wr_pack3（1024 位）
+    wire [1023:0]     test_write_data;
 
     roce_dma_test u_dma_test (
         .clk(core_clk), .rst(rst_test),
@@ -444,16 +481,27 @@ module roce_engine
         .dma_read_request_page1(sel_read_page1_pre),
         .dma_read_request_length(sel_read_length_pre),
         .dma_read_valid(client_read_valid[3]), .dma_read_ready(client_read_ready[3]),
-        .dma_read_data(client_read_data), .dma_read_error(client_read_error),
+        .dma_read_data(client_read_data[1023:0]), .dma_read_error(client_read_error),
         .dma_write_request_valid(sel_write_valid_pre),
         .dma_write_request_ready(sel_write_ready_pre),
         .dma_write_request_address(sel_write_address_pre),
         .dma_write_request_page1(sel_write_page1_pre),
         .dma_write_request_length(sel_write_length_pre),
-        .dma_write_valid(client_write_valid[3]), .dma_write_ready(client_write_ready[3]),
-        .dma_write_data(client_write_data[3*1024 +: 1024]),
+        .dma_write_valid(test_write_valid), .dma_write_ready(test_write_ready),
+        .dma_write_data(test_write_data),
         .dma_write_complete(client_write_complete[3]),
         .dma_write_complete_error(client_write_complete_error)
+    );
+
+    // 自测的写数据就是 u_rd_narrow 之后的 128 B 窄读拍（u_dma_test 里 write_valid = read_valid），
+    // WR_DW=2048 时两拍拼一拍；请求边界取同拍的读 last（client_read_last 对所有读客户端共用，
+    // client_read_valid[3] 那一拍就是本拍的 last）。WR_DW=1024 时 u_wr_pack3 是纯连线。
+    roce_wr_pack #(.IN_W(1024), .OUT_W(WR_DW)) u_wr_pack3 (
+        .clk(core_clk), .rst(rst_glue),
+        .s_valid(test_write_valid), .s_ready(test_write_ready),
+        .s_data(test_write_data), .s_last(client_read_last),
+        .m_valid(client_write_valid[3]), .m_ready(client_write_ready[3]),
+        .m_data(client_write_data[3*WR_DW +: WR_DW])
     );
 
     // 读/写各一个 1 深度 skid：valid/地址/长度都寄存，ready 只依赖寄存器
@@ -516,8 +564,47 @@ module roce_engine
     tx_job_t responder_job;
     wire [511:0] resp_qp_context;     // u_resp 当前包的 QPC 工作副本（CNP 组头字段从这里锁存）
 
+    // resp / req 的 payload 落地：写数据就是 RX payload 拍（RX_DW 位），经 roce_wr_pack 到写客户端 0 / 1。
+    // RX_DW == WR_DW（1024/1024、2048/2048）时 u_wr_pack0/1 是纯连线；RX_DW < WR_DW 时按 rx_payload_last
+    // 拼拍（resp/req 的 dma_write_valid 只在转发 payload 时拉高，那一拍的 rx_payload_last 就是本拍的 last）。
+    wire               resp_write_valid, resp_write_ready, req_write_valid, req_write_ready;
+    wire [RX_DW-1:0]   resp_write_data, req_write_data;
+    roce_wr_pack #(.IN_W(RX_DW), .OUT_W(WR_DW)) u_wr_pack0 (
+        .clk(core_clk), .rst(rst_glue),
+        .s_valid(resp_write_valid), .s_ready(resp_write_ready),
+        .s_data(resp_write_data), .s_last(rx_payload_last),
+        .m_valid(client_write_valid[0]), .m_ready(client_write_ready[0]),
+        .m_data(client_write_data[0*WR_DW +: WR_DW])
+    );
+    roce_wr_pack #(.IN_W(RX_DW), .OUT_W(WR_DW)) u_wr_pack1 (
+        .clk(core_clk), .rst(rst_glue),
+        .s_valid(req_write_valid), .s_ready(req_write_ready),
+        .s_data(req_write_data), .s_last(rx_payload_last),
+        .m_valid(client_write_valid[1]), .m_ready(client_write_ready[1]),
+        .m_data(client_write_data[1*WR_DW +: WR_DW])
+    );
+
+    // resp 的 RQ WQE 预取读请求经一级全寄存器 skid 再进仲裁器（B0118 时序）。
+    // 原来 u_arb 对客户端 1 的 ready 是组合的：u_tx 在途 FIFO 满标志 → u_tx 读请求 valid → u_arb 轮询选路
+    // → client_read_request_ready[1] → u_resp 预取器的 pf_fire → 下标加法与比较 → pf_req_qp 装载使能，
+    // 10 级、−0.112（112 条）。skid 的 s_ready 只看寄存器，这条环被切断。
+    // 代价：预取读请求晚 1 拍进仲裁器（预取深度 16，只在 RQ 环冷启动时可见），吞吐不变；payload 通路不经过它。
+    // 读返回仍按仲裁顺序回来（skid 是 FIFO，客户端 1 的请求顺序不变），预取器的 owner FIFO 按握手记账，
+    // skid 里多压住的至多 2 条照样计入 pf_inflight（上限 32）。复位与 u_resp 同拍（rst_glue / rst_resp 同源同级）。
+    wire          resp_rd_req_valid, resp_rd_req_ready;
+    wire [63:0]   resp_rd_req_address, resp_rd_req_page1;
+    wire [12:0]   resp_rd_req_length;
+    roce_skid #(.WIDTH(13 + 64 + 64)) u_resp_rd_req_skid (
+        .clk(core_clk), .rst(rst_glue),
+        .s_valid(resp_rd_req_valid), .s_ready(resp_rd_req_ready),
+        .s_data({resp_rd_req_length, resp_rd_req_page1, resp_rd_req_address}),
+        .m_valid(client_read_request_valid[1]), .m_ready(client_read_request_ready[1]),
+        .m_data({client_read_request_length[1*13 +: 13], client_read_request_page1[1*64 +: 64],
+                 client_read_request_address[1*64 +: 64]})
+    );
+
     // S4：LANE_ID 让每个实例只持有自己 1/4 的每 QP 阵列（应答方 32 项而不是 128 项）
-    roce_resp #(.LANE_ID(LANE_ID)) u_resp (
+    roce_resp #(.LANE_ID(LANE_ID), .RX_DW(RX_DW)) u_resp (
         .clk(core_clk), .rst(rst_resp), .local_ip(local_ip), .qp_context_o(resp_qp_context),
         .qpc_rd_addr(qpc_rdp_addr[2*16 +: 16]), .qpc_rd_data(qpc_rdp_data[2*509 +: 509]),
         .qpc_rd_addr_q(qpc_rdp_addr_q[2*16 +: 16]), .qpc_rd_fresh(qpc_rdp_fresh[2]),
@@ -541,20 +628,20 @@ module roce_engine
         .translate_physical_address0(translate_physical_address0),
         .translate_physical_page1(translate_physical_page1),
         .translate_error(translate_error),
-        .dma_read_request_valid(client_read_request_valid[1]),
-        .dma_read_request_ready(client_read_request_ready[1]),
-        .dma_read_request_address(client_read_request_address[1*64 +: 64]),
-        .dma_read_request_page1(client_read_request_page1[1*64 +: 64]),
-        .dma_read_request_length(client_read_request_length[1*13 +: 13]),
+        .dma_read_request_valid(resp_rd_req_valid),
+        .dma_read_request_ready(resp_rd_req_ready),
+        .dma_read_request_address(resp_rd_req_address),
+        .dma_read_request_page1(resp_rd_req_page1),
+        .dma_read_request_length(resp_rd_req_length),
         .dma_read_valid(client_read_valid[1]), .dma_read_ready(client_read_ready[1]),
-        .dma_read_data(client_read_data),
+        .dma_read_data(client_read_data[1023:0]),
         .dma_write_request_valid(client_write_request_valid[0]),
         .dma_write_request_ready(client_write_request_ready[0]),
         .dma_write_request_address(client_write_request_address[0*64 +: 64]),
         .dma_write_request_page1(client_write_request_page1[0*64 +: 64]),
         .dma_write_request_length(client_write_request_length[0*13 +: 13]),
-        .dma_write_valid(client_write_valid[0]), .dma_write_ready(client_write_ready[0]),
-        .dma_write_data(client_write_data[0*1024 +: 1024]),
+        .dma_write_valid(resp_write_valid), .dma_write_ready(resp_write_ready),
+        .dma_write_data(resp_write_data),
         .cqe_valid(resp_cqe_valid), .cqe_ready(resp_cqe_ready),
         .cqe_cq_index(resp_cqe_cq), .cqe_data(resp_cqe_data),
         .tx_job_valid(responder_job_valid), .tx_job_ready(responder_job_ready),
@@ -629,10 +716,10 @@ module roce_engine
         end
     end
 
-    // S4：roce_req 的每 QP 阵列缩容只有 impl:roce_req 做了才生效，参数在这里一并传好
-    //（未声明的 parameter 由 Verilator 报 PINNOTFOUND 警告，-Wno-fatal 不拦；
-    //  roce_req 加了参数之后自动接上，不需要再改本文件）。
-    roce_req #(.CORE_CLOCK_MHZ(CORE_CLOCK_MHZ), .LANE_ID(LANE_ID)) u_req (
+    // S4：roce_req 的每 QP 阵列缩容只有 impl:roce_req 做了才生效，参数在这里一并传好。
+    // 注意：给子模块传它没有声明的 parameter，Verilator 5 报的是 %Error-PINNOTFOUND，-Wno-fatal 拦不住，
+    // Quartus 同样报错——只能给已经声明了该参数的模块传参。
+    roce_req #(.CORE_CLOCK_MHZ(CORE_CLOCK_MHZ), .LANE_ID(LANE_ID), .RX_DW(RX_DW)) u_req (
         .clk(core_clk), .rst(rst_req), .local_ip(local_ip),
         .qpc_rd0_addr(qpc_rdp_addr[0 +: 16]), .qpc_rd0_data(qpc_rdp_data[0 +: 509]),
         .qpc_rd0_addr_q(qpc_rdp_addr_q[0 +: 16]), .qpc_rd0_fresh(qpc_rdp_fresh[0]),
@@ -659,20 +746,22 @@ module roce_engine
         .translate_physical_address0(translate_physical_address0),
         .translate_physical_page1(translate_physical_page1),
         .translate_error(translate_error),
+        // 2048 位通路：发送页缓存的 MPT 写作废（与 u_resp 同一组表命令信号）
+        .table_request(table_request), .table_write_enable(table_write_enable), .table_select(table_select),
         .dma_read_request_valid(client_read_request_valid[0]),
         .dma_read_request_ready(client_read_request_ready[0]),
         .dma_read_request_address(client_read_request_address[0*64 +: 64]),
         .dma_read_request_page1(client_read_request_page1[0*64 +: 64]),
         .dma_read_request_length(client_read_request_length[0*13 +: 13]),
         .dma_read_valid(client_read_valid[0]), .dma_read_ready(client_read_ready[0]),
-        .dma_read_data(client_read_data),
+        .dma_read_data(client_read_data[1023:0]),
         .dma_write_request_valid(client_write_request_valid[1]),
         .dma_write_request_ready(client_write_request_ready[1]),
         .dma_write_request_address(client_write_request_address[1*64 +: 64]),
         .dma_write_request_page1(client_write_request_page1[1*64 +: 64]),
         .dma_write_request_length(client_write_request_length[1*13 +: 13]),
-        .dma_write_valid(client_write_valid[1]), .dma_write_ready(client_write_ready[1]),
-        .dma_write_data(client_write_data[1*1024 +: 1024]),
+        .dma_write_valid(req_write_valid), .dma_write_ready(req_write_ready),
+        .dma_write_data(req_write_data),
         .cqe_valid(req_cqe_valid), .cqe_ready(req_cqe_ready),
         .cqe_cq_index(req_cqe_cq), .cqe_data(req_cqe_data),
         .tx_job_valid(requester_job_valid), .tx_job_ready(requester_job_ready),
@@ -847,11 +936,12 @@ module roce_engine
     wire responder_job_valid_gated = responder_job_valid && !responder_job_blocked;
 
     wire          tx_frame_valid, tx_frame_ready, tx_frame_last;
-    wire [1023:0] tx_frame_data;
-    wire [127:0]  tx_frame_keep;
-    wire [6:0]    tx_frame_last_bytes, tx_frame_last_beat_bytes;
+    // 2048 位通路：roce_tx → roce_tx_out 之间是 RD_DW 位（core 域），tx_out 在 mac 域拆回 1024。
+    wire [RD_DW-1:0]   tx_frame_data;
+    wire [RD_DW/8-1:0] tx_frame_keep;
+    wire [$clog2(RD_DW/8)-1:0] tx_frame_last_bytes, tx_frame_last_beat_bytes;
 
-    roce_tx u_tx (
+    roce_tx #(.DW(RD_DW)) u_tx (
         .clk(core_clk), .rst(rst_tx), .local_mac(local_mac), .local_ip(local_ip),
         .tx_job_valid({requester_job_valid, slot0_resp | slot0_cnp}),
         .tx_job_ready({requester_job_ready, slot0_ready}),
@@ -900,7 +990,7 @@ module roce_engine
     wire          egress_valid, egress_ready, egress_last;
     wire [DATA_W-1:0]  egress_data;
     wire [USERF_W-1:0] egress_last_bytes;
-    roce_tx_out u_tx_out (
+    roce_tx_out #(.DW(RD_DW)) u_tx_out (
         .clk(core_clk), .rst(rst_tx_out), .mac_clk(mac_clk), .mac_rst(dp_mac_rst),
         .frame_valid(tx_frame_valid), .frame_ready(tx_frame_ready),
         .frame_data(tx_frame_data), .frame_keep(tx_frame_keep), .frame_last(tx_frame_last),

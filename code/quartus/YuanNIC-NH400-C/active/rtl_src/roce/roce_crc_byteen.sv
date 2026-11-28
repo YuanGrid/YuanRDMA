@@ -275,11 +275,22 @@
          end
      end
  //input signal pipelining logic
+     // 2026-11-25：「末拍补零字节数」的 popcount 晚一拍做，总延迟不变。
+     // B0118（TX 2048 位）core_clk 违例簇：u_tx|u_skip_align|LessThan_0 → u_tx_out|u_icrc|u_crc|add_29，
+     // 351 条、8 级、−0.066——上游 keep 生成直接串进 DWIDTH/8 = 256 输入的 popcount 加法树。
+     // 它的结果 crc_rev_en_pipe_reg 要到第 PIPE_LVL 级才用（与 data_pipe_reg 同拍），前面纯是延迟链，
+     // 所以 PIPE_LVL >= 1 时先把 byteEn 寄存（byteEn_reg），popcount 从寄存器出发、直接写第 1 级，
+     // 第 0 级空出来。第 PIPE_LVL 级拿到的值与时刻都和改前逐位相同；PIPE_LVL = 0 保持原样。
+     // 代价：DWIDTH/8 个触发器（TX 每 lane 256、RX 128）。
+     logic [DWIDTH/8-1:0] byteEn_reg = {(DWIDTH/8){1'b0}};
+     logic [DWIDTH/8-1:0] byteEn_cnt;
+     always_ff @(posedge clk) byteEn_reg <= byteEn;
+     assign byteEn_cnt = (PIPE_LVL >= 1) ? byteEn_reg : byteEn;
      always_comb begin
          crc_rev_en_pipe_wire = {$clog2(DWIDTH/8){1'b0}};
  
          for (int i = 0; i < DWIDTH/8; i++) begin
-             crc_rev_en_pipe_wire = crc_rev_en_pipe_wire + {~byteEn[i]};
+             crc_rev_en_pipe_wire = crc_rev_en_pipe_wire + {~byteEn_cnt[i]};
          end
      end
      // B6418：flitEn_reg / dlast_reg（以及下面的 crc_vld_rev_reg）这几个**有效位**改为同步复位。
@@ -289,9 +300,10 @@
      // 直到下一次复位（test_rx_order_datapath_reset 抓到的）。只有十几个寄存器，不影响 B6417 的时序改造
      // （那次去掉的是 1024 位的 din_reg）；数据流水仍然不复位。
      always_ff @(posedge clk) begin
-         crc_rev_en_pipe_reg[0] <= {<<{crc_rev_en_pipe_wire}};
+         // PIPE_LVL >= 1：popcount 来自 byteEn_reg（已晚一拍），直接写第 1 级；第 0 级不再使用（恒 0）。
+         crc_rev_en_pipe_reg[0] <= (PIPE_LVL >= 1) ? {$clog2(DWIDTH/8){1'b0}} : {<<{crc_rev_en_pipe_wire}};
          for (int i = 1; i <= PIPE_LVL; i++)
-             crc_rev_en_pipe_reg[i] <= crc_rev_en_pipe_reg[i-1];
+             crc_rev_en_pipe_reg[i] <= (i == 1) ? {<<{crc_rev_en_pipe_wire}} : crc_rev_en_pipe_reg[i-1];
          if (rst) begin
              dlast_reg  <= '0;
              flitEn_reg <= '0;

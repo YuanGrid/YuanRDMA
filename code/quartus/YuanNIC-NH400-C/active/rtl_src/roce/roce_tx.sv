@@ -16,11 +16,20 @@
 // 1024 bit（B6386）：引擎内部由 512 位加宽到 1024 位，与 roce_top/MAC 侧同宽，
 // 删掉了 roce_tx_out 的 512→1024 适配器。头部最长 74 B，一拍装得下，
 // BUILD_HEADER_BEAT1 状态删除（512 位时代 70/74 B 头要占两拍）。
+//
+// 2048 bit：DW 参数化，默认 2048（一拍 256 B）。payload 读回由 roce_dma
+// 直接给 256 B/拍，组包结构不变（PREP 1 拍 + payload 拍），1 KB 包 = 1 + 4 = 5 拍
+// （ceil(1094/256)），MTU 4096 = 17 拍。头仍恒单拍，右对齐到 256 B：
+// skip = 256 − header_length ∈ 182..202，跨度仍是 21（skip_align 的移位量仍 5 位）。
+// 任务里的 header_skip 仍按 128 B 口径（128 − L）生成，这里加常数 DW/8 − 128 换算，
+// 产生方（roce_req / roce_resp / CNP）不用改。DW=1024 与改动之前逐位等价。
 `default_nettype none
 `timescale 1ns/1ps
 module roce_tx
     import roce_pkg::*;
-(
+#(
+    parameter int DW = 2048
+)(
     input  wire                    clk,
     input  wire                    rst,
     input  wire  [47:0]            local_mac,
@@ -37,17 +46,17 @@ module roce_tx
     output wire  [12:0]            dma_read_request_length,
     input  wire                    dma_read_valid,
     output wire                    dma_read_ready,
-    input  wire  [1023:0]          dma_read_data,
-    input  wire  [127:0]           dma_read_keep,
+    input  wire  [DW-1:0]          dma_read_data,
+    input  wire  [DW/8-1:0]        dma_read_keep,
     input  wire                    dma_read_last,
     // 帧输出（不含 ICRC）
     output wire                    frame_valid,
     input  wire                    frame_ready,
-    output wire  [1023:0]          frame_data,
-    output wire  [127:0]           frame_keep,
+    output wire  [DW-1:0]          frame_data,
+    output wire  [DW/8-1:0]        frame_keep,
     output wire                    frame_last,
-    output wire  [6:0]             frame_last_bytes,
-    output wire  [6:0]             frame_last_beat_bytes,     // 末拍（不含 ICRC）有效字节数，0 表示 128
+    output wire  [$clog2(DW/8)-1:0] frame_last_bytes,
+    output wire  [$clog2(DW/8)-1:0] frame_last_beat_bytes,     // 末拍（不含 ICRC）有效字节数，0 表示 DW/8
     input  wire  [1:0]             cnp_bth_flags,             // B6434：{FECN, BECN}，只对 CNP 生效（默认 2'b01）
     // 重传代际的下发边带（B6461，来自同一 lane 的 roce_req；见 roce-optimization-log.md §111）。
     // roce_req 在**每次** REQ_RESTART 把该 QP 的代际 +1 并在那一拍发一个脉冲；本模块按 QP 记下当前值。
@@ -69,13 +78,17 @@ module roce_tx
     // 深度 16 需要 5 位，正好用掉原先的空位，roce_top / roce_debug 的位宽不用改。
     output wire  [9:0]             debug_state
 );
+    localparam int BEAT_BYTES = DW / 8;                       // 128 / 256
+    localparam int LBW        = $clog2(BEAT_BYTES);            // 末拍字节数位宽：7 / 8（mod BEAT_BYTES）
+    localparam int SKW        = LBW;                           // skip 位宽
+    localparam int SKIP_OFF   = BEAT_BYTES - 128;              // 任务 header_skip（128 B 口径）→ 本拍口径
     // ------------------------------------------------------------ A 级
     reg       issue_round_robin;
     wire      issue_pick = tx_job_valid[issue_round_robin] ? issue_round_robin : ~issue_round_robin;
     wire      issue_any  = |tx_job_valid;
     tx_job_t  issue_job;
     assign    issue_job = tx_job[issue_pick];
-    // 在途 FIFO 深度（B6413：8 → 16；B6457：16 → 32）。
+    // 在途 FIFO 深度（B6413：8 → 16；B6457：16 → 32；B0122：32 → 64）。
     //
     // 依据（§36.9 / §37）：1 MB 读响应的包率不随 core_clk 变化（100 MHz 8.88 Mpps、
     // 125 MHz 9.53 Mpps），而 8 / 包率 在两个频率下都约等于 840~900 ns，正是 PCIe 读往返；
@@ -93,9 +106,18 @@ module roce_tx
     // 而 32 深多出 34% 的往返余量（真实 PCIe 往返会随负载浮动）。再往上 40/48 就要第二块 M20K。
     // ALM 开销可忽略，代价只有 ADDR_WIDTH 4→5 位。
     // 上限约束不变：32 个 1024 B 读仍在 DMA 侧 read_credit（480）之内。
-    localparam int INFLIGHT_DEPTH = 32;
+    //
+    // B0122 改 64 的依据：TX 2048 位后组包每包 5.15 拍，
+    // 跑满端口要约 45 Mpps。B0121 板上单 QP 写 31.07 Mpps 时 32 槽常满（0x056C 在途 p50 31、
+    // 0x0578 未完成 AR p50 32），按 Little 定律有效往返约 1.03 µs，满速约需 47 槽。
+    // 2048 位喂数的 tx_inflight_rtt 仿真：depth 64 在 0～1100 ns 往返全部 5.15 拍。
+    // axis_async_fifo 只支持 2 的幂深度（ADDR_WIDTH = $clog2(DEPTH)），写 48 实际就是 64 深，
+    // 所以直接写 64。此时 DMA 侧 read_credit（480 拍 ÷ 每个 1 KB 读 8 拍，约 56 个请求在途）
+    // 会先于槽位成为上限。
+    localparam int INFLIGHT_DEPTH = 64;
+    localparam int INFLIGHT_UW    = $clog2(INFLIGHT_DEPTH) + 1;   // m_status_depth 位宽（64 深 = 7 位）
     wire      inflight_ready;
-    wire [5:0] inflight_used;      // 在途 FIFO 占用（深度 32，$clog2(32)+1 = 6 位）
+    wire [INFLIGHT_UW-1:0] inflight_used;      // 在途 FIFO 占用（0..INFLIGHT_DEPTH）
     wire      issue_needs_read = (issue_job.payload_length != 13'd0);
     assign dma_read_request_valid = issue_any && inflight_ready && issue_needs_read;
     assign dma_read_request_address  = issue_job.physical_address0;
@@ -209,7 +231,7 @@ module roce_tx
     wire [15:0] checksum_fold2 = checksum_fold1[15:0] + {15'd0, checksum_fold1[16]};
     wire [15:0] computed_checksum = swap16(~checksum_fold2);
 
-    reg [1023:0] header_computed;
+    reg [DW-1:0] header_computed;
     always @* begin
         header_computed = '0;
         header_computed[0   +: 48] = build_job.dmac;
@@ -277,22 +299,23 @@ module roce_tx
     // 历史（512 bit，§23）：那时头长 <= 64 的对齐到 64 B 以避开 skip_align 的
     // first_useful_beat=1，否则第 0 拍整拍被丢弃。1024 下 skip < 128 = BEAT_BYTES，
     // first_useful_beat 恒 0，这个区分不再需要，统一对齐到 128 B。
-    wire [6:0]    header_skip = build_job.header_skip;
+    wire [SKW-1:0] header_skip = SKW'(build_job.header_skip) + SKW'(SKIP_OFF);
 
     // 头部右对齐到 128 B。常量移位，纯连线 + 选择。
     // 语义：128 B 一拍里，头占**最低** header_length 字节([0 +: header_length*8])，
     // 右对齐后这 header_length 字节要落在 [ (128-L)*8 +: L*8 ]，即左移 (128-L)*8 位；
     // 之后 skip_align 用 meta_skip = header_skip = 128-L 丢掉低 (128-L) 字节，剩下的正好是头。
     // **两项必须成对**：case 里的移位量写错，skip 却仍按 L 丢字节 → 头整体错位（静默错帧）。
-    reg [1023:0] header_aligned;
+    // DW=2048 时对齐到 256 B：移位量统一加 SKIP_OFF 字节（与 header_skip 的换算同一个常数）。
+    reg [DW-1:0] header_aligned;
     always @* begin
         case (build_header_length)
-            7'd54:   header_aligned = header_computed << (74*8);    // 对齐 128 B
-            7'd58:   header_aligned = header_computed << (70*8);    // 对齐 128 B
-            7'd62:   header_aligned = header_computed << (66*8);    // UD（DETH 8 B）：(128-62)*8
-            7'd66:   header_aligned = header_computed << (62*8);    // UD_IMM（DETH 8 + Imm 4）：(128-66)*8
-            7'd70:   header_aligned = header_computed << (58*8);    // 对齐 128 B
-            default: header_aligned = header_computed << (54*8);    // 74 B 头（CNP / READ RESP）
+            7'd54:   header_aligned = header_computed << ((74+SKIP_OFF)*8);
+            7'd58:   header_aligned = header_computed << ((70+SKIP_OFF)*8);
+            7'd62:   header_aligned = header_computed << ((66+SKIP_OFF)*8);    // UD（DETH 8 B）
+            7'd66:   header_aligned = header_computed << ((62+SKIP_OFF)*8);    // UD_IMM（DETH 8 + Imm 4）
+            7'd70:   header_aligned = header_computed << ((58+SKIP_OFF)*8);
+            default: header_aligned = header_computed << ((54+SKIP_OFF)*8);    // 74 B 头（CNP / READ RESP）
         endcase
     end
 
@@ -302,15 +325,15 @@ module roce_tx
     wire        align_meta_valid = (build_state == BUILD_PREP) && build_job_valid && !build_job_stale;
     wire        align_in_valid = ((build_state == BUILD_PREP) && build_job_valid && !build_job_stale) ||
                                  ((build_state == BUILD_PAYLOAD) && dma_read_valid);
-    wire [1023:0] read_byte_mask;
+    wire [DW-1:0] read_byte_mask;
     genvar byte_lane;
     generate
-        for (byte_lane = 0; byte_lane < 128; byte_lane = byte_lane + 1) begin : gen_read_mask
+        for (byte_lane = 0; byte_lane < BEAT_BYTES; byte_lane = byte_lane + 1) begin : gen_read_mask
             assign read_byte_mask[byte_lane*8 +: 8] = {8{dma_read_keep[byte_lane]}};
         end
     endgenerate
     // PREP 拍把头部的唯一一拍与元数据同拍送出；payload 拍送 payload。
-    wire [1023:0] align_in_data = (build_state == BUILD_PREP) ? header_aligned :
+    wire [DW-1:0] align_in_data = (build_state == BUILD_PREP) ? header_aligned :
                                  (dma_read_data & read_byte_mask);       // 末拍无效字节清零（作 pad_count）
     // PREP 拍的 last：无 payload 时这一拍就是整帧的末拍。
     // 必须用 build_job（在途 FIFO 输出）而不是 job——job 在 PREP 拍还是上一包的值。
@@ -324,8 +347,9 @@ module roce_tx
     // 所以把移位窗口收窄到 [54, 74]：常数 54 B 变成纯连线的位选，桶形移位从 7 位降到 5 位、
     // 操作数从 2048 位降到 1192 位。语义与全窗口逐位等价，见 roce_skip_align.sv 文件头。
     // G0.4 残余（B6501 core −0.320 ns 的 4 条最差路径）的落地改动之一。
+    // DW=2048：窗口 [182, 203)，切片 2216 位，移位量仍 5 位。
     roce_skip_align #(
-        .DW(1024), .SKIP_BASE(54), .SKIP_RANGE(21)
+        .DW(DW), .SKIP_BASE(54 + SKIP_OFF), .SKIP_RANGE(21), .SKIP_W(SKW)
     ) u_skip_align (
         .clk(clk), .rst(rst),
         .debug_state(align_debug_state),
@@ -343,8 +367,8 @@ module roce_tx
     // 必须是 [6:0] 而不是 [7:0]：mod 256 会让 182 这样的帧长也算成 182，而下游按
     // "<= 124 则末拍装得下 ICRC" 判断，就会凭空多出一拍（B6386 首轮仿真踩到）。
     wire [12:0] frame_length_with_icrc = frame_length + 13'd4;
-    reg  [6:0]  info_last_bytes [0:3];
-    reg  [6:0]  info_last_beat_bytes [0:3];
+    reg  [LBW-1:0] info_last_bytes [0:3];
+    reg  [LBW-1:0] info_last_beat_bytes [0:3];
     reg  [1:0]  info_head, info_tail;
     wire        info_push = align_meta_valid && align_meta_ready;
     wire        info_pop  = frame_valid && frame_ready && frame_last;
@@ -354,8 +378,8 @@ module roce_tx
             info_tail <= 2'd0;
         end else begin
             if (info_push) begin
-                info_last_bytes[info_tail]      <= frame_length_with_icrc[6:0];
-                info_last_beat_bytes[info_tail] <= frame_length[6:0];
+                info_last_bytes[info_tail]      <= frame_length_with_icrc[LBW-1:0];
+                info_last_beat_bytes[info_tail] <= frame_length[LBW-1:0];
                 info_tail <= info_tail + 2'd1;
             end
             if (info_pop) info_head <= info_head + 2'd1;
@@ -393,12 +417,12 @@ module roce_tx
         endcase
     end
     // debug_state 的位宽与 CSR 0x056C 的布局是**固定契约**（[9:5] inflight / [4:2] skip_align /
-    // [1:0] build_state），深度 32 后 inflight_used 是 6 位，直接拼会让 debug_state 变成 11 位、
-    // roce_top 的 10 位连线失配。这里**饱和到 5 位**：深度 ≥32 时读全 1（即「已满」），
-    // 与原来 depth 16 读 16 的语义一致，CSR 位宽和现有解析工具都不用改。
+    // [1:0] build_state），深度 32 起 inflight_used 超过 5 位（64 深是 7 位），直接拼会让 debug_state
+    // 变宽、roce_top 的 10 位连线失配。这里**饱和到 5 位**：占用 ≥31 都读 31，CSR 位宽和现有解析工具都不用改。
+    // 深度 64 时 0x056C 的 31 只表示「≥31」；看实际在途数用 0x0578[15:8]（未完成 AR，8 位）。
     // B6461 起 build_state 多了编码 2 = BUILD_DROP（在丢一个带 payload 的旧重传），
     // deploy/yuancli 的译码表还没加这一项（2 会显示成原来的占位名），不影响其余读数。
-    wire [4:0] inflight_used_sat = inflight_used[5] ? 5'h1F : inflight_used[4:0];
+    wire [4:0] inflight_used_sat = (|inflight_used[INFLIGHT_UW-1:5]) ? 5'h1F : inflight_used[4:0];
     assign debug_state = {inflight_used_sat, align_debug_state, build_state};
 endmodule
 `default_nettype wire

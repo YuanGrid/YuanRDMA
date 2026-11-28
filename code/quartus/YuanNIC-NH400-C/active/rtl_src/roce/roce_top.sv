@@ -406,12 +406,20 @@ module roce_top
     //   (2) 单条 CDC 102.4 Gb/s，`-q 4` 读需要的 116 Gb/s 永远到不了。
     // 现在分流放在 CDC 之前（mac_clk 域，首拍即可解出 dest_qpn），每 lane 独立过域、独立解析。
     localparam int HDR_W = $bits(rx_hdr_t);
+    // RX_DW：core 域 RX 通路位宽（demux 的 FIFO 出口、parse、lane payload）。mac 侧与 rx_front 恒 1024。
+    // 1024 × core_clk 250 MHz = 256 Gb/s/lane，是 RX 单 QP 的上限；2048 翻倍到 512 Gb/s/lane。
+    // 引擎的 rx_payload_data 同宽（roce_engine #(.RX_DW(RX_DW))）。
+    // ENGINE_WR_DW：引擎 DMA 写数据拍宽（resp/req 落地 → u_arb → u_dma），取 2048 时 resp/req 的
+    // payload 拍原样进写通路；RX_DW 不能大于它（roce_engine 在展开期检查）。
+    localparam int RX_DW = 2048;
+    localparam int ENGINE_WR_DW = 2048;
+    localparam int RX_FRAME_W = 1 + RX_DW/8 + RX_DW;      // 寄存器级打平格式 {last, keep, data}
     wire          rx_frame_valid, rx_frame_ready, rx_frame_last;
     wire [1023:0] rx_frame_data;
     wire [127:0]  rx_frame_keep;
-    wire [LANES-1:0]       lane_frame_valid, lane_frame_ready, lane_frame_last;
-    wire [LANES*1024-1:0]  lane_frame_data;
-    wire [LANES*128-1:0]   lane_frame_keep;
+    wire [LANES-1:0]         lane_frame_valid, lane_frame_ready, lane_frame_last;
+    wire [LANES*RX_DW-1:0]   lane_frame_data;
+    wire [LANES*RX_DW/8-1:0] lane_frame_keep;
     wire [3:0]             rx_demux_debug;
     // demux 每 lane 统计（B6408）：已在 core_clk 域（demux 内部格雷码跨过来），直接进 roce_debug
     wire [LANES*32-1:0]    rx_demux_lane_frames;
@@ -454,8 +462,8 @@ module roce_top
     );
 
     // B6421 的 rx_front → rx_demux skid 已回退（B6423 基线取 B6420）：只多 1 拍延迟、0 违例但 core 余量没改善，
-    // 未上板验证，按「以 B6420 为基线」的决定丢掉。
-    roce_rx_demux #(.LANES(LANES), .DEPTH(64)) u_rx_demux (
+    // 未上板验证，按「以 B6420 为基线」的决定丢掉。（那是 mac 域的切口；core 域的切口见下面 gen_rx_parse。）
+    roce_rx_demux #(.LANES(LANES), .DEPTH(64), .OUT_DW(RX_DW)) u_rx_demux (
         .mac_clk(mac_clk), .mac_rst(dp_mac_rst_demux),
         .in_valid(rx_frame_valid), .in_ready(rx_frame_ready),
         .in_data(rx_frame_data), .in_keep(rx_frame_keep), .in_last(rx_frame_last),
@@ -468,30 +476,96 @@ module roce_top
         .lane_sop_stall(rx_demux_lane_sop_stall)
     );
 
-    // 每 lane 一份 parse：head/payload 各自的 valid/ready 直接对接该 lane 的引擎，
+    // 每 lane 一份 parse，head/payload 各自的 valid/ready 对接该 lane 的引擎；
     // roce_rx_qpn_split 不再需要（分流已经在 demux 里完成）。
-    wire [LANES-1:0]      lane_rx_header_valid, lane_rx_header_ready, lane_rx_payload_valid, lane_rx_payload_ready;
-    wire [LANES*HDR_W-1:0] lane_rx_header;
-    wire [LANES*1024-1:0] lane_rx_payload_data;
-    wire [LANES-1:0]      lane_rx_payload_last;
-    wire [LANES*3-1:0]    lane_rx_parse_debug;
+    wire [LANES-1:0]         lane_rx_header_valid, lane_rx_header_ready, lane_rx_payload_valid, lane_rx_payload_ready;
+    wire [LANES*HDR_W-1:0]   lane_rx_header;
+    wire [LANES*RX_DW-1:0]   lane_rx_payload_data;
+    // payload keep：引擎目前按 header.payload_length 计字节、不接 keep；保留这组线给需要的下游，
+    // 不接时综合会把寄存器级里对应的位剪掉。
+    wire [LANES*RX_DW/8-1:0] lane_rx_payload_keep;
+    wire [LANES-1:0]         lane_rx_payload_last;
+    wire [LANES*3-1:0]       lane_rx_parse_debug;
 
-    // B6422 的 parse → 引擎 payload skid 同样已回退（B6423 基线取 B6420）。
+    // ---- 每 lane 三级全寄存器 register slice（roce_skid：s_ready 与 m_valid/m_data 都是寄存器，满吞吐 1 拍/拍）
+    //
+    //   demux FIFO ──u_in_skid──► parse ──u_hdr_skid──────────────────► 引擎 rx_header
+    //                                   └─u_pay_skid──u_pay_eng_skid──► 引擎 rx_payload（B0121 起两级，见下）
+    //
+    // 为什么现在要：B0118（TX 加宽到 2048 后面积变大、RX 模块被挤远）core_clk −0.219 ns，RX 这一块的
+    // 违例组全是走线占 86%、逻辑只有 3 级的长线：
+    //   1) 引擎 u_resp/u_req 的 ready → parse（skip_align 的 can_advance、头 FIFO）→ demux FIFO 的
+    //      rd_ptr：引擎反压组合地穿过 parse 回到 FIFO 读侧；
+    //   2) parse 的 u_skip_align.out_* / u_header_fifo.m_axis_pipe_reg → u_req/u_resp 的组合译码，
+    //      以及反方向 ready → skip_align 的 out_valid/frame_flush。
+    // u_in_skid 切断 (1) 在 parse 入口的那一段（FIFO 的 m_axis_tready 只看寄存器 !skid_valid），
+    // u_hdr_skid / u_pay_skid 切断 (2) 的数据与 ready 两个方向。
+    // B6421/B6422 当年回退的理由是「只多 1 拍、core 余量没改善」——那时 RX 不在关键路径上，现在在。
+    // 代价：头部多 2 拍、payload 多 3 拍固定延迟（入口 1 + 出口 1，payload 出口两级），稳态吞吐不变。
     genvar rx_lane;
     generate
         for (rx_lane = 0; rx_lane < LANES; rx_lane = rx_lane + 1) begin : gen_rx_parse
-            roce_rx_parse u_rx_parse (
+            // demux FIFO → parse
+            wire                   parse_in_valid, parse_in_ready;
+            wire [RX_FRAME_W-1:0]  parse_in_flat;
+            roce_skid #(.WIDTH(RX_FRAME_W)) u_in_skid (
                 .clk(core_clk), .rst(dp_rst_parse[rx_lane]),
-                .in_valid(lane_frame_valid[rx_lane]), .in_ready(lane_frame_ready[rx_lane]),
-                .in_data(lane_frame_data[rx_lane*1024 +: 1024]),
-                .in_keep(lane_frame_keep[rx_lane*128 +: 128]),
-                .in_last(lane_frame_last[rx_lane]),
-                .rx_header_valid(lane_rx_header_valid[rx_lane]), .rx_header_ready(lane_rx_header_ready[rx_lane]),
-                .rx_header(lane_rx_header[rx_lane*HDR_W +: HDR_W]),
-                .out_valid(lane_rx_payload_valid[rx_lane]), .out_ready(lane_rx_payload_ready[rx_lane]),
-                .out_data(lane_rx_payload_data[rx_lane*1024 +: 1024]), .out_keep(), .out_last(lane_rx_payload_last[rx_lane]),
+                .s_valid(lane_frame_valid[rx_lane]), .s_ready(lane_frame_ready[rx_lane]),
+                .s_data({lane_frame_last[rx_lane], lane_frame_keep[rx_lane*RX_DW/8 +: RX_DW/8],
+                         lane_frame_data[rx_lane*RX_DW +: RX_DW]}),
+                .m_valid(parse_in_valid), .m_ready(parse_in_ready), .m_data(parse_in_flat)
+            );
+
+            wire                   hdr_valid, hdr_ready;
+            rx_hdr_t               hdr;
+            wire                   pay_valid, pay_ready, pay_last;
+            wire [RX_DW-1:0]       pay_data;
+            wire [RX_DW/8-1:0]     pay_keep;
+            roce_rx_parse #(.DW(RX_DW)) u_rx_parse (
+                .clk(core_clk), .rst(dp_rst_parse[rx_lane]),
+                .in_valid(parse_in_valid), .in_ready(parse_in_ready),
+                .in_data(parse_in_flat[0 +: RX_DW]),
+                .in_keep(parse_in_flat[RX_DW +: RX_DW/8]),
+                .in_last(parse_in_flat[RX_FRAME_W-1]),
+                .rx_header_valid(hdr_valid), .rx_header_ready(hdr_ready), .rx_header(hdr),
+                .out_valid(pay_valid), .out_ready(pay_ready),
+                .out_data(pay_data), .out_keep(pay_keep), .out_last(pay_last),
                 .debug_state(lane_rx_parse_debug[rx_lane*3 +: 3])
             );
+
+            // parse → 引擎：头部
+            roce_skid #(.WIDTH(HDR_W)) u_hdr_skid (
+                .clk(core_clk), .rst(dp_rst_parse[rx_lane]),
+                .s_valid(hdr_valid), .s_ready(hdr_ready), .s_data(hdr),
+                .m_valid(lane_rx_header_valid[rx_lane]), .m_ready(lane_rx_header_ready[rx_lane]),
+                .m_data(lane_rx_header[rx_lane*HDR_W +: HDR_W])
+            );
+
+            // parse → 引擎：payload，两级寄存器（u_pay_skid 靠 parse，u_pay_eng_skid 靠引擎）
+            //
+            // B0120（TX/RX 都 2048 位）core_clk −0.023 ns 的违例之一就在这里：只有一级时，u_pay_skid 的输出
+            // 和引擎握手成环——main_data 的 last 位 → u_req 状态转移，u_req.state → rx_payload_ready → u_disp
+            // → u_pay_skid 装载使能（扇出 2305 位）。一级 skid 两头都要靠，布局器只能把它摆在 parse 与引擎
+            // 中间（lane3 实测 X305_Y117 ↔ X361_Y64），环上两段都是 1.2～1.6 ns 的长线。
+            // 加第二级后，跟引擎成环的只剩 u_pay_eng_skid，可以贴着引擎放；两级之间 data 与 ready 都是
+            // 寄存器到寄存器，走线再长也不在环上。代价：payload 再多 1 拍固定延迟，稳态吞吐不变（roce_skid 满吞吐）。
+            wire                   pay_mid_valid, pay_mid_ready;
+            wire [RX_FRAME_W-1:0]  pay_mid_flat;
+            roce_skid #(.WIDTH(RX_FRAME_W)) u_pay_skid (
+                .clk(core_clk), .rst(dp_rst_parse[rx_lane]),
+                .s_valid(pay_valid), .s_ready(pay_ready), .s_data({pay_last, pay_keep, pay_data}),
+                .m_valid(pay_mid_valid), .m_ready(pay_mid_ready), .m_data(pay_mid_flat)
+            );
+            wire [RX_FRAME_W-1:0]  pay_out_flat;
+            roce_skid #(.WIDTH(RX_FRAME_W)) u_pay_eng_skid (
+                .clk(core_clk), .rst(dp_rst_parse[rx_lane]),
+                .s_valid(pay_mid_valid), .s_ready(pay_mid_ready), .s_data(pay_mid_flat),
+                .m_valid(lane_rx_payload_valid[rx_lane]), .m_ready(lane_rx_payload_ready[rx_lane]),
+                .m_data(pay_out_flat)
+            );
+            assign lane_rx_payload_data[rx_lane*RX_DW +: RX_DW]     = pay_out_flat[0 +: RX_DW];
+            assign lane_rx_payload_keep[rx_lane*RX_DW/8 +: RX_DW/8] = pay_out_flat[RX_DW +: RX_DW/8];
+            assign lane_rx_payload_last[rx_lane]                    = pay_out_flat[RX_FRAME_W-1];
         end
     endgenerate
 
@@ -561,7 +635,7 @@ module roce_top
         for (lane = 0; lane < LANES; lane = lane + 1) begin : gen_lane
             roce_engine #(
                 .DATA_W(DATA_W), .USERF_W(USERF_W), .CORE_CLOCK_MHZ(CORE_CLOCK_MHZ),
-                .LANES(LANES), .LANE_ID(lane)
+                .LANES(LANES), .LANE_ID(lane), .RX_DW(RX_DW), .WR_DW(ENGINE_WR_DW)
             ) u_engine (
                 .core_clk(core_clk), .dp_rst(dp_rst_lane[lane]), .pcie_clk(pcie_clk), .dp_pcie_rst(dp_pcie_rst),
                 .mac_clk(mac_clk), .dp_mac_rst(dp_mac_rst_lane[lane]),
@@ -598,7 +672,8 @@ module roce_top
                 .rx_header_valid(lane_rx_header_valid[lane]), .rx_header_ready(lane_rx_header_ready[lane]),
                 .rx_header(lane_rx_header[lane*HDR_W +: HDR_W]),
                 .rx_payload_valid(lane_rx_payload_valid[lane]), .rx_payload_ready(lane_rx_payload_ready[lane]),
-                .rx_payload_data(lane_rx_payload_data[lane*1024 +: 1024]), .rx_payload_last(lane_rx_payload_last[lane]),
+                // 位宽随 RX_DW，引擎参数表里一并传 .RX_DW(RX_DW)（见 RX_DW 定义处）
+                .rx_payload_data(lane_rx_payload_data[lane*RX_DW +: RX_DW]), .rx_payload_last(lane_rx_payload_last[lane]),
                 .resp_cqe_valid(cq_cqe_valid[lane*2]),   .resp_cqe_ready(cq_cqe_ready[lane*2]),
                 .resp_cqe_cq(cq_cqe_cq[(lane*2)*CQ_W +: CQ_W]), .resp_cqe_data(cq_cqe_data[(lane*2)*160 +: 160]),
                 .req_cqe_valid(cq_cqe_valid[lane*2+1]),  .req_cqe_ready(cq_cqe_ready[lane*2+1]),
@@ -797,7 +872,15 @@ module roce_top
     reg  [LANES*6-1:0]       lane_ack_counter_q;
     reg  [LANES*5-1:0]       lane_reads_outstanding_q;
     reg  [LANES*32-1:0]      lane_tx_offset_q;
+    // 2026-11-25：B6417 漏掉的两组也补一拍。B0118 core_clk：
+    //   gen_lane[1].u_engine|u_dma|u_r_fifo|m_axis_tvalid_pipe_reg → roce_debug 读 mux → u_csr|register_read_value
+    // （7~8 级，−0.078）——lane_dma_debug_state 是 roce_dma 的组合观测量（R FIFO valid 等）直连读回 mux。
+    // resp 状态同理（u_resp.main_state 直连）。只换 roce_debug 的输入；CNT_RESP_CYCLES 等计数仍用原信号。
+    reg  [LANES*7-1:0]       lane_resp_state_q;
+    reg  [LANES*14-1:0]      lane_dma_state_q;
     always @(posedge core_clk) begin
+        lane_resp_state_q        <= lane_resp_debug_state;
+        lane_dma_state_q         <= lane_dma_debug_state;
         lane_req_state_q         <= lane_req_state_flat;
         lane_tx_state_q          <= lane_tx_state_flat;
         lane_qp_index_q          <= lane_qp_index_flat;
@@ -827,9 +910,9 @@ module roce_top
         .mac_rx_mux_fifo(mac_debug[122:109]),
         // 每 lane（Phase 1 起 2 个引擎）
         .lane_req_state(lane_req_state_q),
-        .lane_resp_state(lane_resp_debug_state),
+        .lane_resp_state(lane_resp_state_q),
         .lane_tx_state(lane_tx_state_q),
-        .lane_dma_state(lane_dma_debug_state),
+        .lane_dma_state(lane_dma_state_q),
         .lane_disp_busy_owner(lane_disp_busy_owner),
         .lane_qp_index(lane_qp_index_q),
         .lane_qp_state(lane_qp_state_q),

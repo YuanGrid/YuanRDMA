@@ -8,6 +8,11 @@
 // 因为 start offset s < 128 = BEAT_BYTES，首拍一定有用，不需要 first_useful_beat；
 // 跨拍拼接用 {in_data, previous_beat} 的 2048 位桶形移位完成，与 roce_skip_align 同构。
 //
+// DW 参数化：DW=2048 时输入是 pcie 域拼好的「256 B 对齐双拍」，
+// 起点偏移 s = addr[7:0]（0..255，8 位移位，LUT6 下与 7 位同为 4 级），输出一拍 256 B。
+// 拍数公式与 DW=1024 同构：beat_count = ceil((s + length) / BEAT_BYTES)。
+// DW=1024（默认）与参数化之前逐位等价。
+//
 // 请求间零空泡（B6415）：
 // B6414 及以前每个请求固定多 3 拍——c0 装 meta（meta_ready = !request_active，必须等上一请求
 // 完全结束）、c1 首拍只存不出（拼接要上一拍）、末尾单独一拍 finish 清 request_active。
@@ -25,33 +30,36 @@
 `default_nettype none
 `timescale 1ns/1ps
 module roce_dma_rd_align #(
-    parameter int TAG_W = 4
+    parameter int TAG_W = 4,
+    parameter int DW    = 1024,
+    parameter int AW    = $clog2(DW/8)          // meta_address_low 位宽 = 拍内字节偏移
 )(
     input  wire               clk,
     input  wire               rst,
     // 请求元数据（与 AR 同序）
     input  wire               meta_valid,
     output wire               meta_ready,
-    input  wire  [6:0]        meta_address_low,
+    input  wire  [AW-1:0]     meta_address_low,
     input  wire  [12:0]       meta_length,        // 1..4096
     input  wire  [TAG_W-1:0]  meta_tag,
     // BAS 读回拍（已过 CDC）
     input  wire               in_valid,
     output wire               in_ready,
-    input  wire  [1023:0]     in_data,
+    input  wire  [DW-1:0]     in_data,
     input  wire               in_error,
     // 输出
     output reg                out_valid,
     input  wire               out_ready,
-    output reg   [1023:0]     out_data,
-    output reg   [127:0]      out_keep,
+    output reg   [DW-1:0]     out_data,
+    output reg   [DW/8-1:0]   out_keep,
     output reg                out_last,
     output reg   [TAG_W-1:0]  out_tag,
     output reg                out_error
 );
-    localparam int BEAT_BYTES = 128;
-    localparam int SHIFT_W    = 7;                  // 0..127
-    localparam int BYTE_W     = 8;                  // 可表示 0..128
+    localparam int BEAT_BYTES = DW / 8;             // 128 / 256
+    localparam int SHIFT_W    = AW;                 // 7 / 8
+    localparam int BYTE_W     = AW + 1;             // 可表示 0..BEAT_BYTES
+    localparam [12:0] BEAT_BYTES_V = 13'(BEAT_BYTES);
 
     // ---------------------------------------------------------------- 当前请求
     reg                request_active;
@@ -62,7 +70,7 @@ module roce_dma_rd_align #(
     reg  [TAG_W-1:0]   cur_tag;
     reg                error_seen;
     reg                have_previous_beat;
-    reg  [1023:0]      previous_beat;
+    reg  [DW-1:0]      previous_beat;
 
     // ---------------------------------------------------------------- 预取的下一请求
     reg                next_valid;
@@ -73,14 +81,14 @@ module roce_dma_rd_align #(
     reg  [TAG_W-1:0]   next_tag;
 
     // 一拍装下整个 skip 范围（s < 128），所以 beat_count = ceil((s + length) / 128)
-    wire [13:0]  meta_end_offset = {7'd0, meta_address_low} + {1'b0, meta_length};
-    wire [13:0]  meta_beat_count = (meta_end_offset + 14'd127) >> 7;
+    wire [13:0]  meta_end_offset = 14'(meta_address_low) + {1'b0, meta_length};
+    wire [13:0]  meta_beat_count = (meta_end_offset + 14'(BEAT_BYTES - 1)) >> SHIFT_W;
 
     wire          can_advance  = !out_valid || out_ready;
     wire          need_beat    = (beats_left != 7'd0);
     wire          last_beat    = (beats_left == 7'd1);
-    wire [12:0]   output_bytes = (bytes_remaining > 13'd128) ? 13'd128 : bytes_remaining;
-    wire          last_output  = (bytes_remaining <= 13'd128);
+    wire [12:0]   output_bytes = (bytes_remaining > BEAT_BYTES_V) ? BEAT_BYTES_V : bytes_remaining;
+    wire          last_output  = (bytes_remaining <= BEAT_BYTES_V);
 
     // 取一拍；取到的这一拍能不能马上出一拍：对齐时总能，非对齐时要有上一拍可拼。
     wire          consume_beat = request_active && can_advance && need_beat && in_valid;
@@ -100,13 +108,13 @@ module roce_dma_rd_align #(
     assign meta_ready = !next_valid;
     wire          meta_take = meta_valid && !next_valid;
 
-    function automatic [127:0] low_bits_mask(input [BYTE_W-1:0] count);
+    function automatic [BEAT_BYTES-1:0] low_bits_mask(input [BYTE_W-1:0] count);
         low_bits_mask = (count >= BYTE_W'(BEAT_BYTES)) ? {BEAT_BYTES{1'b1}}
                                                        : (({{(BEAT_BYTES-1){1'b0}}, 1'b1} << count) - 1);
     endfunction
 
-    function automatic [1023:0] shift_right_bytes(input [2047:0] value, input [SHIFT_W-1:0] shift);
-        shift_right_bytes = 1024'(value >> {shift, 3'b000});
+    function automatic [DW-1:0] shift_right_bytes(input [2*DW-1:0] value, input [SHIFT_W-1:0] shift);
+        shift_right_bytes = DW'(value >> {shift, 3'b000});
     endfunction
 
     always @(posedge clk) begin
@@ -137,7 +145,7 @@ module roce_dma_rd_align #(
             end else if (flush_previous) begin
                 // 输入已取完但还有字节没输出：最后一拍靠 previous_beat 右移补齐（只有非对齐会走到）
                 out_valid <= 1'b1;
-                out_data  <= shift_right_bytes({{1024{1'b0}}, previous_beat}, byte_shift);
+                out_data  <= shift_right_bytes({{DW{1'b0}}, previous_beat}, byte_shift);
                 out_keep  <= low_bits_mask(output_bytes[BYTE_W-1:0]);
                 out_last  <= 1'b1;
                 out_tag   <= cur_tag;
@@ -162,7 +170,7 @@ module roce_dma_rd_align #(
                     request_active     <= 1'b1;
                     beats_left         <= meta_beat_count[6:0];
                     byte_shift         <= meta_address_low[SHIFT_W-1:0];
-                    shift_zero         <= (meta_address_low == 7'd0);
+                    shift_zero         <= (meta_address_low == '0);
                     bytes_remaining    <= meta_length;
                     cur_tag            <= meta_tag;
                     error_seen         <= 1'b0;
@@ -177,7 +185,7 @@ module roce_dma_rd_align #(
                 next_valid      <= 1'b1;
                 next_beats      <= meta_beat_count[6:0];
                 next_shift      <= meta_address_low[SHIFT_W-1:0];
-                next_shift_zero <= (meta_address_low == 7'd0);
+                next_shift_zero <= (meta_address_low == '0);
                 next_length     <= meta_length;
                 next_tag        <= meta_tag;
             end

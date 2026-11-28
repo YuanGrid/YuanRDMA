@@ -17,7 +17,10 @@ module roce_req
     // 局部域里做，只有 QPC 读口地址 / 掩码输出回到全局域。
     // 注意：roce_engine 例化本模块时必须传 .LANE_ID(...)，否则所有实例都当 0 号 lane，
     // 其余 3/4 的 QP 无人服务（静默错误，不是编译错误）。
-    parameter int LANE_ID = 0
+    parameter int LANE_ID = 0,
+    // RX payload 拍宽（1024 / 2048）。READ RESP 数据原样转给 DMA 写客户端，所以 dma_write_data
+    // 与 rx_payload_data 同宽、同拍数（ceil(len / (RX_DW/8))），本模块不按字节数数拍，只看 last。
+    parameter int RX_DW = 1024
 )(
     input  wire                    clk,
     input  wire                    rst,
@@ -59,7 +62,7 @@ module roce_req
     input  rx_hdr_t                rx_header,
     input  wire                    rx_payload_valid,
     output wire                    rx_payload_ready,
-    input  wire  [1023:0]          rx_payload_data,
+    input  wire  [RX_DW-1:0]       rx_payload_data,
     input  wire                    rx_payload_last,
     output reg                     done,
     // 地址翻译
@@ -74,6 +77,11 @@ module roce_req
     input  wire  [63:0]            translate_physical_address0,
     input  wire  [63:0]            translate_physical_page1,
     input  wire                    translate_error,
+    // 发送页缓存的作废源：MPT 表写 = MR 注销/重注册，映射可能已变。
+    // 与 roce_resp 的页缓存同一组信号、同一判据。
+    input  wire                    table_request,
+    input  wire                    table_write_enable,
+    input  wire  [3:0]             table_select,
     // DMA 读（WQE 取指）
     output wire                    dma_read_request_valid,
     input  wire                    dma_read_request_ready,
@@ -91,7 +99,7 @@ module roce_req
     output reg   [12:0]            dma_write_request_length,
     output wire                    dma_write_valid,
     input  wire                    dma_write_ready,
-    output wire  [1023:0]          dma_write_data,
+    output wire  [RX_DW-1:0]       dma_write_data,
     // CQE
     output reg                     cqe_valid,
     input  wire                    cqe_ready,
@@ -550,6 +558,7 @@ module roce_req
     //   （TX 取指与 walk 不会交错），寄存版与读出值逐位相同。REQ_TX_COMPUTE 仍用原组合
     //   wire —— 那条路径只取 [23:0]/[47:24] 的位选，不含加法，且 TX 侧没有空拍可利用。
     reg  [23:0]  meta_psn_start_q;      // REQ_WALK_WAIT2 采样的 WQE 起始 PSN
+    reg  [23:0]  walk_psn_off_q;        // REQ_WALK_WAIT2 采样的 retire_psn - 起始 PSN（只在 DECIDE 用）
     reg  [23:0]  meta_psn_end_q;        // 同上，起始 PSN + 包数（已在 WAIT2 算好）
     reg  [7:0]   nak_syndrome;
     reg          payload_consumed, handling_rx;
@@ -687,11 +696,31 @@ module roce_req
                           (header.aeth_syndrome[7:5] == 3'b001)       ? EVENT_RNR_NAK  :
                           (header.aeth_syndrome == AETH_NAK_SEQ)      ? EVENT_NAK_SEQUENCE : EVENT_NAK_ERROR;
     wire [23:0] rx_retire_psn    = (rx_event_kind == EVENT_ACK) ? header.psn + 24'd1 : header.psn;
-    wire [23:0] rx_retire_distance   = rx_retire_psn - unacked_psn;
+    // B0118 时序：越界判据原来是 aeth_syndrome 译码 → 选 psn / psn+1 → 减 unacked_psn → 比窗口，
+    // 串成 6 级进 retire_psn 的装载使能。两种退休点的距离都只由寄存器算好，事件类型只做最后的 2 选 1，
+    // 与 (rx_retire_psn - unacked_psn) > window 逐位等价（psn+1-u = (psn-u)+1，模 2^24）。
+    wire [23:0] rx_retire_window = 24'(next_psn - unacked_psn);
+    wire [23:0] rx_dist_psn      = header.psn - unacked_psn;
+    wire [23:0] rx_dist_psn1     = header.psn + 24'd1 - unacked_psn;
+    wire        rx_retire_stale  = (rx_event_kind == EVENT_ACK) ? (rx_dist_psn1 > rx_retire_window)
+                                                                : (rx_dist_psn  > rx_retire_window);
 
     assign translate_valid = (state == REQ_TX_TRANSLATE) || (state == REQ_RESP_TRANSLATE);
     assign translate_protection_domain    = qpc_pd(qp_context);
-    wire   payload_forward    = (state == REQ_RESP_WRITE_DATA);
+    // B0118 时序：payload_forward 原来是 state 的组合译码，经 dma_write_valid 进 u_arb 的按 owner 选路
+    // （u_req|state → u_arb|write_owner，−0.154）。改成寄存的标志：只在进入 REQ_RESP_WRITE_DATA
+    // （REQ_RESP_WRITE_REQUEST 握手那拍）置位、离开（末拍）与复位时清，时时等于 state == REQ_RESP_WRITE_DATA，
+    // 下面的仿真断言逐拍核对。
+    reg    payload_forward;
+    // synthesis translate_off
+    always @(posedge clk) begin
+        if (!rst && (payload_forward != (state == REQ_RESP_WRITE_DATA)))
+            $fatal(1, "roce_req: payload_forward=%0d 与 state=%0d 不一致", payload_forward, state);
+        if (!rst && (state == REQ_WALK_DECIDE) && (walk_psn_off_q != 24'(retire_psn - meta_psn_start_q)))
+            $fatal(1, "roce_req: walk_psn_off_q=%0h 与 retire_psn - meta_psn_start_q=%0h 不一致",
+                   walk_psn_off_q, 24'(retire_psn - meta_psn_start_q));
+    end
+    // synthesis translate_on
     assign dma_write_valid = payload_forward && rx_payload_valid;
     assign dma_write_data  = rx_payload_data;
     assign rx_payload_ready  = payload_forward ? dma_write_ready : (state == REQ_DRAIN && !payload_consumed);   // 已收完就不能再接下一包的数据
@@ -751,6 +780,54 @@ module roce_req
             tx_pipe_count <= tx_pipe_count + 4'd1;
     end
 
+    // ------------------------------------------------------------ 发送页缓存
+    // 问题（定向台子 test/sim/req_tx_pipeline +XLAT=4 实测）：流水后单 QP 仍是 10.188 拍/包，
+    //   其中 TX_TRANSLATE 1 + TX_TRANSLATE_WAIT 5 = 6 拍，是每包串行开销的 59%。
+    //   roce_tx 加宽到 2048 位后组包只要 5 拍/包，roce_req 成了单 QP 的唯一瓶颈。
+    // 做法：同一个 WQE 的连续包地址线性推进，一次真翻译就给出相邻两页的物理基址
+    //   （roce_tbl 的 page1 恒为 MTT[idx+1]）。把它们存下来，后续落在这两页内的包直接拼地址，
+    //   跳过 6 拍翻译。MTU 1024 下每 8 KB（8 包）只真翻译一次。
+    //
+    // 安全性（与 roce_resp 页缓存的区别：这里命中也**不绕过范围检查**）：
+    //   * 首包恒走真翻译（tx_started=0 不命中），它校验了 WQE 起点在 MR 内、key/PD/权限；
+    //   * 多包 WQE 在首包翻译后再翻译一次「末字节」（VA = local + length − 1，长度 1），
+    //     校验 WQE 终点在 MR 内。MR 的虚拟区间连续，两端都在 → 整段都在，
+    //     之后命中的每个包都在已校验区间内；page1 也只会在包确实落进下一页时被用到，
+    //     那一页属于 MR，MTT[idx+1] 必然有效。末字节越界 → 与逐包翻译出错同一个 CQE（LOC_PROT_ERR）；
+    //   * 缓存项按 {QP, tx_index} 打标签，只服务当前 WQE；每个 WQE 的首包都会重填，旧项不可能被新 WQE 命中；
+    //   * MPT 表写 / QP 状态变化 / 翻译出错一律作废（与 roce_resp 同判据）。
+    //
+    // 命中判定放在 TX_ADDRESS 那一拍算好寄存（xc_hit_q），COMPUTE 只读一个寄存器：
+    //   只用 tx_offset 与缓存项里的寄存器，不碰 WQE RAM 输出、不碰 qp_context，
+    //   所以不在 COMPUTE 的关键路径上加逻辑，PIPE_BURST 回 IDLE 再派发也照样能命中。
+    reg              xc_valid, xc_range_ok, xc_endchk;
+    reg  [QP_LW-1:0] xc_qp;
+    reg  [15:0]      xc_index;
+    reg  [31:0]      xc_fill_off;           // 填缓存那包的 tx_offset
+    reg  [11:0]      xc_va_lo;              // 那包 VA 的页内偏移
+    reg  [12:0]      xc_mtu;                // 填缓存时的 path_mtu（第 1 页项的不跨页判据用，不读当拍 qp_context）
+    reg  [51:0]      xc_pa0, xc_pa1;        // 第 0 页 / 第 1 页物理基址
+    // 当前包在「第 0 页坐标」里的位置 pos = va_lo + (tx_offset − fill_off)，有符号（go-back-N 会往回走）。
+    wire [32:0]      xc_delta  = {1'b0, tx_offset} - {1'b0, xc_fill_off};
+    wire [33:0]      xc_pos    = {xc_delta[32], xc_delta} + 34'(xc_va_lo);
+    wire             xc_pos_ok = !xc_pos[33] && (xc_pos[32:13] == 20'd0);           // 0..8191
+    wire             xc_in0    = xc_pos_ok && !xc_pos[12];                           // 第 0 页（跨页用 pa1）
+    wire             xc_in1    = xc_pos_ok &&  xc_pos[12] &&                         // 第 1 页且不跨页
+                                 ({1'b0, xc_pos[11:0]} + xc_mtu <= 13'd4096);
+    wire             xc_tag    = xc_valid && xc_range_ok && tx_started &&
+                                 (xc_qp == qp_lidx) && (xc_index == tx_index);
+    reg              xc_hit_q;
+    reg  [63:0]      xc_hit_pa0, xc_hit_pa1;
+    always @(posedge clk) begin
+        xc_hit_q   <= xc_tag && (xc_in0 || xc_in1);
+        xc_hit_pa0 <= {(xc_in0 ? xc_pa0 : xc_pa1), xc_pos[11:0]};
+        xc_hit_pa1 <= {xc_pa1, 12'd0};      // 只有第 0 页项会用到（包跨进第 1 页）
+    end
+    wire             xc_inval  = (table_request && table_write_enable && (table_select == TBL_MPT)) ||
+                                 (|qp_state_change);
+    // 填缓存时：同一 WQE 的范围校验结果沿用，换了 WQE 就要重新校验。
+    wire             xc_same_wqe = xc_valid && (xc_qp == qp_lidx) && (xc_index == tx_index);
+
     always @(posedge clk) begin
         rx_header_ready         <= 1'b0;
         done            <= 1'b0;
@@ -788,6 +865,7 @@ module roce_req
         end
         if (rst) begin
             state       <= REQ_IDLE;
+            payload_forward <= 1'b0;
             ctx_pending <= 1'b0;
             // B6503 簇 A：meta 派生量的寄存版也归零。功能上它们每进一次 REQ_WALK_WAIT2 就重装，
             // 且所有消费者都在那次重装之后；这里清只是为了让复位后的波形/仿真初值确定
@@ -799,6 +877,7 @@ module roce_req
             tx_job_valid  <= 1'b0;
             cqe_valid  <= 1'b0;
             dma_write_request_valid <= 1'b0;
+            xc_endchk   <= 1'b0;
             // 每 QP 状态必须在这里清，不能只靠 qp_state_change。
             // qp_state_change 只在主机写 QPC 且状态**发生变化**时打一拍；kill -9 之后
             // 新进程重建 QP 时 roce_tbl 的 qp_state_store 已被复位成 RESET，主机再写
@@ -942,23 +1021,57 @@ module roce_req
                     translate_virtual_address  <= wqe_local_address + {32'd0, tx_offset};
                     translate_length <= (tx_remaining > {19'd0, path_mtu}) ? path_mtu : tx_remaining[12:0];
                     translate_access <= 4'd0;
-                    physical_address0    <= '0;
-                    physical_page1    <= '0;
-                    state     <= (!wqe_is_read && tx_remaining != 32'd0) ? REQ_TX_TRANSLATE : REQ_TX_PUSH;
+                    xc_endchk        <= 1'b0;
+                    // 发送页缓存命中（见上方「发送页缓存」）：地址直接拼好，跳过 TRANSLATE + TRANSLATE_WAIT。
+                    // xc_valid 再与一次：防止 TX_ADDRESS 那拍恰好有作废写入。
+                    physical_address0    <= (xc_hit_q && xc_valid) ? xc_hit_pa0 : '0;
+                    physical_page1    <= (xc_hit_q && xc_valid) ? xc_hit_pa1 : '0;
+                    // B0118 时序：tx_remaining != 0 写成 wqe_length != tx_offset（模 2^32 下 a-b≠0 ⇔ a≠b），
+                    // wqe_length 来自 wqe_ram 的 M20K 输出，等值比较不走 32 位减法的进位链。
+                    state     <= (!wqe_is_read && (wqe_length != tx_offset) && !(xc_hit_q && xc_valid)) ? REQ_TX_TRANSLATE : REQ_TX_PUSH;
                 end
             end
             REQ_TX_TRANSLATE:  if (translate_ready) state <= REQ_TX_TRANSLATE_WAIT;
             REQ_TX_TRANSLATE_WAIT: if (translate_response) begin
-                        physical_address0 <= translate_physical_address0;
-                        physical_page1 <= translate_physical_page1;
+                        // 末字节校验那一次的结果不是本包地址，不能覆盖（本包地址是上一次翻译填的）。
+                        if (!xc_endchk) begin
+                            physical_address0 <= translate_physical_address0;
+                            physical_page1 <= translate_physical_page1;
+                        end
+                        xc_endchk <= 1'b0;
                         if (translate_error) begin
+                            xc_valid    <= 1'b0;
+                            xc_range_ok <= 1'b0;
                             cqe_status <= WCS_LOC_PROT_ERR; cqe_wqe_index <= tx_index; cqe_opcode <= wc_opcode_of(wqe_opcode);
                             cqe_length <= 32'd0; cqe_signaled <= 1'b1; local_error <= 1'b1;
                             qp_set_error_l[qp_lidx] <= 1'b1;
                             cqe_return_state <= REQ_WRITE_BACK;
                             state   <= REQ_CQE;
-                        end else
+                        end else if (xc_endchk) begin
+                            // 末字节在 MR 内：整个 WQE 的区间已校验，后续包可以命中缓存。
+                            xc_range_ok <= 1'b1;
                             state <= REQ_TX_PUSH;
+                        end else begin
+                            // 填缓存（本包的真翻译结果：第 0 页 + 第 1 页）。
+                            xc_valid    <= 1'b1;
+                            xc_qp       <= qp_lidx;
+                            xc_index    <= tx_index;
+                            xc_fill_off <= tx_offset;
+                            xc_va_lo    <= translate_virtual_address[11:0];
+                            xc_mtu      <= path_mtu;
+                            xc_pa0      <= translate_physical_address0[63:12];
+                            xc_pa1      <= translate_physical_page1[63:12];
+                            if (!(xc_same_wqe && xc_range_ok)) xc_range_ok <= 1'b0;
+                            // 多包 WQE、且本 WQE 还没校验过末字节：先补一次末字节翻译再交本包。
+                            // 单包 WQE（packet_last）不需要——它不会命中缓存，逐包翻译已经完整校验。
+                            if (!packet_last && !(xc_same_wqe && xc_range_ok)) begin
+                                xc_endchk                 <= 1'b1;
+                                translate_virtual_address <= wqe_local_address + {32'd0, wqe_length} - 64'd1;
+                                translate_length          <= 13'd1;
+                                state <= REQ_TX_TRANSLATE;
+                            end else
+                                state <= REQ_TX_PUSH;
+                        end
                     end
             REQ_TX_PUSH:  begin
                 tx_job_valid           <= 1'b1;
@@ -1068,7 +1181,7 @@ module roce_req
                     event_rx_cnp    <= 1'b1;
                     event_rx_cnp_qp_l <= LANE_QPS'(1) << qp_lidx;
                     state <= REQ_DRAIN;
-                end else if (rx_retire_distance > 24'(next_psn - unacked_psn)) begin
+                end else if (rx_retire_stale) begin
                     state <= REQ_DRAIN;                                   // 过期或越界
                 end else begin
                     event_kind <= rx_event_kind;
@@ -1102,6 +1215,10 @@ module roce_req
                 // 判定拍因此只剩「减法 + 看符号」，不再有 RAM 输出 → 两级加法 → mux 的锥。
                 meta_psn_start_q    <= meta_read_data[47:24];
                 meta_psn_end_q      <= meta_read_data[47:24] + meta_read_data[23:0];
+                // B0118 时序：READ 续读地址要用 retire_psn - meta_psn_start，原来在 DECIDE 里现减、再按
+                // path_mtu 移位、再做 64 位加法（retire_psn → translate_virtual_address，8 级、−0.033）。
+                // DECIDE 只能从本状态进入，且本状态不写 retire_psn，所以这里先减好、DECIDE 只做移位与加法。
+                walk_psn_off_q      <= retire_psn - meta_read_data[47:24];
                 state <= REQ_WALK_DECIDE;
             end
             REQ_WALK_DECIDE: begin
@@ -1193,7 +1310,7 @@ module roce_req
                                 state <= REQ_DRAIN;
                         end else begin
                             translate_key <= wqe_lkey;
-                            translate_virtual_address  <= wqe_local_address + ({8'd0, 24'(retire_psn - meta_psn_start_q)} << path_mtu_shift);
+                            translate_virtual_address  <= wqe_local_address + ({8'd0, walk_psn_off_q} << path_mtu_shift);
                             translate_length <= header.payload_length;
                             translate_access <= ACC_LOCAL_WRITE;
                             state     <= (header.payload_length != 13'd0) ? REQ_RESP_TRANSLATE : REQ_RESP_FINISH;
@@ -1253,11 +1370,13 @@ module roce_req
                        if (dma_write_request_valid && dma_write_request_ready) begin
                            dma_write_request_valid <= 1'b0;
                            state       <= REQ_RESP_WRITE_DATA;
+                           payload_forward <= 1'b1;
                        end
                    end
             REQ_RESP_WRITE_DATA: if (rx_payload_valid && dma_write_ready && rx_payload_last) begin
                        payload_consumed <= 1'b1;
                        state       <= REQ_RESP_FINISH;
+                       payload_forward <= 1'b0;
                    end
             REQ_RESP_FINISH: begin
                 unacked_psn <= retire_psn + 24'd1;
@@ -1318,6 +1437,11 @@ module roce_req
             end
             default: state <= REQ_IDLE;
         endcase
+        // 发送页缓存作废（放在最后：与同拍的填缓存冲突时作废优先）。复位同样清空。
+        if (rst || xc_inval) begin
+            xc_valid    <= 1'b0;
+            xc_range_ok <= 1'b0;
+        end
     end
     assign debug_state = {tx_offset, 18'd0, ack_counter, unacked_psn, next_psn, 4'(qp_index),   // [23:20] 只 4 位
                           local_error, recovering, reads_outstanding, {2'b00, retry_left},

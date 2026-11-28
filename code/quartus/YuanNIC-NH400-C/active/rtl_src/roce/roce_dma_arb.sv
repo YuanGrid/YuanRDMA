@@ -2,13 +2,16 @@
 // roce_dma 前的多客户端仲裁。
 // - 读：请求轮询仲裁，tag = 客户端号；读数据按 tag 分发（读数据按序返回，某客户端不接收会
 //   堵住其后所有读数据，所以 WQE 取指类客户端必须一直能收）。
-// - 写：请求轮询仲裁，授权后锁定该客户端直到 ceil(transfer_length/64) 拍数据写完；写完成按请求顺序
+// - 写：请求轮询仲裁，授权后锁定该客户端直到 ceil(transfer_length/(WR_DW/8)) 拍数据写完；写完成按请求顺序
 //   返回给对应客户端。
+// - 写数据位宽 WR_DW（1024 / 2048）纯透传；锁定拍数按 WR_DW/8 字节一拍计，与 roce_dma 的输入约定一致。
 `default_nettype none
 `timescale 1ns/1ps
 module roce_dma_arb #(
     parameter int READ_CLIENTS = 4,
-    parameter int WRITE_CLIENTS = 4
+    parameter int WRITE_CLIENTS = 4,
+    parameter int RD_DW = 1024,             // 读数据位宽（纯透传，仲裁逻辑与位宽无关）
+    parameter int WR_DW = 1024              // 写数据位宽（纯透传；只影响每请求的数据拍数）
 )(
     input  wire                 clk,
     input  wire                 rst,
@@ -20,8 +23,8 @@ module roce_dma_arb #(
     input  wire  [READ_CLIENTS*13-1:0]    dma_read_request_length,
     output wire  [READ_CLIENTS-1:0]       dma_read_valid,
     input  wire  [READ_CLIENTS-1:0]       dma_read_ready,
-    output wire  [1023:0]       dma_read_data,
-    output wire  [127:0]        dma_read_keep,
+    output wire  [RD_DW-1:0]    dma_read_data,
+    output wire  [RD_DW/8-1:0]  dma_read_keep,
     output wire                 dma_read_last,
     output wire                 dma_read_error,
     // 写客户端
@@ -32,7 +35,7 @@ module roce_dma_arb #(
     input  wire  [WRITE_CLIENTS*13-1:0]    dma_write_request_length,
     input  wire  [WRITE_CLIENTS-1:0]       dma_write_valid,
     output wire  [WRITE_CLIENTS-1:0]       dma_write_ready,
-    input  wire  [WRITE_CLIENTS*1024-1:0]  dma_write_data,
+    input  wire  [WRITE_CLIENTS*WR_DW-1:0] dma_write_data,
     output reg   [WRITE_CLIENTS-1:0]       dma_write_complete,
     output reg                  dma_write_complete_error,
     // 到 roce_dma
@@ -44,8 +47,8 @@ module roce_dma_arb #(
     output wire  [3:0]          downstream_read_request_tag,
     input  wire                 downstream_read_valid,
     output wire                 downstream_read_ready,
-    input  wire  [1023:0]       downstream_read_data,
-    input  wire  [127:0]        downstream_read_keep,
+    input  wire  [RD_DW-1:0]    downstream_read_data,
+    input  wire  [RD_DW/8-1:0]  downstream_read_keep,
     input  wire                 downstream_read_last,
     input  wire  [3:0]          downstream_read_tag,
     input  wire                 downstream_read_error,
@@ -56,7 +59,7 @@ module roce_dma_arb #(
     output wire  [12:0]         downstream_write_request_length,
     output wire                 downstream_write_valid,
     input  wire                 downstream_write_ready,
-    output wire  [1023:0]       downstream_write_data,
+    output wire  [WR_DW-1:0]    downstream_write_data,
     input  wire                 downstream_write_complete,
     input  wire                 downstream_write_complete_error
 );
@@ -121,7 +124,7 @@ module roce_dma_arb #(
     assign dma_write_request_ready   = (write_grant && downstream_write_request_ready) ? (WRITE_CLIENTS'(1) << write_pick) : '0;
 
     assign downstream_write_valid = write_locked && dma_write_valid[write_owner];
-    assign downstream_write_data  = dma_write_data[write_owner*1024 +: 1024];
+    assign downstream_write_data  = dma_write_data[write_owner*WR_DW +: WR_DW];
     assign dma_write_ready   = (write_locked && downstream_write_ready) ? (WRITE_CLIENTS'(1) << write_owner) : '0;
 
     // 写完成顺序 FIFO（客户端号）
@@ -142,7 +145,7 @@ module roce_dma_arb #(
                 write_round_robin       <= WRITE_CLIENT_W'((write_pick + 1) % WRITE_CLIENTS);
                 write_owner      <= write_pick;
                 write_locked     <= 1'b1;
-                write_beats_left    <= 7'((downstream_write_request_length + 13'd127) >> 7);
+                write_beats_left    <= 7'((downstream_write_request_length + 13'(WR_DW/8 - 1)) >> $clog2(WR_DW/8));
                 order_fifo[order_write_pointer[5:0]] <= write_pick;
                 order_write_pointer     <= order_write_pointer + 7'd1;
             end

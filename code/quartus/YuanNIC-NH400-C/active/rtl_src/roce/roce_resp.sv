@@ -13,7 +13,11 @@ module roce_resp
     parameter int ACK_EVERY = 16,
     // S4：本实例拥有的 QP = 全局 qp_index[LANE_BITS-1:0] == LANE_ID（交错归属）。
     // 只影响 lane 局部阵列的归属判断（qp_state_change 循环）；索引换算走 qp_local()。
-    parameter int LANE_ID = 0
+    parameter int LANE_ID = 0,
+    // RX payload 拍宽（1024 / 2048）。WRITE/SEND 的 payload 原样转给 DMA 写客户端，所以 dma_write_data
+    // 与 rx_payload_data 同宽、同拍数（ceil(len / (RX_DW/8))），每拍收一个 payload 拍；
+    // 本模块不按字节数数拍，只看 last，目的地址对齐与 wstrb 都在 roce_dma 里做。
+    parameter int RX_DW = 1024
 )(
     input  wire                    clk,
     input  wire                    rst,
@@ -42,7 +46,7 @@ module roce_resp
     input  rx_hdr_t                rx_header,
     input  wire                    rx_payload_valid,
     output wire                    rx_payload_ready,
-    input  wire  [1023:0]          rx_payload_data,
+    input  wire  [RX_DW-1:0]       rx_payload_data,
     input  wire                    rx_payload_last,
     output wire                    done,          // 本包处理完（payload 已全部收下）
     // 地址翻译（主状态机 0、输出状态机 1）
@@ -75,7 +79,7 @@ module roce_resp
     output reg   [12:0]            dma_write_request_length,
     output wire                    dma_write_valid,
     input  wire                    dma_write_ready,
-    output wire  [1023:0]          dma_write_data,
+    output wire  [RX_DW-1:0]       dma_write_data,
     // CQE
     output reg                     cqe_valid,
     input  wire                    cqe_ready,
@@ -325,9 +329,18 @@ module roce_resp
     wire             pf_fire   = pf_req_valid && dma_read_request_ready;
     // 同一拍「上一请求握手 + 装下一请求」时，本 QP 的下标已经前进了 1，装载必须用前进后的值，
     // 否则同一个 WQE 会被发两遍（qp_pf_idx 多走一格 → 消费侧永远等不到那一格）。
-    wire [15:0]      pf_idx_q  = qp_pf_idx[pf_q] + 16'(pf_fire && (pf_req_qp == pf_q));
-    wire             pf_more   = (pf_idx_q != qp_rq_producer[pf_q]);
-    wire             pf_room   = ((pf_idx_q - qp_rq_consumer[pf_q]) < 16'(PF_SLOTS));
+    wire             pf_bump   = pf_fire && (pf_req_qp == pf_q);
+    wire [15:0]      pf_idx_q  = qp_pf_idx[pf_q] + 16'(pf_bump);
+    // B0118 时序：pf_more / pf_room 原来按 pf_idx_q 现算，pf_fire（经 DMA 仲裁的 ready）要先走 16 位
+    // 加法再走两组 16 位比较，到 pf_req_qp 的装载使能是 10~11 级。现在两种情况（本拍前进 / 不前进）
+    // 都只由寄存器算好，pf_bump 只做最后的 2 选 1，与原式逐位等价：
+    //   e = producer - idx：idx != producer ⇔ e != 0；idx + 1 != producer ⇔ e != 1
+    //   d = idx - consumer：d < 16；(idx + 1) - consumer = d + 1 < 16 ⇔ d < 15 或 d == 16'hFFFF（+1 回绕到 0）
+    wire [15:0]      pf_e      = qp_rq_producer[pf_q] - qp_pf_idx[pf_q];
+    wire [15:0]      pf_d      = qp_pf_idx[pf_q] - qp_rq_consumer[pf_q];
+    wire             pf_more   = pf_bump ? (pf_e != 16'd1) : (pf_e != 16'd0);
+    wire             pf_room   = pf_bump ? ((pf_d < 16'(PF_SLOTS - 1)) || (pf_d == 16'hFFFF))
+                                         : (pf_d < 16'(PF_SLOTS));
     wire             pf_owner_ok = ((pf_ow_ptr - pf_or_ptr) < 7'(PF_OWNER_DEPTH));
     // 下一包如果是别的 QP（dispatcher 已经把新头挂上来了），先别替旧 QP 抢发射槽
     wire             pf_same_qp = !(rx_header_valid && (rx_header.qp_index != qp_index));
@@ -649,8 +662,10 @@ module roce_resp
     reg  [63:0] translate_address_main;
     reg  [12:0] translate_length_main;
     reg  [63:0] physical_address0, physical_page1;
+    // SEND 的 RQ WQE 缓冲不足（MAIN_RQ_WAIT 命中那拍寄存，MAIN_TRANSLATE 里处理；每包在 MAIN_IDLE 装载时清）
+    reg         send_len_err;
     // 翻译口 0（主状态机）
-    assign translate_valid[0] = (main_state == MAIN_TRANSLATE);
+    assign translate_valid[0] = (main_state == MAIN_TRANSLATE) && !send_len_err;
     assign translate_key[31:0]  = translate_key_main;
     assign translate_virtual_address[63:0]   = translate_address_main;
     assign translate_length[12:0]  = translate_length_main;
@@ -729,6 +744,7 @@ module roce_resp
             end
         if (rst) begin
             main_state        <= MAIN_IDLE;
+            send_len_err      <= 1'b0;
             dma_write_request_valid  <= 1'b0;
             cqe_valid   <= 1'b0;
             response_in_valid <= 1'b0;
@@ -801,6 +817,7 @@ module roce_resp
                         cursor_offset <= qp_cursor_offset[rx_header.qp_index[QP_W-1:LANE_BITS]];  cursor_wqe_index <= qp_cursor_wqe_index[rx_header.qp_index[QP_W-1:LANE_BITS]];
                         payload_consumed <= (rx_header.payload_length == 13'd0);
                         need_cqe <= 1'b0; need_ack <= 1'b0; need_error <= 1'b0; need_rq_wqe <= 1'b0;
+                        send_len_err <= 1'b0;
                         main_state   <= MAIN_CLASSIFY;
                     end else begin
                         main_state   <= MAIN_IDLE;
@@ -933,28 +950,21 @@ module roce_resp
                        rq_wait_tmr <= 13'(RQ_WAIT_TMO_CYCLES);
                        cursor_wqe_index <= rq_consumer;
                        rq_consumer <= rq_consumer + 16'd1;
+                       // B0118 时序：pf_rd_data 是 M20K 输出，原来它同时进 16 位标签比较（pf_hit）和
+                       // 32 位长度比较，两者一起选 main_state（6 级，−0.083）。长度不足（LOCAL_LEN_ERR）
+                       // 改成先寄存 send_len_err、命中后一律进 MAIN_TRANSLATE，在那里不发翻译、转 MAIN_CQE。
+                       // 正常包拍数不变；只有长度出错的包多 1 拍。
                        if (is_send) begin
                            message_active <= 1'b1;
                            cursor_key <= pf_rd_data[31:0];
                            cursor_address  <= pf_rd_data[95:32];
                            cursor_remaining <= pf_rd_data[127:96];
                            cursor_offset <= 32'd0;
-                           if ({19'd0, header.payload_length} > pf_rd_data[127:96]) begin
-                               need_cqe <= 1'b1; cqe_opcode <= WC_RECV; cqe_status <= WCS_LOC_LEN_ERR;
-                               cqe_length <= 32'd0;
-                               /* UD 没有 ACK/NAK 语义（IBTA §9.8.5）：出错只报本地 CQE，
-                                * 不能回线上 NAK，否则对端会收到一个不该存在的 ACK/Nak。 */
-                               if (!is_ud_send) begin
-                                   need_error <= 1'b1; need_ack <= 1'b1; syndrome <= AETH_NAK_INV;
-                               end
-                               main_state <= MAIN_CQE;
-                           end else begin
-                               translate_key_main <= pf_rd_data[31:0]; translate_address_main <= pf_rd_data[95:32];
-                               translate_length_main <= header.payload_length; translate_access_main <= ACC_LOCAL_WRITE;
-                               main_state <= MAIN_TRANSLATE;
-                           end
-                       end else
-                           main_state <= MAIN_TRANSLATE;                                  // WRITE w/ Imm：只占 RQ 槽
+                           send_len_err <= ({19'd0, header.payload_length} > pf_rd_data[127:96]);
+                           translate_key_main <= pf_rd_data[31:0]; translate_address_main <= pf_rd_data[95:32];
+                           translate_length_main <= header.payload_length; translate_access_main <= ACC_LOCAL_WRITE;
+                       end
+                       main_state <= MAIN_TRANSLATE;                                      // WRITE w/ Imm：只占 RQ 槽
                        end else if (rq_wait_tmr == 13'd0) begin
                            // P1-1 兜底：4096 拍还没等到这一格。预取环的记账已经不可信（该格若真的
                            // 已发射但返回被吞，它永远不会再被补），按丢包处理：不推进 rq_consumer、
@@ -975,7 +985,17 @@ module roce_resp
                            main_state <= MAIN_DRAIN;
                        end
                    end
-            MAIN_TRANSLATE:  if (translate_ready[0]) main_state <= MAIN_TRANSLATE_WAIT;
+            MAIN_TRANSLATE:  if (send_len_err) begin
+                       // SEND 的 RQ WQE 缓冲不够（MAIN_RQ_WAIT 里寄存的判定）：不发翻译，报 LOCAL_LEN_ERR。
+                       need_cqe <= 1'b1; cqe_opcode <= WC_RECV; cqe_status <= WCS_LOC_LEN_ERR;
+                       cqe_length <= 32'd0;
+                       /* UD 没有 ACK/NAK 语义（IBTA §9.8.5）：出错只报本地 CQE，
+                        * 不能回线上 NAK，否则对端会收到一个不该存在的 ACK/Nak。 */
+                       if (!is_ud_send) begin
+                           need_error <= 1'b1; need_ack <= 1'b1; syndrome <= AETH_NAK_INV;
+                       end
+                       main_state <= MAIN_CQE;
+                   end else if (translate_ready[0]) main_state <= MAIN_TRANSLATE_WAIT;
             MAIN_TRANSLATE_WAIT: if (translate_response[0]) begin
                        physical_address0 <= translate_physical_address0;
                        physical_page1 <= translate_physical_page1;

@@ -115,6 +115,30 @@ module roce_csr
     wire [19:0] register_offset  = register_address[19:0];
     wire        register_write = register_enable & register_write_enable;
 
+    // REG_CTRL[2] 的存储位；对外的 pfc_gate_enable 是它再打一拍的副本（2026-11-25）。
+    // B0118 core_clk：u_csr|pfc_gate_enable → gen_lane[*].u_engine 派发准入（6 级，−0.009）。门控使能是
+    // 准静态配置，多一级普通寄存器让 Fitter 把源放到 4 个引擎附近、也给 Hyper-Retimer 留出可推的寄存器。
+    // 写 CTRL 后晚一拍生效，读回仍读存储位，软件不可见。
+    reg         pfc_gate_cfg;
+    always @(posedge clk) begin
+        if (!rst_n) pfc_gate_enable <= 1'b1;
+        else        pfc_gate_enable <= pfc_gate_cfg;
+    end
+
+    // synopsys translate_off
+    // roce.sdc 对 u_avm_cdc|downstream_address → u_csr|register_read_value 设了两周期 setup，前提是：
+    // register_enable 有效的那一拍，upstream_address 至少已保持一拍（地址刚变的那一拍 register_enable 必为 0）。
+    // roce_avm_cdc 一次只发一笔访问、整笔期间保持地址，avm_register 的 reg_en 比 read/write 晚一拍，所以成立。
+    // 仿真逐拍检查：上游协议哪天改了、前提被打破，台子当场报错，而不是在板上静默读错。
+    reg  [27:0] sim_upstream_address_q;
+    always @(posedge clk) begin
+        sim_upstream_address_q <= upstream_address;
+        if (rst_n && register_enable && (upstream_address !== sim_upstream_address_q))
+            $error("roce_csr: register_enable 拍的 upstream_address 刚变化（0x%07h -> 0x%07h），roce.sdc 两周期读约束的前提不成立",
+                   sim_upstream_address_q, upstream_address);
+    end
+    // synopsys translate_on
+
     reg  [31:0] command_data [0:15];
     reg  [31:0] command_read_data [0:15];
     reg         command_busy;
@@ -151,7 +175,7 @@ module roce_csr
         debug_bas_sticky_clear <= 1'b0;
         if (!rst_n) begin
             ctrl_enable <= 1'b0;
-            pfc_gate_enable <= 1'b1;
+            pfc_gate_cfg <= 1'b1;
             local_mac   <= 48'd0;
             local_ip    <= 32'd0;
             dma_test_length      <= 13'd64;
@@ -159,7 +183,7 @@ module roce_csr
         end else if (register_write) begin
             case (register_offset)
                 REG_CTRL:      begin ctrl_enable <= register_write_value[0]; soft_rst <= register_write_value[1];
-                                    pfc_gate_enable <= !register_write_value[2]; end
+                                    pfc_gate_cfg <= !register_write_value[2]; end
                 REG_MAC_LO:    local_mac[31:0]  <= register_write_value;
                 REG_MAC_HI:    local_mac[47:32] <= register_write_value[15:0];
                 REG_IPV4:      local_ip         <= register_write_value;
@@ -280,7 +304,7 @@ module roce_csr
                 REG_VERSION:    register_read_value <= HW_VERSION;
                 REG_CAPS:       register_read_value <= {8'($clog2(MTT_NUM)), 8'($clog2(MR_NUM)),
                                              8'($clog2(CQ_NUM)), 8'($clog2(QP_NUM))};
-                REG_CTRL:       register_read_value <= {29'd0, !pfc_gate_enable, 1'b0, ctrl_enable};
+                REG_CTRL:       register_read_value <= {29'd0, !pfc_gate_cfg, 1'b0, ctrl_enable};
                 REG_STATUS:     register_read_value <= {31'd0, link_up};
                 REG_CORE_CLOCK: register_read_value <= 32'(CORE_CLOCK_MHZ);
                 REG_MAC_LO:     register_read_value <= local_mac[31:0];

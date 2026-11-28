@@ -9,7 +9,11 @@
 `timescale 1ns/1ps
 `include "roce_bas_if.vh"
 module roce_dma #(
-    parameter int TAG_W = 4
+    parameter int TAG_W = 4,
+    // 读数据（core 侧）位宽：1024 或 2048。
+    parameter int RD_DW = 1024,
+    // 写数据（core 侧）位宽：1024 或 2048。BAS 侧恒 1024 位、AWSIZE=7，见下面「写数据位宽」。
+    parameter int WR_DW = 1024
 )(
     input  wire                   clk,
     input  wire                   rst,
@@ -28,8 +32,8 @@ module roce_dma #(
     // 读数据（每请求以 last 结束）
     output wire                   dma_read_valid,
     input  wire                   dma_read_ready,
-    output wire  [1023:0]         dma_read_data,
-    output wire  [127:0]          dma_read_keep,
+    output wire  [RD_DW-1:0]      dma_read_data,
+    output wire  [RD_DW/8-1:0]    dma_read_keep,
     output wire                   dma_read_last,
     output wire  [TAG_W-1:0]      dma_read_tag,
     output wire                   dma_read_error,
@@ -39,9 +43,10 @@ module roce_dma #(
     input  wire  [63:0]           dma_write_request_address,
     input  wire  [63:0]           dma_write_request_page1,
     input  wire  [12:0]           dma_write_request_length,
+    // 写数据：每请求 ceil(length/(WR_DW/8)) 拍，payload 第 i 字节在首拍起的 bit[8i+7:8i]
     input  wire                   dma_write_valid,
     output wire                   dma_write_ready,
-    input  wire  [1023:0]         dma_write_data,
+    input  wire  [WR_DW-1:0]      dma_write_data,
     // 写完成（每请求一拍，按序）
     output wire                   dma_write_complete,
     output wire                   dma_write_complete_error,
@@ -51,8 +56,28 @@ module roce_dma #(
     // 表现为「读请求不再发出、计数全冻结」，且软复位之前不会自愈。
     output wire  [13:0]           debug_state
 );
-    localparam int READ_FIFO_DEPTH   = 512;
+    // ------------------------------------------------------------ 读数据位宽
+    // RD_DW=2048：core 250 MHz 每拍要 256 B，而 BAS R 是 1024 bit @ 500 MHz（每 core 拍 2 个 R 拍）。
+    // 做法：**读请求按 256 B 对齐、拍数恒为偶数**，于是每个 AXI burst 的 R 拍成对出现，pcie 域把
+    // 相邻两拍拼成一个 2048 位条目写进 R FIFO（拼对永不跨 burst，也就永不跨请求，没有半对等待）。
+    // rd_align 在 core 域按 256 B 一拍对齐，起点偏移 s = addr[7:0]。
+    //   代价：起点不在 256 B 边界时最多多读 128 B（同一 256 B 块内，绝不跨 4 KB 页，IOMMU 安全）；
+    //   1 KB 对齐 payload 不多读。
+    // RD_DW=1024：与改动之前逐位等价（128 B 对齐、R FIFO 1024 位、每次弹 1 拍）。
+    localparam int PAIR   = RD_DW / 1024;             // 每个 R FIFO 条目含几个 R 拍：1 / 2
+    localparam int LA     = $clog2(RD_DW / 8);        // 对齐粒度位数：7（128 B）/ 8（256 B）
+    localparam int READ_FIFO_DEPTH   = 512;           // 以 R 拍计（与 PAIR 无关，RAM 位数不变）
     localparam int READ_CREDITS = READ_FIFO_DEPTH - 32;
+
+    // ------------------------------------------------------------ 写数据位宽（WR_DW）
+    // WR_DW=2048：core 250 MHz 每拍收 256 B，BAS W 是 1024 bit @ 500 MHz（每 core 拍 2 个 W 拍），带宽相等。
+    // 做法（读侧拼对的镜像）：AW / B 全部照旧按 128 B 拍生成，wr_align 在 core 域一拍出两个 128 B 半拍
+    // （每半拍各带 last、高半拍另带 valid），W FIFO 2048 位入，pcie 域每个条目拆成 1~2 个 W 拍。
+    // 头拍拆分 / 跨页使 burst 边界可能落在条目中间、请求总拍数为奇数时末条目只有低半拍，
+    // 这些都由逐半拍的 last / valid 表达，WLAST 与每个 AW 的 AWLEN 逐拍对齐。
+    // WR_DW=1024：与改动之前逐位等价（W FIFO 1024 位、每条目 1 个 W 拍）。
+    localparam int WR_H   = WR_DW / 1024;             // 每个 W FIFO 条目含几个 W 拍：1 / 2
+    localparam int W_USER_W = (WR_H == 2) ? 2 : 1;    // W FIFO 的 tuser：{高半拍 valid, 高半拍 last}
 
     // ------------------------------------------------------------ 写请求在途深度（B6397）
     // AW FIFO 与 B 计数 FIFO 原来都是 32/64，1 KB MTU 下每包一个写请求、约 8 拍一个，
@@ -110,19 +135,26 @@ module roce_dma #(
     // 位宽：o0+len 最大 127+4096 = 4223 → 13 位；o12+len 最大 4095+4096 = 8191 → 13 位。
     // 两个常量减法都在 13 位上做，否则被减数先被截断成 12 位会下溢（第一版就踩了这个，
     // trace 里跨页第二段放出 arlen=32 即 33 拍的假 burst）。
-    wire [12:0] read_non_cross_m1     = (13'({1'b0, dma_read_request_address[6:0]} + {1'b0, dma_read_request_length}) - 13'd1) >> 7;
-    wire [12:0] read_cross_second_m1  = (13'(dma_read_request_address[11:0] + {1'b0, dma_read_request_length}) - 13'd4097) >> 7;
+    // PAIR=2 时同一套恒等式按 256 B 粒度算「块数−1」，再换成 R 拍数−1 = 2×(块数−1)+1。
+    wire [12:0] read_non_cross_m1     = (13'(13'(dma_read_request_address[LA-1:0]) + {1'b0, dma_read_request_length}) - 13'd1) >> LA;
+    wire [12:0] read_cross_second_m1  = (13'(dma_read_request_address[11:0] + {1'b0, dma_read_request_length}) - 13'd4097) >> LA;
     // 跨页第一段的 ~addr[11:7] 必须显式零扩展（{1'b0, ~addr[11:7]}）。
     // 写成 6'(~addr[11:7]) 时 Verilator 5.032 会把操作数先扩到 6 位再取反，addr[11:7]=31 得到 6'h20=32；
     // 写成 ~addr[11:7] 同样中招（同见本机隔离用例 /tmp/bt/t2.sv：v1/v4=32，v2/v5=0）。
-    wire [5:0]  read_first_burst_m1   = read_crosses_page ? {1'b0, ~dma_read_request_address[11:7]} : read_non_cross_m1[5:0];
-    wire [5:0]  read_second_burst_m1  = read_cross_second_m1[5:0];
+    wire [5:0]  read_first_blocks_m1  = read_crosses_page ? 6'({1'b0, ~dma_read_request_address[11:LA]}) : read_non_cross_m1[5:0];
+    wire [5:0]  read_second_blocks_m1 = read_cross_second_m1[5:0];
+    wire [5:0]  read_first_burst_m1   = (PAIR == 2) ? {read_first_blocks_m1[4:0], 1'b1}  : read_first_blocks_m1;
+    wire [5:0]  read_second_burst_m1  = (PAIR == 2) ? {read_second_blocks_m1[4:0], 1'b1} : read_second_blocks_m1;
     wire [5:0]  read_ar_beats_m1      = read_second_phase ? read_second_burst_m1 : read_first_burst_m1;   // 直接进 AR FIFO
     // 信用记账仍用「拍数」而不是「beat−1」，且**保持原来的算式不动**：这条链的终点是 read_credit 寄存器，
     // 有一整拍余量（不在违例名单里），改它只会引入新的等价性风险。
-    wire [5:0]  read_first_burst_beats    = read_crosses_page ? 6'(32 - dma_read_request_address[11:7]) : 6'(((read_end_in_page + 14'd127) >> 7) - dma_read_request_address[11:7]);
-    wire [5:0]  read_second_burst_beats    = 6'((read_end_in_page - 14'd4096 + 14'd127) >> 7);
-    wire [6:0]  read_total_beats = {1'b0, read_first_burst_beats} + (read_crosses_page ? {1'b0, read_second_burst_beats} : 7'd0);   // 1..33
+    localparam int BLK = 1 << LA;                    // 128 / 256
+    wire [5:0]  read_first_burst_blocks   = read_crosses_page ? 6'((4096 / BLK) - dma_read_request_address[11:LA])
+                                                              : 6'(((read_end_in_page + 14'(BLK - 1)) >> LA) - dma_read_request_address[11:LA]);
+    wire [5:0]  read_second_burst_blocks  = 6'((read_end_in_page - 14'd4096 + 14'(BLK - 1)) >> LA);
+    wire [5:0]  read_first_burst_beats    = 6'(read_first_burst_blocks * PAIR);
+    wire [5:0]  read_second_burst_beats   = 6'(read_second_burst_blocks * PAIR);
+    wire [6:0]  read_total_beats = {1'b0, read_first_burst_beats} + (read_crosses_page ? {1'b0, read_second_burst_beats} : 7'd0);   // 1..33（PAIR=2：2..34）
 
     reg  [9:0]  read_credit;
     reg         read_second_phase;                 // 跨页请求已发出第一个 burst
@@ -141,14 +173,15 @@ module roce_dma #(
     // 绝不可能出现原来拦住、现在放行的情况，所以 R FIFO 不会因此溢出。
     // 代价：小请求（WQE 取指 64 B = 1~2 拍）在信用低于 33 时会多等，
     // 但 credit 只有降到 ~33 才触发，此时 480 深度的读 FIFO 已接近满、系统本就反压。
-    localparam int MAX_READ_BEATS_PER_REQ = 33;
+    // PAIR=2：4096 B + 255 B 偏移 → 17 个 256 B 块 = 34 拍。
+    localparam int MAX_READ_BEATS_PER_REQ = (PAIR == 2) ? 34 : 33;
     wire        read_credit_ok = read_second_phase ||
                                  (read_credit >= 10'(MAX_READ_BEATS_PER_REQ));
     wire        read_ar_push = dma_read_request_valid && ar_fifo_ready && read_meta_fifo_ready &&
                              read_credit_ok;
     wire        read_request_done  = read_ar_push && (!read_crosses_page || read_second_phase);   // 请求完成（推元数据）
     assign dma_read_request_ready  = read_request_done;
-    wire [63:0] read_ar_address  = read_second_phase ? {dma_read_request_page1[63:12], 12'd0} : {dma_read_request_address[63:7], 7'd0};
+    wire [63:0] read_ar_address  = read_second_phase ? {dma_read_request_page1[63:12], 12'd0} : {dma_read_request_address[63:LA], LA'(0)};
 
     always @(posedge clk) begin
         if (rst)             read_second_phase <= 1'b0;
@@ -157,14 +190,15 @@ module roce_dma #(
     end
 
     wire        read_beat_valid, read_beat_ready, read_beat_error;
-    wire [1023:0] read_beat_data;
+    wire [RD_DW-1:0] read_beat_data;
     wire        read_beat_pop   = read_beat_valid && read_beat_ready;
 
     always @(posedge clk) begin
         if (rst)
             read_credit <= 10'(READ_CREDITS);
         else
-            read_credit <= read_credit - ((read_ar_push && !read_second_phase) ? {3'd0, read_total_beats} : 10'd0) + {9'd0, read_beat_pop};
+            read_credit <= read_credit - ((read_ar_push && !read_second_phase) ? {3'd0, read_total_beats} : 10'd0)
+                                       + (read_beat_pop ? 10'(PAIR) : 10'd0);
     end
 
     wire [71:0] ar_fifo_data;
@@ -197,15 +231,15 @@ module roce_dma #(
     );
 
     // 读元数据（core 域同步 FIFO，用 axis_async_fifo 同时钟）
-    wire [6:0]       read_meta_address_low;
+    wire [LA-1:0]    read_meta_address_low;
     wire [12:0]      read_meta_length;
     wire [TAG_W-1:0] read_meta_tag;
     wire             read_meta_valid, read_meta_ready;
     axis_async_fifo #(
-        .DEPTH(64), .DATA_WIDTH(20+TAG_W), .KEEP_ENABLE(0), .LAST_ENABLE(0), .USER_ENABLE(0)
+        .DEPTH(64), .DATA_WIDTH(13+LA+TAG_W), .KEEP_ENABLE(0), .LAST_ENABLE(0), .USER_ENABLE(0)
     ) u_meta_fifo (
         .s_clk(clk), .s_rst(rst),
-        .s_axis_tdata({dma_read_request_tag, dma_read_request_length, dma_read_request_address[6:0]}),
+        .s_axis_tdata({dma_read_request_tag, dma_read_request_length, dma_read_request_address[LA-1:0]}),
         .s_axis_tkeep('0), .s_axis_tvalid(read_request_done), .s_axis_tready(read_meta_fifo_ready),
         .s_axis_tlast(1'b1), .s_axis_tid(8'd0), .s_axis_tdest(8'd0), .s_axis_tuser(1'b0),
         .m_clk(clk), .m_rst(rst),
@@ -220,15 +254,45 @@ module roce_dma #(
 
     // R 通道 -> core
     wire bas_rvalid = bas_s2m[`BAS_S2M_RVALID];
+    wire              r_fifo_push;
+    wire [RD_DW-1:0]  r_fifo_data;
+    wire              r_fifo_error;
+    generate
+        if (PAIR == 2) begin : gen_r_pair
+            // pcie 域拼对：偶数拍先存，奇数拍到时连同存下的一起写一个 2048 位条目。
+            // 每个 burst 的拍数恒为偶数（见上面 read_*_burst_m1 的最低位恒 1），所以拼对边界
+            // 与 burst 边界重合，r_lo_valid 在 burst 之间恒为 0，不会有半对滞留。
+            reg  [1023:0] r_lo_data;
+            reg           r_lo_valid, r_lo_error;
+            always @(posedge pcie_clk) begin
+                if (pcie_rst) begin
+                    r_lo_valid <= 1'b0;
+                end else if (bas_rvalid) begin
+                    r_lo_valid <= !r_lo_valid;
+                    if (!r_lo_valid) begin
+                        r_lo_data  <= bas_s2m[`BAS_S2M_RDATA];
+                        r_lo_error <= (bas_s2m[`BAS_S2M_RRESP] != 2'b00);
+                    end
+                end
+            end
+            assign r_fifo_push  = bas_rvalid && r_lo_valid;
+            assign r_fifo_data  = {bas_s2m[`BAS_S2M_RDATA], r_lo_data};
+            assign r_fifo_error = r_lo_error || (bas_s2m[`BAS_S2M_RRESP] != 2'b00);
+        end else begin : gen_r_single
+            assign r_fifo_push  = bas_rvalid;
+            assign r_fifo_data  = bas_s2m[`BAS_S2M_RDATA];
+            assign r_fifo_error = (bas_s2m[`BAS_S2M_RRESP] != 2'b00);
+        end
+    endgenerate
     axis_async_fifo #(
-        .DEPTH(READ_FIFO_DEPTH), .DATA_WIDTH(1024), .KEEP_ENABLE(0), .LAST_ENABLE(0),
+        .DEPTH(READ_FIFO_DEPTH / PAIR), .DATA_WIDTH(RD_DW), .KEEP_ENABLE(0), .LAST_ENABLE(0),
         .USER_ENABLE(1), .USER_WIDTH(1)
     ) u_r_fifo (
         .s_clk(pcie_clk), .s_rst(pcie_rst),
-        .s_axis_tdata(bas_s2m[`BAS_S2M_RDATA]),
-        .s_axis_tkeep('0), .s_axis_tvalid(bas_rvalid), .s_axis_tready(),
+        .s_axis_tdata(r_fifo_data),
+        .s_axis_tkeep('0), .s_axis_tvalid(r_fifo_push), .s_axis_tready(),
         .s_axis_tlast(1'b1), .s_axis_tid(8'd0), .s_axis_tdest(8'd0),
-        .s_axis_tuser(bas_s2m[`BAS_S2M_RRESP] != 2'b00),
+        .s_axis_tuser(r_fifo_error),
         .m_clk(clk), .m_rst(rst),
         .m_axis_tdata(read_beat_data), .m_axis_tkeep(), .m_axis_tvalid(read_beat_valid),
         .m_axis_tready(read_beat_ready), .m_axis_tlast(), .m_axis_tid(), .m_axis_tdest(),
@@ -240,7 +304,7 @@ module roce_dma #(
         .m_status_bad_frame(), .m_status_good_frame()
     );
 
-    roce_dma_rd_align #(.TAG_W(TAG_W)) u_rd_align (
+    roce_dma_rd_align #(.TAG_W(TAG_W), .DW(RD_DW)) u_rd_align (
         .clk(clk), .rst(rst),
         .meta_valid(read_meta_valid), .meta_ready(read_meta_ready), .meta_address_low(read_meta_address_low), .meta_length(read_meta_length), .meta_tag(read_meta_tag),
         .in_valid(read_beat_valid), .in_ready(read_beat_ready), .in_data(read_beat_data), .in_error(read_beat_error),
@@ -267,8 +331,25 @@ module roce_dma #(
     wire        write_head_split = (dma_write_request_address[6:0] != 7'd0) && (write_first_burst_beats > 6'd1);
     // 0 = 首个 burst（头拍，或不拆分时的整段首页）；1 = 首页余下（只在头拍拆分时有）；2 = 第二页
     reg  [1:0]  write_phase;
-    wire        write_last_burst = (write_phase == 2'd2) ||
-                                   (!write_crosses_page && ((write_phase == 2'd1) || !write_head_split));
+    // B0121 时序：请求在**首个 burst 入队那拍**就从上游取走（dma_write_request_ready = write_request_start），
+    // 首页余下 / 第二页这两个后续 burst 用下面在那一拍锁存的字段发，不再回头读上游。
+    //
+    // 原来请求要等最后一个 burst 才 ready，ready 里带着「是不是最后一个」，而这要从请求现算跨页与头拍拆分
+    // （end_in_page、+127、−addr[11:7] 三级加法）。B0120（2048 位）core_clk 违例环之一就是它：
+    // engine 的 u_write_request_skid.main_data → 三级加法 → write_head_split → write_last_burst
+    // → write_request_done（= ready）→ 回到同一个 skid 的装载使能（扇出 141 位），−0.018，近临界 118 条。
+    // 现在 ready 只看 valid、aw_space_q、write_align_ready、bresp_count_fifo_ready 和 phase，与请求内容无关，
+    // 环上没有数据通路；跨页 / 拆分 / 拍数只进 write_phase 与锁存寄存器的 D 端。
+    // u_wr_align 与 B 计数 FIFO 本来就只在首个 burst 那拍采样请求（u_wr_align 在 request_valid && !request_active
+    // 时整体锁存），提前取走对它们没有影响；请求更早离开 skid，下一个请求更早就位，吞吐只会持平或更好。
+    reg  [63:12] write_rest_page0;        // 首页余下：address[63:12]
+    reg  [4:0]   write_rest_block;        //           address[11:7] + 1（头拍拆分要求首页 > 1 拍，addr[11:7] != 31，不进位出页）
+    reg  [5:0]   write_rest_first_m1;     //           首页拍数 − 1
+    reg  [63:12] write_rest_page1;        // 第二页：page1[63:12]
+    reg  [5:0]   write_rest_second;       //         第二页拍数
+    reg          write_rest_crosses;      // 首页余下之后还有没有第二页
+    wire        write_last_burst = (write_phase == 2'd0) ? (!write_crosses_page && !write_head_split) :
+                                   (write_phase == 2'd1) ? !write_rest_crosses : 1'b1;
     wire        aw_fifo_ready, write_align_ready, bresp_count_fifo_ready;
     // B6420：AW FIFO 的「可写」改用寄存器（aw_space_q）。B6418 core 时钟最差路径之一（+0.020）：
     // u_aw_fifo 写指针格雷码 → full 比较 → s_axis_tready → write_aw_push → 请求 ready → engine 的 u_write_request_skid。
@@ -280,22 +361,34 @@ module roce_dma #(
         if (rst) aw_space_q <= 1'b0;
         else     aw_space_q <= aw_fifo_ready && (aw_fifo_depth < ($clog2(WRITE_AW_FIFO_DEPTH)+1)'(WRITE_AW_FIFO_DEPTH - 8));
     end
-    wire        write_aw_push = dma_write_request_valid && aw_space_q && ((write_phase != 2'd0) || (write_align_ready && bresp_count_fifo_ready));
-    wire        write_request_done    = write_aw_push && write_last_burst;
+    // phase 0 要上游有请求、对齐模块与 B 计数 FIFO 能收；后续 burst 的请求已在本模块里，只等 AW FIFO 有空。
+    wire        write_aw_push = (write_phase != 2'd0) ? aw_space_q
+                                                      : (dma_write_request_valid && aw_space_q && write_align_ready && bresp_count_fifo_ready);
+    wire        write_request_done    = write_aw_push && write_last_burst;     // 本请求最后一个 burst 入队
     wire        write_request_start   = write_aw_push && (write_phase == 2'd0);    // 对齐模块与 B 计数在首个 burst 时入队
-    assign dma_write_request_ready    = write_request_done;
-    // 首页余下那段从下一个 128 B 块开始：头拍拆分要求首页 > 1 拍，所以 addr[11:7] != 31，5 位加 1 不会进位出页
-    wire [63:0] write_aw_address  = (write_phase == 2'd2) ? {dma_write_request_page1[63:12], 12'd0} :
-                                    (write_phase == 2'd1) ? {dma_write_request_address[63:12], dma_write_request_address[11:7] + 5'd1, 7'd0} :
+    assign dma_write_request_ready    = write_request_start;
+    wire [63:0] write_aw_address  = (write_phase == 2'd2) ? {write_rest_page1, 12'd0} :
+                                    (write_phase == 2'd1) ? {write_rest_page0, write_rest_block, 7'd0} :
                                                             {dma_write_request_address[63:7], 7'd0};
-    wire [5:0]  write_aw_beats = (write_phase == 2'd2) ? write_second_burst_beats :
-                                 (write_phase == 2'd1) ? write_first_burst_beats - 6'd1 :
+    wire [5:0]  write_aw_beats = (write_phase == 2'd2) ? write_rest_second :
+                                 (write_phase == 2'd1) ? write_rest_first_m1 :
                                  write_head_split      ? 6'd1 : write_first_burst_beats;
 
     always @(posedge clk) begin
         if (rst)                     write_phase <= 2'd0;
         else if (write_request_done) write_phase <= 2'd0;
         else if (write_aw_push)      write_phase <= ((write_phase == 2'd0) && write_head_split) ? 2'd1 : 2'd2;
+    end
+    // 后续 burst 的字段：首个 burst 入队（请求被取走）那拍锁存。数据寄存器不挂复位（只在 phase != 0 时被读）。
+    always @(posedge clk) begin
+        if (write_request_start) begin
+            write_rest_page0    <= dma_write_request_address[63:12];
+            write_rest_block    <= dma_write_request_address[11:7] + 5'd1;
+            write_rest_first_m1 <= write_first_burst_beats - 6'd1;
+            write_rest_page1    <= dma_write_request_page1[63:12];
+            write_rest_second   <= write_second_burst_beats;
+            write_rest_crosses  <= write_crosses_page;
+        end
     end
 
     wire [71:0] aw_fifo_data;
@@ -319,41 +412,82 @@ module roce_dma #(
         .m_status_bad_frame(), .m_status_good_frame()
     );
 
-    wire          aligned_write_valid, aligned_write_ready, aligned_write_last;
-    wire [1023:0] aligned_write_data;
-    wire [127:0]  aligned_write_strobe;
-    roce_dma_wr_align u_wr_align (
+    wire               aligned_write_valid, aligned_write_ready;
+    wire [WR_DW-1:0]   aligned_write_data;
+    wire [WR_DW/8-1:0] aligned_write_strobe;
+    wire [WR_H-1:0]    aligned_write_last, aligned_write_half_valid;
+    roce_dma_wr_align #(.DW(WR_DW)) u_wr_align (
         .clk(clk), .rst(rst),
         .request_valid(write_request_start), .request_ready(write_align_ready), .request_address_low(dma_write_request_address[6:0]), .request_length(dma_write_request_length),
         .request_first_burst_beats(write_crosses_page ? write_first_burst_beats : 6'd0),
         .request_head_split(write_head_split),
         .write_data_in_valid(dma_write_valid), .write_data_in_ready(dma_write_ready), .write_data_in(dma_write_data),
-        .write_valid(aligned_write_valid), .write_ready(aligned_write_ready), .write_data(aligned_write_data), .write_strobe(aligned_write_strobe), .write_last(aligned_write_last)
+        .write_valid(aligned_write_valid), .write_ready(aligned_write_ready), .write_data(aligned_write_data), .write_strobe(aligned_write_strobe), .write_last(aligned_write_last),
+        .write_half_valid(aligned_write_half_valid)
     );
 
-    wire          w_fifo_valid, w_fifo_last;
-    wire [1023:0] w_fifo_data;
-    wire [127:0]  w_fifo_strobe;
-    wire          bas_wready = bas_s2m[`BAS_S2M_WREADY];
+    // W FIFO：DEPTH 按字节（KEEP 打开时），两种位宽都是 64 KB——WR_DW=2048 时 256 条目 × 2048 位，RAM 位数不变。
+    // 实例名保持 u_w_fifo（roce.sdc 按 u_dma|u_w_fifo 下格雷码指针的偏斜约束），所以不包进 generate。
+    wire [W_USER_W-1:0] w_fifo_s_user;
+    wire [W_USER_W-1:0] w_fifo_user;
+    wire               w_fifo_valid, w_fifo_last, w_fifo_pop;
+    wire [WR_DW-1:0]   w_fifo_data;
+    wire [WR_DW/8-1:0] w_fifo_strobe;
+    wire               bas_wready = bas_s2m[`BAS_S2M_WREADY];
     axis_async_fifo #(
-        .DEPTH(512*128), .DATA_WIDTH(1024), .KEEP_ENABLE(1), .KEEP_WIDTH(128),   // KEEP 打开时 DEPTH 按字节
-        .LAST_ENABLE(1), .USER_ENABLE(0),
+        .DEPTH(512*128), .DATA_WIDTH(WR_DW), .KEEP_ENABLE(1), .KEEP_WIDTH(WR_DW/8),   // KEEP 打开时 DEPTH 按字节
+        .LAST_ENABLE(1), .USER_ENABLE((WR_H == 2) ? 1 : 0), .USER_WIDTH(W_USER_W),
         .RAM_PIPELINE(PCIE_FIFO_RAM_PIPELINE), .OUTPUT_FIFO_ENABLE(PCIE_FIFO_OUTPUT_FIFO)
     ) u_w_fifo (
         .s_clk(clk), .s_rst(rst),
         .s_axis_tdata(aligned_write_data), .s_axis_tkeep(aligned_write_strobe), .s_axis_tvalid(aligned_write_valid),
-        .s_axis_tready(aligned_write_ready), .s_axis_tlast(aligned_write_last),
-        .s_axis_tid(8'd0), .s_axis_tdest(8'd0), .s_axis_tuser(1'b0),
+        .s_axis_tready(aligned_write_ready), .s_axis_tlast(aligned_write_last[0]),
+        .s_axis_tid(8'd0), .s_axis_tdest(8'd0), .s_axis_tuser(w_fifo_s_user),
         .m_clk(pcie_clk), .m_rst(pcie_rst),
         .m_axis_tdata(w_fifo_data), .m_axis_tkeep(w_fifo_strobe), .m_axis_tvalid(w_fifo_valid),
-        .m_axis_tready(bas_wready), .m_axis_tlast(w_fifo_last), .m_axis_tid(), .m_axis_tdest(),
-        .m_axis_tuser(),
+        .m_axis_tready(w_fifo_pop), .m_axis_tlast(w_fifo_last), .m_axis_tid(), .m_axis_tdest(),
+        .m_axis_tuser(w_fifo_user),
         .s_pause_req(1'b0), .s_pause_ack(), .m_pause_req(1'b0), .m_pause_ack(),
         .s_status_depth(), .s_status_depth_commit(), .s_status_overflow(),
         .s_status_bad_frame(), .s_status_good_frame(),
         .m_status_depth(), .m_status_depth_commit(), .m_status_overflow(),
         .m_status_bad_frame(), .m_status_good_frame()
     );
+
+    // pcie 域：W FIFO 条目 → BAS W 拍
+    wire          bas_w_valid, bas_w_last;
+    wire [1023:0] bas_w_data;
+    wire [127:0]  bas_w_strobe;
+    generate
+        if (WR_H == 2) begin : gen_w_split
+            // 每个条目先发低半拍，高半拍有效时下一拍再发高半拍；发完条目里最后一个有效半拍才弹出。
+            // 条目之间不插空拍：弹出那拍 FIFO 的输出（OUTPUT_FIFO_ENABLE）下一拍就换成下一个条目，
+            // 所以只要 FIFO 不空，W 每个 pcie 拍出 1 拍（1024 bit × 500 MHz = 2048 bit × 250 MHz）。
+            // w_half / 高半拍 valid 都是寄存器输出，w_fifo_pop 只比原来多一级与门。
+            reg  w_half;                                  // 0 = 正在发低半拍，1 = 正在发高半拍
+            wire hi_valid = w_fifo_user[1];
+            wire hi_last  = w_fifo_user[0];
+            always @(posedge pcie_clk) begin
+                if (pcie_rst)
+                    w_half <= 1'b0;
+                else if (w_fifo_valid && bas_wready)
+                    w_half <= !w_half && hi_valid;
+            end
+            assign w_fifo_s_user = {aligned_write_half_valid[1], aligned_write_last[1]};
+            assign w_fifo_pop    = bas_wready && (w_half || !hi_valid);
+            assign bas_w_valid   = w_fifo_valid;
+            assign bas_w_data    = w_half ? w_fifo_data[2047:1024]  : w_fifo_data[1023:0];
+            assign bas_w_strobe  = w_half ? w_fifo_strobe[255:128] : w_fifo_strobe[127:0];
+            assign bas_w_last    = w_half ? hi_last : w_fifo_last;
+        end else begin : gen_w_direct
+            assign w_fifo_s_user = 1'b0;
+            assign w_fifo_pop    = bas_wready;
+            assign bas_w_valid   = w_fifo_valid;
+            assign bas_w_data    = w_fifo_data;
+            assign bas_w_strobe  = w_fifo_strobe;
+            assign bas_w_last    = w_fifo_last;
+        end
+    endgenerate
 
     // B 通道 -> core（每个 AW 一个 B）
     wire bas_bvalid = bas_s2m[`BAS_S2M_BVALID];
@@ -425,10 +559,10 @@ module roce_dma #(
     assign bas_m2s[`BAS_M2S_AWBURST] = 2'b01;              // INCR
     assign bas_m2s[`BAS_M2S_AWPROT]  = 3'd0;
     assign bas_m2s[`BAS_M2S_AWLOCK]  = 1'b0;
-    assign bas_m2s[`BAS_M2S_WVALID]  = w_fifo_valid;
-    assign bas_m2s[`BAS_M2S_WLAST]   = w_fifo_last;
-    assign bas_m2s[`BAS_M2S_WDATA]   = w_fifo_data;
-    assign bas_m2s[`BAS_M2S_WSTRB]   = w_fifo_strobe;
+    assign bas_m2s[`BAS_M2S_WVALID]  = bas_w_valid;
+    assign bas_m2s[`BAS_M2S_WLAST]   = bas_w_last;
+    assign bas_m2s[`BAS_M2S_WDATA]   = bas_w_data;
+    assign bas_m2s[`BAS_M2S_WSTRB]   = bas_w_strobe;
     assign bas_m2s[`BAS_M2S_BREADY]  = 1'b1;
     assign bas_m2s[`BAS_M2S_ARVALID] = ar_fifo_valid;
     assign bas_m2s[`BAS_M2S_ARID]    = 4'd0;

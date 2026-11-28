@@ -6,27 +6,38 @@
 // 1024 bit（B6386）：与 roce_top/MAC 侧同宽，删掉了原来的 512→1024 axis_adapter
 // （u_upsize）。ICRC 从 DW=512/N_PIPE=3 改成 DW=1024/N_PIPE=4——这个组合 roce_rx_front
 // 里已经有一份在 tx_clkout 域跑通，逻辑面积严格线性，分级 XOR 树扇入还从 8 降到 6。
+//
+// 2048 bit：core 侧（roce_tx → ICRC → staging → CDC 写口）参数化为 DW，默认 2048；
+// CDC 读口仍是 DW 位，在 mac 域拆成 1024 位拍再送出（mac_data / mac_last_bytes 口径不变，
+// tx_mux / pfc_egress / MAC 一概不动）。带宽：core 2048×250 MHz = 512 Gbps ≥ mac 1024×390.625 MHz。
+// 拆拍后加一级 roce_skid（mac 域）：pfc_egress 是组合直通，不加的话 2:1 选择会串到 tx_mux 里。
 `default_nettype none
 `timescale 1ns/1ps
-module roce_tx_out (
+module roce_tx_out #(
+    parameter int DW = 2048
+)(
     input  wire              clk,
     input  wire              rst,
     input  wire              mac_clk,
     input  wire              mac_rst,
     input  wire              frame_valid,
     output wire              frame_ready,
-    input  wire  [1023:0]    frame_data,
-    input  wire  [127:0]     frame_keep,
+    input  wire  [DW-1:0]    frame_data,
+    input  wire  [DW/8-1:0]  frame_keep,
     input  wire              frame_last,
-    input  wire  [6:0]       frame_last_bytes,
-    input  wire  [6:0]       frame_last_beat_bytes,
+    input  wire  [$clog2(DW/8)-1:0] frame_last_bytes,
+    input  wire  [$clog2(DW/8)-1:0] frame_last_beat_bytes,
     output wire              mac_valid,
     input  wire              mac_ready,
     output wire  [1023:0]    mac_data,
     output wire  [6:0]       mac_last_bytes,
     output wire              mac_last
 );
-    localparam int BEAT_BYTES = 128;
+    localparam int BEAT_BYTES = DW / 8;
+    localparam int LBW        = $clog2(BEAT_BYTES);
+    localparam int PAIR       = DW / 1024;
+    // ICRC 流水级数：DW=2048 时 XOR 树输入翻倍，多一级（结果走 result FIFO，延迟不影响吞吐）。
+    localparam int ICRC_PIPE  = (DW >= 2048) ? 5 : 4;
 
     // ------------------------------------------------------------ ICRC
     wire frame_push = frame_valid && frame_ready;
@@ -37,20 +48,20 @@ module roce_tx_out (
     end
     wire        icrc_valid;
     wire [31:0] icrc_value;
-    roce_icrc #(.DW(BEAT_BYTES*8), .N_PIPE(4)) u_icrc (
+    roce_icrc #(.DW(DW), .N_PIPE(ICRC_PIPE)) u_icrc (
         .clk(clk), .rst(rst),
         .in_valid(frame_push), .in_data(frame_data), .in_keep(frame_keep), .in_first(frame_first), .in_last(frame_last),
         .out_valid(icrc_valid), .out_icrc(icrc_value), .out_icrc_ok()
     );
 
     wire          staging_valid, staging_last, in_ready;
-    wire [1023:0] staging_data;
-    wire [127:0]  staging_keep;
-    wire [6:0]    staging_last_bytes;
-    wire [6:0]    staging_last_beat_bytes;
+    wire [DW-1:0] staging_data;
+    wire [BEAT_BYTES-1:0] staging_keep;
+    wire [LBW-1:0] staging_last_bytes;
+    wire [LBW-1:0] staging_last_beat_bytes;
     axis_async_fifo #(
-        .DEPTH(64), .DATA_WIDTH(1024), .KEEP_ENABLE(0), .LAST_ENABLE(1),
-        .USER_ENABLE(1), .USER_WIDTH(142)
+        .DEPTH(64 / PAIR), .DATA_WIDTH(DW), .KEEP_ENABLE(0), .LAST_ENABLE(1),
+        .USER_ENABLE(1), .USER_WIDTH(2*LBW + BEAT_BYTES)
     ) u_staging_fifo (
         .s_clk(clk), .s_rst(rst),
         .s_axis_tdata(frame_data), .s_axis_tkeep('0), .s_axis_tvalid(frame_valid), .s_axis_tready(frame_ready),
@@ -84,20 +95,21 @@ module roce_tx_out (
         .m_status_bad_frame(), .m_status_good_frame()
     );
     // ------------------------------------------------------------ 追加 ICRC
-    // 末拍有效 last_beat_bytes 字节（1..128），ICRC 放在 last_beat_bytes..n+3；
-    // last_beat_bytes > 124 时多出一拍放剩余字节。
-    wire [6:0]  last_beat_bytes  = (staging_last_beat_bytes == 7'd0) ? 7'd0 : staging_last_beat_bytes;
-    wire        needs_extra_beat = (last_beat_bytes > 7'd124);
+    // 末拍有效 last_beat_bytes 字节（1..BEAT_BYTES），ICRC 放在 last_beat_bytes..n+3；
+    // last_beat_bytes > BEAT_BYTES-4 时多出一拍放剩余字节。
+    // （帧长恒 ≡ 2 mod 4：头 54..74 均 ≡ 2，payload+pad ≡ 0，所以 last_beat_bytes 不会是 0。）
+    wire [LBW-1:0] last_beat_bytes  = staging_last_beat_bytes;
+    wire        needs_extra_beat = (last_beat_bytes > LBW'(BEAT_BYTES - 4));
     reg         extra_beat;
     reg  [31:0] extra_icrc;
-    reg  [6:0]  extra_last_bytes;
-    reg  [6:0]  extra_frame_last_bytes;
+    reg  [LBW-1:0] extra_last_bytes;
+    reg  [LBW-1:0] extra_frame_last_bytes;
 
-    function automatic [1151:0] insert_icrc(input [1023:0] beat_data, input [127:0] beat_keep, input [31:0] icrc,
+    function automatic [DW+BEAT_BYTES-1:0] insert_icrc(input [DW-1:0] beat_data, input [BEAT_BYTES-1:0] beat_keep, input [31:0] icrc,
                                    input integer byte_offset);
         integer byte_lane, icrc_byte;
-        reg [1023:0] out_data_bytes;
-        reg [127:0]  out_keep_bits;
+        reg [DW-1:0] out_data_bytes;
+        reg [BEAT_BYTES-1:0] out_keep_bits;
         begin
             out_data_bytes = beat_data; out_keep_bits = beat_keep;
             for (byte_lane = 0; byte_lane < BEAT_BYTES; byte_lane = byte_lane + 1) begin
@@ -111,36 +123,71 @@ module roce_tx_out (
         end
     endfunction
 
-    wire [1151:0] inserted_last  = insert_icrc(staging_data, staging_keep, result_icrc, -int'(last_beat_bytes));
-    wire [1151:0] inserted_extra = insert_icrc(1024'd0, 128'd0, extra_icrc, BEAT_BYTES - int'(extra_last_bytes));
+    wire [DW+BEAT_BYTES-1:0] inserted_last  = insert_icrc(staging_data, staging_keep, result_icrc, -int'(last_beat_bytes));
+    wire [DW+BEAT_BYTES-1:0] inserted_extra = insert_icrc({DW{1'b0}}, {BEAT_BYTES{1'b0}}, extra_icrc, BEAT_BYTES - int'(extra_last_bytes));
 
-    wire [1023:0] out_data  = extra_beat ? inserted_extra[1023:0]    : staging_last ? inserted_last[1023:0]    : staging_data;
-    wire [127:0]  out_keep  = extra_beat ? inserted_extra[1151:1024] : staging_last ? inserted_last[1151:1024] : staging_keep;
+    wire [DW-1:0] out_data  = extra_beat ? inserted_extra[DW-1:0] : staging_last ? inserted_last[DW-1:0] : staging_data;
     wire          out_valid = extra_beat ? 1'b1 : (staging_valid && (!staging_last || result_valid));
     wire          out_last  = extra_beat ? 1'b1 : (staging_last && !needs_extra_beat);
-    wire [6:0]    out_user  = extra_beat ? extra_frame_last_bytes[6:0] : staging_last_bytes[6:0];
-    // usef 约定 0 表示 128：payload 帧末拍若正好 128 字节，last_bytes[6:0] 是 0，符合约定
+    wire [LBW-1:0] out_user = extra_beat ? extra_frame_last_bytes : staging_last_bytes;
+    // usef 约定 0 表示一整拍（帧长 ≡ 2 mod 4，实际不会出现）
     assign in_ready = !extra_beat && out_ready_internal && (!staging_last || result_valid);
     assign result_ready = !extra_beat && out_ready_internal && staging_valid && staging_last;
 
     // ------------------------------------------------------------ 帧 FIFO，跨到 MAC 时钟
+    // 深度按字节保持 16 KB（DW=2048 时 64 拍），整帧到齐才放行（FRAME_FIFO）。
     wire out_ready_internal;
+    wire          cdc_valid, cdc_ready, cdc_last;
+    wire [DW-1:0] cdc_data;
+    wire [LBW-1:0] cdc_last_bytes;
     axis_async_fifo #(
-        .DEPTH(128), .DATA_WIDTH(1024), .KEEP_ENABLE(0), .LAST_ENABLE(1),
-        .USER_ENABLE(1), .USER_WIDTH(7), .FRAME_FIFO(1), .DROP_BAD_FRAME(0)
+        .DEPTH(128 / PAIR), .DATA_WIDTH(DW), .KEEP_ENABLE(0), .LAST_ENABLE(1),
+        .USER_ENABLE(1), .USER_WIDTH(LBW), .FRAME_FIFO(1), .DROP_BAD_FRAME(0)
     ) u_cdc (
         .s_clk(clk), .s_rst(rst),
         .s_axis_tdata(out_data), .s_axis_tkeep('0), .s_axis_tvalid(out_valid), .s_axis_tready(out_ready_internal),
         .s_axis_tlast(out_last), .s_axis_tid(8'd0), .s_axis_tdest(8'd0), .s_axis_tuser(out_user),
         .m_clk(mac_clk), .m_rst(mac_rst),
-        .m_axis_tdata(mac_data), .m_axis_tkeep(), .m_axis_tvalid(mac_valid), .m_axis_tready(mac_ready),
-        .m_axis_tlast(mac_last), .m_axis_tid(), .m_axis_tdest(), .m_axis_tuser(mac_last_bytes),
+        .m_axis_tdata(cdc_data), .m_axis_tkeep(), .m_axis_tvalid(cdc_valid), .m_axis_tready(cdc_ready),
+        .m_axis_tlast(cdc_last), .m_axis_tid(), .m_axis_tdest(), .m_axis_tuser(cdc_last_bytes),
         .s_pause_req(1'b0), .s_pause_ack(), .m_pause_req(1'b0), .m_pause_ack(),
         .s_status_depth(), .s_status_depth_commit(), .s_status_overflow(),
         .s_status_bad_frame(), .s_status_good_frame(),
         .m_status_depth(), .m_status_depth_commit(), .m_status_overflow(),
         .m_status_bad_frame(), .m_status_good_frame()
     );
+
+    // ------------------------------------------------------------ mac 域拆拍：DW → 1024
+    generate
+        if (PAIR == 2) begin : gen_split
+            // 一个 2048 位条目 = 低半拍 + 高半拍；末条目若只用到低半（末拍字节 1..128）就只出低半。
+            // 末拍字节数 lb 是 mod 256 的值：低半为末拍时 lb∈1..128 → 7 位口径 lb[6:0]（128→0 表示整拍）；
+            // 高半为末拍时 lb∈129..255 → lb−128 = lb[6:0]。两种情况都直接取低 7 位。
+            reg  split_phase;                      // 1 = 正在送高半
+            wire lo_is_last = cdc_last && (cdc_last_bytes != 8'd0) && (cdc_last_bytes <= 8'd128);
+            wire          sp_valid = cdc_valid;
+            wire          sp_ready;
+            wire [1023:0] sp_data  = split_phase ? cdc_data[2047:1024] : cdc_data[1023:0];
+            wire          sp_last  = split_phase ? cdc_last : lo_is_last;
+            wire [6:0]    sp_lb    = cdc_last_bytes[6:0];
+            assign cdc_ready = sp_ready && (split_phase || lo_is_last);
+            always @(posedge mac_clk) begin
+                if (mac_rst)                    split_phase <= 1'b0;
+                else if (sp_valid && sp_ready)  split_phase <= split_phase ? 1'b0 : !lo_is_last;
+            end
+            roce_skid #(.WIDTH(1 + 7 + 1024)) u_split_skid (
+                .clk(mac_clk), .rst(mac_rst),
+                .s_valid(sp_valid), .s_ready(sp_ready), .s_data({sp_last, sp_lb, sp_data}),
+                .m_valid(mac_valid), .m_ready(mac_ready), .m_data({mac_last, mac_last_bytes, mac_data})
+            );
+        end else begin : gen_nosplit
+            assign mac_valid      = cdc_valid;
+            assign cdc_ready      = mac_ready;
+            assign mac_data       = cdc_data[1023:0];
+            assign mac_last       = cdc_last;
+            assign mac_last_bytes = cdc_last_bytes[6:0];
+        end
+    endgenerate
 
     always @(posedge clk) begin
         if (rst) begin

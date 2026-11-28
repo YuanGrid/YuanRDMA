@@ -2,9 +2,11 @@
 // 从帧中取出 [skip, skip+transfer_length) 字节，输出从第 0 字节开始的 DW bit 流（末拍 tlast、keep 连续）。
 // 输入帧多余的尾部（pad、ICRC）丢弃。每帧先给一个元数据（transfer_length 必须 >= 1），再给整帧数据。
 //
-// DW 可选 512（每拍 64 B）或 1024（每拍 128 B）。skip 的合法范围是 0..127，
-// 对应最长头 74 B。DW=1024 时一拍就能装下整个 skip 范围，first_useful_beat 恒为 0，
-// 移位只在单拍内进行；DW=512 时 skip>=64 要跨到第二拍。
+// DW 可选 512（每拍 64 B）、1024（每拍 128 B）或 2048（每拍 256 B）。skip 的位宽
+// SKIP_W = log2(一拍字节数)：DW=512/1024 时 7 位（0..127），DW=2048 时 8 位（0..255）。
+// DW>=1024 时一拍就能装下整个 skip 范围，first_useful_beat 恒为 0，移位只在单拍内进行；
+// DW=512 时 skip>=64 要跨到第二拍。
+// TX 在 DW=2048 下把头右对齐到 256 B，skip = 256 − header_length ∈ 182..202。
 //
 // 元数据与数据首拍可以同拍（meta_valid && in_valid）：此时本拍既装载元数据又把 in_data
 // 当第 0 拍消费掉，in_ready 在 !frame_active 时照样为 1。TX 靠这个省掉一拍的组包开销；
@@ -33,15 +35,16 @@
 `default_nettype none
 `timescale 1ns/1ps
 module roce_skip_align #(
-    parameter int DW = 512,                 // 数据位宽：512 或 1024
+    parameter int DW = 512,                 // 数据位宽：512、1024 或 2048
     parameter int SKIP_BASE  = 0,           // skip 的最小值（常数移位量，纯连线）
-    parameter int SKIP_RANGE = DW / 8       // skip 的取值个数；默认 = 一拍字节数（全窗口）
+    parameter int SKIP_RANGE = DW / 8,      // skip 的取值个数；默认 = 一拍字节数（全窗口）
+    parameter int SKIP_W     = (DW >= 2048) ? $clog2(DW / 8) : 7   // meta_skip 位宽
 )(
     input  wire              clk,
     input  wire              rst,
     input  wire              meta_valid,
     output wire              meta_ready,
-    input  wire  [6:0]       meta_skip,      // 0..127
+    input  wire  [SKIP_W-1:0] meta_skip,     // 0..2^SKIP_W-1
     input  wire  [12:0]      meta_length,       // 1..4096
     input  wire              in_valid,
     output wire              in_ready,
@@ -112,10 +115,10 @@ module roce_skip_align #(
     // 元数据与本帧首拍同拍：首拍按第 0 拍处理（用当拍的 meta_skip/meta_length）
     wire         meta_load_first = meta_load && in_valid;
     // meta_skip / SHIFT_W：DW=1024 时恒 0（skip 恒 < 128），保留原判据以便 DW=512 复用。
-    wire         first_is_useful = ((meta_skip >> SHIFT_W) != 7'd0) ? 1'b0 : (meta_length != 13'd0);
+    wire         first_is_useful = ((meta_skip >> SHIFT_W) != '0) ? 1'b0 : (meta_length != 13'd0);
     // 相对移位量 = skip − SKIP_BASE。窗口外的 skip 会在这里回绕（上游违约，见文件头）；
     // 它是**常数 SKIP_BASE 的减法**，在 meta_load 那拍算好寄存，不在数据通路上。
-    wire [6:0]   meta_rel_shift = meta_skip - 7'(SKIP_BASE);
+    wire [SKIP_W-1:0] meta_rel_shift = meta_skip - SKIP_W'(SKIP_BASE);
 
     // meta_slot 为 1 的那些拍 in_ready 恒为 1，两者绑在一起，不会有半拍握手。
     // 反过来：老帧正在收尾但本拍没有元数据时，in_ready 必须是 0——那些拍数据是收不下的
@@ -198,7 +201,7 @@ module roce_skip_align #(
                 frame_active    <= 1'b1;
                 beat_index         <= 7'd0;
                 // skip / BEAT_BYTES：DW=1024 时 skip<128=BEAT_BYTES，结果恒 0
-                first_useful_beat  <= (meta_skip >> SHIFT_W) != 7'd0;
+                first_useful_beat  <= (meta_skip >> SHIFT_W) != '0;
                 // 桶形移位的控制量：只要 rel 位（SKIP_BASE 那一段已经是切片，不再参与运算）。
                 rel_shift          <= meta_rel_shift[REL_W-1:0];
                 bytes_remaining       <= meta_length;

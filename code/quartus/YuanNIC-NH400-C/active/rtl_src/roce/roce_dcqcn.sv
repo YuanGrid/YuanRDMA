@@ -132,6 +132,22 @@ module roce_dcqcn #(
     reg         hai_eff_pending;      // 上一拍有 A_HAI / A_MAX_HAI_F 写入，本拍重算 cfg_hai_eff
     reg         reload_alpha;         // 写 INIT_ALPHA 的下一拍重载全部 QP_NUM 个 QP 的 α
 
+    // CSR 写口先在本模块打一拍（2026-11-25）。
+    // B0118（C 卡 250 MHz）core_clk 违例簇：u_csr|u_avm_reg|reg_din[*] → u_dcqcn|mult_0 / add_10，
+    // 73 条、只有 2 级、−0.160——reg_din 扇出到全部 CSR 子窗口，到 DCQCN 配置寄存器（被 Quartus 推进
+    // 乘法/加法链里的那几位）是一段跨区长线。这里先落一级本地寄存器，长线变成「寄存器→寄存器」，
+    // 写口译码与配置更新都从本地寄存器出发。
+    // 代价：DCQCN 窗口的写晚一拍生效（hai_eff_pending / reload_alpha / clear 都随之整体晚一拍，相对次序不变）。
+    // 读回不受影响：一次 AVMM 访问经 roce_avm_cdc 往返几十拍，软件写完再读早已生效。
+    reg         wr_v;
+    reg  [19:0] wr_off;
+    reg  [31:0] wr_dat;
+    always @(posedge clk) begin
+        wr_v   <= !rst && reg_write;
+        wr_off <= reg_write_offset;
+        wr_dat <= reg_write_data;
+    end
+
     // HAI 有效步长的乘积。**拆成两拍**（G0.4 恢复，B6501 STA 复核）：
     //
     // B6440 的 core 最差路径就是这一处（Slow vid2b 100C，250 MHz，slack −0.181）：
@@ -153,8 +169,8 @@ module roce_dcqcn #(
     // 上限 0xFFFFF × 255 = 0xFFFC01，夹到 20 位（夹位逻辑与改动前逐位相同）
     wire [27:0] hai_eff_prod = {8'd0, cfg_hai} * {20'd0, cfg_max_hai_f};
     wire [19:0] hai_eff_next = (hai_eff_prod > 28'hFFFFF) ? 20'hFFFFF : hai_eff_prod[19:0];
-    wire        hai_eff_req  = reg_write &&
-                               (reg_write_offset == A_HAI || reg_write_offset == A_MAX_HAI_F);
+    wire        hai_eff_req  = wr_v &&
+                               (wr_off == A_HAI || wr_off == A_MAX_HAI_F);
 
     always @(posedge clk) begin
         if (rst) begin
@@ -175,30 +191,30 @@ module roce_dcqcn #(
             cfg_hai_eff    <= 20'd50;
             hai_eff_pending <= 1'b0;
             reload_alpha   <= 1'b0;
-        end else if (reg_write) begin
-            case (reg_write_offset)
-                A_CTRL:      cfg_ctrl     <= reg_write_data[3:0];
-                A_AI:        cfg_ai       <= reg_write_data[19:0];
-                A_HAI:       cfg_hai      <= reg_write_data[19:0];
-                A_THRESH:    cfg_thresh   <= reg_write_data[4:0];
-                A_ALPHA_US:  cfg_alpha_us <= reg_write_data[15:0];
-                A_RED_US:    cfg_red_us   <= reg_write_data[15:0];
-                A_INC_US:    cfg_inc_us   <= reg_write_data[15:0];
-                A_INC_BYTES: cfg_inc_bytes<= reg_write_data[23:0];
-                A_MIN_RATE:  cfg_min_rate <= reg_write_data[19:0];
-                A_LINE:      cfg_line     <= reg_write_data[19:0];
+        end else if (wr_v) begin
+            case (wr_off)
+                A_CTRL:      cfg_ctrl     <= wr_dat[3:0];
+                A_AI:        cfg_ai       <= wr_dat[19:0];
+                A_HAI:       cfg_hai      <= wr_dat[19:0];
+                A_THRESH:    cfg_thresh   <= wr_dat[4:0];
+                A_ALPHA_US:  cfg_alpha_us <= wr_dat[15:0];
+                A_RED_US:    cfg_red_us   <= wr_dat[15:0];
+                A_INC_US:    cfg_inc_us   <= wr_dat[15:0];
+                A_INC_BYTES: cfg_inc_bytes<= wr_dat[23:0];
+                A_MIN_RATE:  cfg_min_rate <= wr_dat[19:0];
+                A_LINE:      cfg_line     <= wr_dat[19:0];
                 // A_QP 只允许写到 QP_NUM-1：QP_NUM 不是 2 的幂时高位会指到阵列外，
                 // 读口 select 到不存在的项没有驱动（X / 读到别的项）。比较先扩到 32 位再比，
                 // 不能写成 QP_W'(QP_NUM)——QP_NUM = 16 时 QP_W'(16) 截成 0，比较恒假。
                 // QP_NUM = 16（2 的幂）时本夹紧是恒等，行为与改动前逐位一致。
-                A_QP:        cfg_qp_sel   <= (32'(reg_write_data[QP_W-1:0]) < 32'(QP_NUM)) ?
-                                              reg_write_data[QP_W-1:0] : {QP_W{1'b0}};
+                A_QP:        cfg_qp_sel   <= (32'(wr_dat[QP_W-1:0]) < 32'(QP_NUM)) ?
+                                              wr_dat[QP_W-1:0] : {QP_W{1'b0}};
                 A_INIT_ALPHA:begin
-                    cfg_init_alpha <= reg_write_data[9:0];
+                    cfg_init_alpha <= wr_dat[9:0];
                     reload_alpha   <= 1'b1;   // 下一拍把 QP_NUM 个 QP 的 α 一起重载（见扫描写回块）
                 end
-                A_G:         cfg_g        <= reg_write_data[9:0];
-                A_MAX_HAI_F: cfg_max_hai_f<= reg_write_data[7:0];
+                A_G:         cfg_g        <= wr_dat[9:0];
+                A_MAX_HAI_F: cfg_max_hai_f<= wr_dat[7:0];
                 default: ;
             endcase
             // HAI 有效步长：本拍只登记请求，下一拍用已更新的 cfg_hai / cfg_max_hai_f 重算
@@ -217,7 +233,7 @@ module roce_dcqcn #(
         // 没有二选一：D 口 = DSP 乘法 → 一级夹位 → 寄存器。
         if (!rst && hai_eff_pending) cfg_hai_eff <= hai_eff_next;
     end
-    wire clear_pulse = reg_write && (reg_write_offset == A_CLEAR);
+    wire clear_pulse = wr_v && (wr_off == A_CLEAR);
     wire dcqcn_en = cfg_ctrl[C_EN];
 
     // ================================================================ 时间基准（µs）

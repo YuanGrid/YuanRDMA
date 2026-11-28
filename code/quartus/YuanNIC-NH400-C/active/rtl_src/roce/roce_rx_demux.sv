@@ -26,13 +26,27 @@
 //
 // 本模块工作在 mac_clk 域（输入）与 core_clk 域（输出）之间，FIFO 自带跨域；
 // 复位在两侧各自同步，与 roce_rx_front 里原有 u_cdc 的处理方式一致。
+//
+// ---- OUT_DW：core 侧输出位宽 1024 或 2048 ---------------------------------------------
+// mac 侧输入恒为 1024 位。core_clk 下 1024 位一条 lane 只有 256 Gb/s，是单 QP 收方向的上限；
+// OUT_DW=2048 时每 lane 的异步 FIFO 一个条目装两个 mac 拍（512 Gb/s/lane）：
+//   - 帧的第 2k 拍（帧内从 0 数）先存进半拍寄存器 lo，第 2k+1 拍到来时与它拼成
+//     {第 2k+1 拍, 第 2k 拍} 一起写 FIFO —— 帧第 0 字节仍在条目 bit[7:0]；
+//   - 帧在偶数序号的拍上结束（共奇数个 mac 拍）时，末拍单独成一个条目，高半 keep 为 0
+//     （高半数据是该拍的副本，无意义，下游只认 keep / last）；
+//   - lo 只存「非末拍」，所以帧结束时 lo 必空，帧与帧之间不会拼错。
+// FIFO 写速率因此减半（每两个 mac 拍一次），core 侧每拍读一个 2048 位条目。
+// FIFO 深度 DEPTH 按条目数算：两种位宽都是 64 条目（2048 位时等于 128 个 mac 拍），
+// M20K 用量只由位宽决定（512 深模式下 64 与 32 深占同样多块），所以不缩深度。
+// OUT_DW=1024 时走原来的直写路径，逐位不变。
 `default_nettype none
 `timescale 1ns/1ps
 module roce_rx_demux
     import roce_pkg::*;
 #(
-    parameter int LANES = 4,
-    parameter int DEPTH = 64                // 每 lane 的异步 FIFO 深度（1024 bit 拍）
+    parameter int LANES  = 4,
+    parameter int DEPTH  = 64,              // 每 lane 的异步 FIFO 深度（OUT_DW 位条目数）
+    parameter int OUT_DW = 1024             // core 侧输出位宽：1024 或 2048
 )(
     // 输入：mac_clk 域（roce_rx_front 两路合并后的 frame 流）
     input  wire                mac_clk,
@@ -47,8 +61,8 @@ module roce_rx_demux
     input  wire                rst,
     output wire [LANES-1:0]    lane_valid,
     input  wire [LANES-1:0]    lane_ready,
-    output wire [LANES*1024-1:0] lane_data,
-    output wire [LANES*128-1:0]  lane_keep,
+    output wire [LANES*OUT_DW-1:0]     lane_data,
+    output wire [LANES*OUT_DW/8-1:0]   lane_keep,
     output wire [LANES-1:0]    lane_last,
     // 调试（mac_clk 域）：{in_frame, 3'd0, sel}，打平成 4 位以对接 roce_debug 的
     // core_rx_split_state 端口（原来放 {payload_busy, payload_owner}，语义已由本模块取代）
@@ -94,7 +108,13 @@ module roce_rx_demux
     reg               skid_last;
     reg  [LANE_W-1:0] skid_lane;
 
-    assign in_ready = !skid_valid || fifo_ready[skid_lane];
+    // skid 那拍本拍能否排出。OUT_DW=1024：只有写进该 lane 的 FIFO 一条路（skid_to_lo 恒 0），
+    // 与原来的 `fifo_ready[skid_lane]` 同一个式子。OUT_DW=2048：帧内偶数序号的非末拍进半拍
+    // 寄存器 lo（不占 FIFO，恒可排出），其余拍连同 lo 一起写 FIFO。
+    // 两种情况 in_ready 都只依赖寄存器（skid_valid/skid_last/skid_lane/lo_valid）与 FIFO 的 s_ready。
+    wire   skid_to_lo;
+    wire   skid_drain = skid_to_lo || fifo_ready[skid_lane];
+    assign in_ready = !skid_valid || skid_drain;
     wire   take_in  = in_valid && in_ready;
 
     always @(posedge mac_clk) begin
@@ -106,7 +126,7 @@ module roce_rx_demux
             skid_lane  <= '0;
         end else begin
             // 先排出、再收新：两者同拍发生时 skid 换上新数据（非阻塞赋值后者覆盖前者）
-            if (skid_valid && fifo_ready[skid_lane]) skid_valid <= 1'b0;
+            if (skid_valid && skid_drain) skid_valid <= 1'b0;
             if (take_in) begin
                 skid_valid <= 1'b1;
                 skid_data  <= in_data;
@@ -117,8 +137,13 @@ module roce_rx_demux
         end
     end
 
-    // skid 里那拍按锁定的 lane 送，不再看 in_data
-    wire [LANES-1:0] fifo_valid = skid_valid ? (LANES'(1) << skid_lane) : '0;
+    // skid 里那拍按锁定的 lane 送，不再看 in_data。进 lo 的拍不写 FIFO。
+    wire             fifo_push  = skid_valid && !skid_to_lo;
+    wire [LANES-1:0] fifo_valid = fifo_push ? (LANES'(1) << skid_lane) : '0;
+    // FIFO 写口（所有 lane 共用一组数据线，靠 fifo_valid 选 lane）
+    wire [OUT_DW-1:0]   fifo_wdata;
+    wire [OUT_DW/8-1:0] fifo_wkeep;
+    wire                entry_sop;      // 本拍要写的条目是否含帧首拍（统计 sop_stall 用）
 
     // ---------------------------------------------------------------- 每 lane 统计
     // 三个量都在 mac_clk 域产生，每拍每个 lane 最多 +1，用 roce_gray_cnt 跨到 core_clk。
@@ -134,8 +159,9 @@ module roce_rx_demux
     // FRAME_FIFO=1 时才有意义（按帧整包丢），本模块是 FRAME_FIFO=0，上层靠 in_ready
     // 反压，FIFO 本身不会溢出。真实的「丢」发生在更上游的 staging FIFO，所以这里
     // 观测的是**反压强度**，不是丢弃数。判读时看 lane_stall 的增长斜率即可。
-    // 该 lane 本拍被反压（skid 有拍、但 FIFO 满）：FIFO 深度的直接观测量。
-    wire             stall_this    = skid_valid && !fifo_ready[skid_lane];
+    // 该 lane 本拍被反压（skid 有拍要写 FIFO、但 FIFO 满）：FIFO 深度的直接观测量。
+    // OUT_DW=2048 时进 lo 的拍不写 FIFO，不算 stall（它本拍确实被收下了）。
+    wire             stall_this    = fifo_push && !fifo_ready[skid_lane];
     wire [LANES-1:0] stall_lane    = stall_this ? (LANES'(1) << skid_lane) : '0;
 
     // skid 里那拍是不是帧首。与 skid_data 同拍装入：take_in 那一拍看到的 in_frame
@@ -147,7 +173,8 @@ module roce_rx_demux
     end
 
     // 卡住的是帧首拍才是真风险：整包要等，持续出现就降速/丢包。
-    wire             sop_stall_this = stall_this && skid_sop;
+    // OUT_DW=2048 时帧首拍可能已在 lo 里等着与第 1 拍拼条目，看的是「条目」是否含帧首拍。
+    wire             sop_stall_this = stall_this && entry_sop;
     wire [LANES-1:0] sop_stall_lane = sop_stall_this ? (LANES'(1) << skid_lane) : '0;
 
     // 帧数在「首拍被收下」那一拍计，与 in_frame 建立同拍，一帧一次。
@@ -168,21 +195,64 @@ module roce_rx_demux
         end
     end
 
+    // ---------------------------------------------------------------- 写 FIFO 的条目
+    initial begin
+        if (OUT_DW != 1024 && OUT_DW != 2048)
+            $fatal(1, "roce_rx_demux: OUT_DW=%0d，只支持 1024 或 2048", OUT_DW);
+    end
+
+    generate
+        if (OUT_DW == 2048) begin : gen_pack
+            // 半拍寄存器 lo：存帧内偶数序号的非末拍，等下一拍（同帧、同 lane）来拼成一个条目。
+            // lo 只在「拼好的条目写进 FIFO」那拍清空；它只存非末拍，所以帧尾时必空。
+            // lo 的数据位不挂复位（只复位 lo_valid），与 roce_skid 一样避免 sclr 扇出到 1024 位。
+            reg           lo_valid;
+            reg  [1023:0] lo_data;
+            reg  [127:0]  lo_keep;
+            reg           lo_sop;
+            assign skid_to_lo = !lo_valid && !skid_last;
+            always @(posedge mac_clk) begin
+                if (mac_rst)                                lo_valid <= 1'b0;
+                else if (skid_valid && skid_to_lo)          lo_valid <= 1'b1;
+                else if (fifo_push && fifo_ready[skid_lane]) lo_valid <= 1'b0;
+            end
+            always @(posedge mac_clk) begin
+                if (skid_valid && skid_to_lo) begin
+                    lo_data <= skid_data;
+                    lo_keep <= skid_keep;
+                    lo_sop  <= skid_sop;
+                end
+            end
+            // 字节序：条目低 128 B 是先到的那拍。帧在偶数序号拍结束时 lo 为空，
+            // skid 那拍放低半、高半 keep 为 0（高半数据复用 skid_data，省一组选择器）。
+            assign fifo_wdata = {skid_data, lo_valid ? lo_data : skid_data};
+            assign fifo_wkeep = lo_valid ? {skid_keep, lo_keep} : {128'd0, skid_keep};
+            assign entry_sop  = lo_valid ? lo_sop : skid_sop;
+        end else begin : gen_direct
+            // 1024：一个 mac 拍一个条目，与原结构同一张网表
+            assign skid_to_lo = 1'b0;
+            assign fifo_wdata = skid_data;
+            assign fifo_wkeep = skid_keep;
+            assign entry_sop  = skid_sop;
+        end
+    endgenerate
+
     genvar lane;
     generate
         for (lane = 0; lane < LANES; lane = lane + 1) begin : gen_lane
             // 每 lane 一份跨域 FIFO：s 侧 mac_clk、m 侧 core_clk。
             // FRAME_FIFO=0：本模块保证一帧只会进同一个 lane，不会跨 lane 打断。
+            // 实例路径 gen_lane[n].u_fifo 被 roce.sdc 的 CDC 偏斜约束按名字引用，不能改名。
             axis_async_fifo #(
-                .DEPTH(DEPTH*128), .DATA_WIDTH(1024), .KEEP_ENABLE(1), .KEEP_WIDTH(128),
+                .DEPTH(DEPTH*OUT_DW/8), .DATA_WIDTH(OUT_DW), .KEEP_ENABLE(1), .KEEP_WIDTH(OUT_DW/8),
                 .LAST_ENABLE(1), .USER_ENABLE(0)
             ) u_fifo (
                 .s_clk(mac_clk), .s_rst(mac_rst),
-                .s_axis_tdata(skid_data), .s_axis_tkeep(skid_keep),
+                .s_axis_tdata(fifo_wdata), .s_axis_tkeep(fifo_wkeep),
                 .s_axis_tvalid(fifo_valid[lane]), .s_axis_tready(fifo_ready[lane]),
                 .s_axis_tlast(skid_last), .s_axis_tid(8'd0), .s_axis_tdest(8'd0), .s_axis_tuser(1'b0),
                 .m_clk(clk), .m_rst(rst),
-                .m_axis_tdata(lane_data[lane*1024 +: 1024]), .m_axis_tkeep(lane_keep[lane*128 +: 128]),
+                .m_axis_tdata(lane_data[lane*OUT_DW +: OUT_DW]), .m_axis_tkeep(lane_keep[lane*OUT_DW/8 +: OUT_DW/8]),
                 .m_axis_tvalid(lane_valid[lane]), .m_axis_tready(lane_ready[lane]),
                 .m_axis_tlast(lane_last[lane]), .m_axis_tid(), .m_axis_tdest(), .m_axis_tuser(),
                 .s_pause_req(1'b0), .s_pause_ack(), .m_pause_req(1'b0), .m_pause_ack(),

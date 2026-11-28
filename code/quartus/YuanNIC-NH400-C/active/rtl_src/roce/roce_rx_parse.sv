@@ -13,17 +13,23 @@
 // 与 B6378 的区别（那一版在这里失败过，别再走回头路）：B6378 只是把 S_PUSH_FIRST /
 // S_REPLAY1 的 in_ready 拉高、把 beat 囤进 skid，状态机拍数没变（仍是 N+2 拍），
 // 只能挡上游反压，省不了拍数。真正的零空转必须让首拍在收进来的同一拍就流出去。
+//
+// DW（1024 或 2048）：输入/payload 输出位宽。2048 时一拍 256 B，头部仍在第 0 拍内，
+// 字段偏移与 1024 完全相同，状态机与头部 FIFO 不变，只有 skip_align 的数据宽度跟着变；
+// 每拍仍消费一个输入拍。payload 第 0 字节在首个输出拍 bit[7:0]，out_keep 从 bit 0 起连续。
 `default_nettype none
 `timescale 1ns/1ps
 module roce_rx_parse
     import roce_pkg::*;
-(
+#(
+    parameter int DW = 1024                 // 输入帧与 payload 输出的位宽：1024 或 2048
+)(
     input  wire              clk,
     input  wire              rst,
     input  wire              in_valid,
     output wire              in_ready,
-    input  wire  [1023:0]    in_data,
-    input  wire  [127:0]     in_keep,
+    input  wire  [DW-1:0]    in_data,
+    input  wire  [DW/8-1:0]  in_keep,
     input  wire              in_last,
     // 头部
     output wire              rx_header_valid,
@@ -32,8 +38,8 @@ module roce_rx_parse
     // payload
     output wire              out_valid,
     input  wire              out_ready,
-    output wire  [1023:0]    out_data,
-    output wire  [127:0]     out_keep,
+    output wire  [DW-1:0]    out_data,
+    output wire  [DW/8-1:0]  out_keep,
     output wire              out_last,
     // 调试：[2:0] 当前 state，见 roce_debug.sv 0x0568
     output wire  [2:0]       debug_state
@@ -43,8 +49,13 @@ module roce_rx_parse
     localparam [1:0] S_IDLE = 2'd0, S_STREAM = 2'd2;
     reg  [1:0]   state;
 
-    // 解析窗口就是当拍输入：1024 位下 74 B 头全在第 0 拍。
-    wire [1023:0] header_bytes = in_data;
+    initial begin
+        if (DW != 1024 && DW != 2048)
+            $fatal(1, "roce_rx_parse: DW=%0d，只支持 1024 或 2048", DW);
+    end
+
+    // 解析窗口就是当拍输入：1024/2048 位下 74 B 头全在第 0 拍。
+    wire [DW-1:0] header_bytes = in_data;
     function automatic [7:0] header_byte(input integer offset);
         header_byte = header_bytes[offset*8 +: 8];
     endfunction
@@ -154,7 +165,7 @@ module roce_rx_parse
     wire        align_meta_valid = (state == S_IDLE) && in_valid && header_ok;
     // 数据始终是活的前端流：IDLE 是第 0 拍，STREAM 是其余。
     wire        align_in_valid = in_valid && header_ok;
-    wire [1023:0] align_in_data = in_data;
+    wire [DW-1:0] align_in_data = in_data;
     wire        align_in_last  = in_last;
 
     // 头 FIFO 没位置就不收第 0 拍（STREAM 拍不写头，不受它限制）。
@@ -182,9 +193,27 @@ module roce_rx_parse
     );
 
     // ---------------- skip_align
-    roce_skip_align #(.DW(1024)) u_skip_align (
+    // 移位窗口：skip = header_length = 54 + extension_length，extension_length 只能是
+    // 0/4/8/12/16/20（RETH 16、AETH 4、ImmDt 4、CNP 保留 16、DETH 8 的合法组合，最大是
+    // WRITE_ONLY_IMM 的 RETH+ImmDt = 20；不支持的 opcode 一律 0），所以 skip ∈ [54, 74]，
+    // 与 TX 实例同一个窗口。窗口内输出与全窗口移位**逐位相同**（含 keep 之外的字节）：
+    // 输出字节 i 都取拼接向量的字节 skip+i。收益是移位量 7/8 位 → 5 位、操作数 2*DW → DW+168 位，
+    // DW=2048 时全窗口要 8 位移位 × 4096 位操作数，面积与级数都不可接受。
+    // 将来加新的扩展头（如 AtomicETH 28 B）必须放大 SKIP_RANGE，下面的仿真断言会先报出来。
+    localparam int ALIGN_SKIP_W = (DW >= 2048) ? $clog2(DW / 8) : 7;
+    localparam int RX_SKIP_BASE = 54, RX_SKIP_RANGE = 21;
+    wire [ALIGN_SKIP_W-1:0] align_skip = ALIGN_SKIP_W'(header_length);
+    // synopsys translate_off
+    always @(posedge clk) begin
+        if (!rst && align_meta_valid && align_meta_ready &&
+            (header_length < 7'(RX_SKIP_BASE) || header_length >= 7'(RX_SKIP_BASE + RX_SKIP_RANGE)))
+            $error("roce_rx_parse: header_length=%0d 超出 skip_align 窗口 [%0d, %0d)",
+                   header_length, RX_SKIP_BASE, RX_SKIP_BASE + RX_SKIP_RANGE);
+    end
+    // synopsys translate_on
+    roce_skip_align #(.DW(DW), .SKIP_BASE(RX_SKIP_BASE), .SKIP_RANGE(RX_SKIP_RANGE)) u_skip_align (
         .clk(clk), .rst(rst),
-        .meta_valid(align_meta_valid), .meta_ready(align_meta_ready), .meta_skip(header_length), .meta_length(meta_length),
+        .meta_valid(align_meta_valid), .meta_ready(align_meta_ready), .meta_skip(align_skip), .meta_length(meta_length),
         .in_valid(align_in_valid), .in_ready(align_in_ready), .in_data(align_in_data), .in_last(align_in_last),
         .out_valid(out_valid), .out_ready(out_ready), .out_data(out_data), .out_keep(out_keep), .out_last(out_last),
         .debug_state()      // RX 侧的 skip_align 不观测

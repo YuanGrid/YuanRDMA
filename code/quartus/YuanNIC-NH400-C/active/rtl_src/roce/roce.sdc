@@ -55,3 +55,30 @@ foreach roce_inst $roce_cdc_fifos {
 # 预期 4 lane × (u_dma 5 个 FIFO × 2 条格雷码 + demux 2 条 + u_cdc 读格雷码 1 条 + 提交指针 1 条) = 56 条；
 # 编译日志里搜 "roce.sdc: CDC" 核对，数量不对说明实例改名了、约束静默落空。
 post_message -type info "roce.sdc: CDC skew/net-delay constraints applied to $roce_cdc_applied pointer buses (expect 56)"
+
+# ---------------------------------------------------------------------------------------------------------
+# CSR 读链两周期（2026-11-25）
+#
+# B0118（C 卡 250 MHz）core_clk 违例簇：u_avm_cdc|downstream_address[*] → u_csr|register_read_value[*]，
+# 233 条 / 12 个端点 / 7~8 级、最差 −0.168——地址经 roce_top 的窗口判断、roce_debug / roce_pfc / roce_cnp /
+# roce_dcqcn 的组合读口、csr_ext 二选一，再进 roce_csr 的读 mux。
+#
+# 这条路径天然有两个周期：
+#   e0  roce_avm_cdc 同拍给出 downstream_address 与单拍 read/write，之后整笔访问保持地址不变
+#       （busy 期间不收新请求，地址只在发起新访问的那一拍更新）；
+#   e1  avm_register 拉 reg_en（= register_enable）——e0→e1 这一拍 register_enable 必为 0，
+#       register_read_value 在 e1 不采样；
+#   e2  register_read_value 采样（register_enable 那一拍的组合读数据）。
+# 所以「从地址出发」的组合路径按 2 周期检查即可。只放宽从地址出发的这一类：读源若自带寄存器
+# （计数器、观测量、配置寄存器），路径起点是那个寄存器，仍按单周期检查；读回语义（数据在 e1→e2 那一拍取）
+# 一位不变，不是改 RTL。前提由 roce_csr.sv 里 translate_off 的逐拍检查在仿真中守住。
+# ---------------------------------------------------------------------------------------------------------
+set roce_csr_addr [get_registers -nowarn {u99_roce_top|u_avm_cdc|downstream_address*}]
+set roce_csr_rdv  [get_registers -nowarn {u99_roce_top|u_csr|register_read_value*}]
+if {[get_collection_size $roce_csr_addr] > 0 && [get_collection_size $roce_csr_rdv] > 0} {
+    set_multicycle_path -setup -end 2 -from $roce_csr_addr -to $roce_csr_rdv
+    set_multicycle_path -hold  -end 1 -from $roce_csr_addr -to $roce_csr_rdv
+    post_message -type info "roce.sdc: CSR read multicycle 2 applied ([get_collection_size $roce_csr_addr] address regs -> [get_collection_size $roce_csr_rdv] read regs)"
+} else {
+    post_message -type warning "roce.sdc: CSR read multicycle NOT applied (address regs [get_collection_size $roce_csr_addr], read regs [get_collection_size $roce_csr_rdv])"
+}

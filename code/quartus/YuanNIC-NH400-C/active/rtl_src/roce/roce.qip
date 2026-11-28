@@ -25,6 +25,10 @@ set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) r
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_qpc_ram.sv]
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_cq.sv]
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_dma_arb.sv]
+# 2048 位通路：读数据 2048 位时窄客户端（tag≠2）的拆拍
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_dma_rd_narrow.sv]
+# 写数据 WR_DW 位时窄客户端（dma_test，以及 RX_DW < WR_DW 时的 resp/req）的拼拍
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_wr_pack.sv]
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_rx_disp.sv]
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_resp.sv]
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) roce_req.sv]
